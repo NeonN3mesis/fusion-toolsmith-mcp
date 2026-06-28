@@ -1,0 +1,7 @@
+{
+  "general": "Fusion 360 is a parametric CAD modeler. Always prefer parametric features over direct modeling. Name your features and sketches.",
+  "units": "Fusion's internal unit is ALWAYS centimeters (cm). If the user asks for 10mm, you must multiply by 0.1 to convert to 1.0cm internally, or pass '10 mm' as a ValueInput string.",
+  "sketches": "When creating a sketch, define it on one of the root component's base planes (XY, XZ, YZ). Add constraints to fully define the sketch.",
+  "timeline": "Always check the timeline for errors (Yellow/Red features) using validate_model. Do not proceed if the timeline is broken.",
+  "parameters": "User parameters are a great way to make a design reusable. Use modify_parameters to safely change them."
+}
