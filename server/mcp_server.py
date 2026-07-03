@@ -11,6 +11,7 @@ import queue
 import os
 import secrets
 import traceback
+import socket
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -108,6 +109,10 @@ def import_tools_module():
     return tools_module
 
 class MCPServerHandler(BaseHTTPRequestHandler):
+    def _is_loopback(self):
+        client_ip = self.client_address[0]
+        return client_ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost")
+
     def log_message(self, format, *args):
         globals()["log_message"](f"HTTP {self.address_string()} - {format % args}")
 
@@ -147,6 +152,9 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             log_message(f"HTTP response send error: {e}")
 
     def do_GET(self):
+        if not self._is_loopback():
+            self._send_empty(403)
+            return
         parsed = self._parsed_url()
         if parsed.path in ('/', '/health'):
             with sessions_lock:
@@ -211,9 +219,15 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_empty(404)
 
     def do_OPTIONS(self):
+        if not self._is_loopback():
+            self._send_empty(403)
+            return
         self._send_empty(204)
 
     def do_POST(self):
+        if not self._is_loopback():
+            self._send_empty(403)
+            return
         parsed = self._parsed_url()
         if parsed.path == '/messages':
             try:
@@ -404,6 +418,22 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def __init__(self, server_address, RequestHandlerClass, bind_and_activate=True):
+        host, port = server_address
+        if ":" in host or host == "":
+            self.address_family = socket.AF_INET6
+        else:
+            self.address_family = socket.AF_INET
+        super().__init__(server_address, RequestHandlerClass, bind_and_activate)
+
+    def server_bind(self):
+        if self.address_family == socket.AF_INET6:
+            try:
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except (AttributeError, socket.error):
+                pass
+        super().server_bind()
+
 
 def handle_prompt_get(req_id, prompt_name, prompt_args):
     if prompt_name == "review_design":
@@ -521,13 +551,22 @@ def execute_mcp_request_main_thread(session_id, req_id, method, params):
 
 
 def is_port_available(port=DEFAULT_PORT):
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+            try:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except (AttributeError, socket.error):
+                pass
+            s.bind(('::', port))
+            return True
+    except OSError:
+        pass
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(('127.0.0.1', port))
             return True
-        except OSError:
-            return False
+    except OSError:
+        return False
 
 
 def start_server():
@@ -564,7 +603,7 @@ def start_server():
             )
             return
 
-        server_instance = ThreadedHTTPServer(('127.0.0.1', port), MCPServerHandler)
+        server_instance = ThreadedHTTPServer(('::', port), MCPServerHandler)
         log_message(f"Starting Server on port {port}")
         
         # Write discovery file
