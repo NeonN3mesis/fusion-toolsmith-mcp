@@ -216,6 +216,25 @@ class MCPServerHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = self._parsed_url()
         if parsed.path == '/messages':
+            try:
+                content_length = int(self.headers.get('Content-Length', 0))
+            except ValueError:
+                self._send_empty(400)
+                return
+
+            if content_length > MAX_REQUEST_BYTES:
+                self._send_empty(413)
+                return
+
+            post_data = b""
+            if content_length > 0:
+                try:
+                    post_data = self.rfile.read(content_length)
+                except Exception as e:
+                    log_message(f"Failed to read post data: {e}")
+                    self._send_empty(400)
+                    return
+
             if not self._is_authorized():
                 self._send_empty(403)
                 return
@@ -225,20 +244,9 @@ class MCPServerHandler(BaseHTTPRequestHandler):
                 self._send_empty(404)
                 return
 
-            try:
-                content_length = int(self.headers.get('Content-Length', 0))
-            except ValueError:
-                self._send_empty(400)
-                return
-
             if content_length <= 0:
                 self._send_empty(400)
                 return
-            if content_length > MAX_REQUEST_BYTES:
-                self._send_empty(413)
-                return
-
-            post_data = self.rfile.read(content_length)
 
             self.send_response(202)
             self.send_header('Content-Length', '0')
