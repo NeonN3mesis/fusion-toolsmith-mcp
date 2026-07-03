@@ -1,0 +1,1 @@
+"""FusionMCP add-in package."""
