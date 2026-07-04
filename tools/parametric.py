@@ -640,3 +640,258 @@ def convert_mesh_to_solid(mesh_body_name, operation="new_body"):
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error converting mesh to BRep: {e}\n{err}")
         return {"error": f"Failed to convert mesh to solid: {str(e)}"}
+
+
+@register_tool("edit_sketch_dimension")
+def edit_sketch_dimension(sketch_name, parameter_name, expression):
+    import traceback
+    try:
+        from .inspection import _find_sketch_by_name
+    except ImportError:
+        from inspection import _find_sketch_by_name
+
+    try:
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            return {"error": f"Sketch '{sketch_name}' not found."}
+        
+        target_dim = None
+        for i in range(sketch.sketchDimensions.count):
+            dim = sketch.sketchDimensions.item(i)
+            if dim.parameter and dim.parameter.name == parameter_name:
+                target_dim = dim
+                break
+                
+        if not target_dim:
+            try:
+                idx = int(parameter_name)
+                if 0 <= idx < sketch.sketchDimensions.count:
+                    target_dim = sketch.sketchDimensions.item(idx)
+            except ValueError:
+                pass
+                
+        if not target_dim:
+            return {"error": f"Dimension parameter '{parameter_name}' not found in sketch '{sketch_name}'."}
+            
+        target_dim.parameter.expression = expression
+        return {
+            "result": f"Updated dimension '{parameter_name}' expression to '{expression}'."
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error editing sketch dimension: {e}\n{err}")
+        return {"error": f"Failed to edit sketch dimension: {str(e)}"}
+
+
+@register_tool("delete_sketch_dimension")
+def delete_sketch_dimension(sketch_name, parameter_name):
+    import traceback
+    try:
+        from .inspection import _find_sketch_by_name
+    except ImportError:
+        from inspection import _find_sketch_by_name
+
+    try:
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            return {"error": f"Sketch '{sketch_name}' not found."}
+        
+        target_dim = None
+        for i in range(sketch.sketchDimensions.count):
+            dim = sketch.sketchDimensions.item(i)
+            if dim.parameter and dim.parameter.name == parameter_name:
+                target_dim = dim
+                break
+                
+        if not target_dim:
+            try:
+                idx = int(parameter_name)
+                if 0 <= idx < sketch.sketchDimensions.count:
+                    target_dim = sketch.sketchDimensions.item(idx)
+            except ValueError:
+                pass
+                
+        if not target_dim:
+            return {"error": f"Dimension parameter '{parameter_name}' not found in sketch '{sketch_name}'."}
+            
+        target_dim.deleteMe()
+        return {"result": f"Successfully deleted dimension '{parameter_name}' from sketch '{sketch_name}'."}
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error deleting sketch dimension: {e}\n{err}")
+        return {"error": f"Failed to delete sketch dimension: {str(e)}"}
+
+
+@register_tool("add_sketch_constraint")
+def add_sketch_constraint(sketch_name, constraint_type, use_selection=True, selection_indices=None, entity_indices=None):
+    import traceback
+    try:
+        from .inspection import _find_sketch_by_name
+    except ImportError:
+        from inspection import _find_sketch_by_name
+
+    try:
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            return {"error": f"Sketch '{sketch_name}' not found."}
+        
+        app = adsk.core.Application.get()
+        ui = app.userInterface
+        constraints = sketch.geometricConstraints
+        
+        entities = []
+        if use_selection:
+            active_sels = ui.activeSelections
+            indices = selection_indices if selection_indices is not None else list(range(active_sels.count))
+            for idx in indices:
+                if 0 <= idx < active_sels.count:
+                    entities.append(active_sels.item(idx).entity)
+        elif entity_indices is not None:
+            for idx in entity_indices:
+                if idx < sketch.sketchPoints.count:
+                    entities.append(sketch.sketchPoints.item(idx))
+                else:
+                    curve_idx = idx - sketch.sketchPoints.count
+                    if 0 <= curve_idx < sketch.sketchCurves.count:
+                        entities.append(sketch.sketchCurves.item(curve_idx))
+
+        if not entities:
+            return {"error": "No valid sketch entities found for constraint."}
+
+        c_type = constraint_type.lower()
+        if c_type == "midpoint":
+            if len(entities) < 2:
+                return {"error": "Midpoint constraint requires 2 entities (a point and a line/arc)."}
+            constraints.addMidPoint(entities[0], entities[1])
+        elif c_type == "horizontal_points":
+            if len(entities) < 2:
+                return {"error": "Horizontal points constraint requires 2 point entities."}
+            constraints.addHorizontalPoints(entities[0], entities[1])
+        elif c_type == "vertical_points":
+            if len(entities) < 2:
+                return {"error": "Vertical points constraint requires 2 point entities."}
+            constraints.addVerticalPoints(entities[0], entities[1])
+        elif c_type == "coincident":
+            if len(entities) < 2:
+                return {"error": "Coincident constraint requires 2 entities."}
+            constraints.addCoincident(entities[0], entities[1])
+        elif c_type == "parallel":
+            if len(entities) < 2:
+                return {"error": "Parallel constraint requires 2 line entities."}
+            constraints.addParallel(entities[0], entities[1])
+        elif c_type == "perpendicular":
+            if len(entities) < 2:
+                return {"error": "Perpendicular constraint requires 2 line entities."}
+            constraints.addPerpendicular(entities[0], entities[1])
+        elif c_type == "tangent":
+            if len(entities) < 2:
+                return {"error": "Tangent constraint requires 2 entities (at least one curve)."}
+            constraints.addTangent(entities[0], entities[1])
+        elif c_type == "equal":
+            if len(entities) < 2:
+                return {"error": "Equal constraint requires 2 entities."}
+            constraints.addEqual(entities[0], entities[1])
+        elif c_type == "horizontal":
+            constraints.addHorizontal(entities[0])
+        elif c_type == "vertical":
+            constraints.addVertical(entities[0])
+        else:
+            return {"error": f"Unsupported constraint type: {constraint_type}"}
+
+        return {"result": f"Successfully created geometric constraint of type '{constraint_type}'."}
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error adding geometric constraint: {e}\n{err}")
+        return {"error": f"Failed to add geometric constraint: {str(e)}"}
+
+
+def _find_body_by_name(name):
+    design = get_active_design()
+    for body in design.rootComponent.bRepBodies:
+        if body.name == name:
+            return body
+    for occ in design.rootComponent.allOccurrences:
+        for body in occ.component.bRepBodies:
+            if body.name == name:
+                return body
+    return None
+
+
+@register_tool("combine_bodies")
+def combine_bodies(target_body_name, tool_body_names, operation="join", keep_tool_bodies=False):
+    import traceback
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        
+        target_body = _find_body_by_name(target_body_name)
+        if not target_body:
+            return {"error": f"Target body '{target_body_name}' not found."}
+            
+        tool_bodies = []
+        for name in tool_body_names:
+            body = _find_body_by_name(name)
+            if not body:
+                return {"error": f"Tool body '{name}' not found."}
+            tool_bodies.append(body)
+            
+        combines = root.features.combineFeatures
+        tool_collection = adsk.core.ObjectCollection.create()
+        for body in tool_bodies:
+            if hasattr(tool_collection, "add"):
+                tool_collection.add(body)
+            else:
+                tool_collection.append(body)
+            
+        op = _operation(operation)
+        combine_input = combines.createInput(target_body, tool_collection)
+        combine_input.operation = op
+        combine_input.isKeepToolBodies = keep_tool_bodies
+        
+        combine_feat = combines.add(combine_input)
+        combine_feat.name = f"Combine_{target_body.name}"
+        
+        return {"result": f"Successfully executed Boolean Combine ({operation}) on target body '{target_body_name}'."}
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error combining bodies: {e}\n{err}")
+        return {"error": f"Failed to combine bodies: {str(e)}"}
+
+
+@register_tool("reorganize_body_to_component")
+def reorganize_body_to_component(body_name, target_component_name=None, new_component_name=None):
+    import traceback
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        
+        body = _find_body_by_name(body_name)
+        if not body:
+            return {"error": f"Body '{body_name}' not found."}
+            
+        target_occurrence = None
+        
+        if new_component_name:
+            transform = adsk.core.Matrix3D.create()
+            new_occ = root.occurrences.addNewComponent(transform)
+            new_occ.component.name = new_component_name
+            target_occurrence = new_occ
+        elif target_component_name:
+            for occ in root.allOccurrences:
+                if occ.component.name == target_component_name or occ.name == target_component_name:
+                    target_occurrence = occ
+                    break
+            if not target_occurrence:
+                return {"error": f"Target component/occurrence '{target_component_name}' not found."}
+        else:
+            return {"error": "Either target_component_name or new_component_name must be specified."}
+            
+        body.moveToComponent(target_occurrence)
+        
+        return {
+            "result": f"Successfully moved body '{body_name}' to component '{target_occurrence.component.name}'."
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error reorganizing body to component: {e}\n{err}")
+        return {"error": f"Failed to reorganize body to component: {str(e)}"}

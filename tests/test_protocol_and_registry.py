@@ -316,6 +316,248 @@ class ProtocolAndRegistryTests(unittest.TestCase):
             thread.join(timeout=2)
             self.mcp_server.sessions.pop(session_id, None)
 
+    def test_sse_allows_stable_loopback_url_without_token(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/sse", timeout=2) as response:
+                first_line = response.readline().decode("utf-8").strip()
+                second_line = response.readline().decode("utf-8").strip()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(first_line, "event: endpoint")
+            self.assertIn("/messages?session_id=", second_line)
+            self.assertIn("&token=", second_line)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_sse_rejects_bad_token(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/sse?token=bad-token", timeout=2)
+            self.assertEqual(ctx.exception.code, 403)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_streamable_http_initialize_creates_session(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/sse",
+                data=payload,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=2) as response:
+                body = json.loads(response.read().decode("utf-8"))
+                session_id = response.headers.get("Mcp-Session-Id")
+            self.assertEqual(response.status, 200)
+            self.assertTrue(session_id)
+            self.assertEqual(body["result"]["serverInfo"]["name"], "fusion-mcp")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_streamable_http_reuses_session_for_tools_list(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            init_payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
+            init_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/sse",
+                data=init_payload,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(init_request, timeout=2) as response:
+                session_id = response.headers.get("Mcp-Session-Id")
+
+            tools_payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).encode("utf-8")
+            tools_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/sse",
+                data=tools_payload,
+                method="POST",
+                headers={"Content-Type": "application/json", "Mcp-Session-Id": session_id},
+            )
+            with urllib.request.urlopen(tools_request, timeout=2) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            tool_names = {tool["name"] for tool in body["result"]["tools"]}
+            self.assertIn("inspect_design", tool_names)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_get_sketch_dimensions_returns_details(self):
+        mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)
+        mock_dim = types.SimpleNamespace(parameter=mock_param, objectType="SketchLinearDimension")
+        mock_sketch = types.SimpleNamespace(name="TestSketch", sketchDimensions=types.SimpleNamespace(
+            count=1,
+            item=lambda idx: mock_dim
+        ))
+        
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                sketches=[mock_sketch],
+                allOccurrences=[]
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+        
+        res = self.tools.execute_tool("get_sketch_dimensions", {"sketch_name": "TestSketch"})
+        self.assertIn("result", res)
+        dims = res["result"]["dimensions"]
+        self.assertEqual(len(dims), 1)
+        self.assertEqual(dims[0]["parameterName"], "d1")
+        self.assertEqual(dims[0]["expression"], "10 cm")
+
+    def test_edit_sketch_dimension(self):
+        mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)
+        mock_dim = types.SimpleNamespace(parameter=mock_param)
+        mock_sketch = types.SimpleNamespace(name="TestSketch", sketchDimensions=types.SimpleNamespace(
+            count=1,
+            item=lambda idx: mock_dim
+        ))
+        
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                sketches=[mock_sketch],
+                allOccurrences=[]
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+        
+        res = self.tools.execute_tool("edit_sketch_dimension", {
+            "sketch_name": "TestSketch",
+            "parameter_name": "d1",
+            "expression": "15 cm"
+        })
+        self.assertIn("result", res)
+        self.assertEqual(mock_param.expression, "15 cm")
+
+    def test_delete_sketch_dimension(self):
+        deleted = []
+        mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)
+        mock_dim = types.SimpleNamespace(parameter=mock_param, deleteMe=lambda: deleted.append(True))
+        mock_sketch = types.SimpleNamespace(name="TestSketch", sketchDimensions=types.SimpleNamespace(
+            count=1,
+            item=lambda idx: mock_dim
+        ))
+        
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                sketches=[mock_sketch],
+                allOccurrences=[]
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+        
+        res = self.tools.execute_tool("delete_sketch_dimension", {
+            "sketch_name": "TestSketch",
+            "parameter_name": "d1"
+        })
+        self.assertIn("result", res)
+        self.assertTrue(deleted)
+
+    def test_add_sketch_constraint_midpoint(self):
+        added = []
+        mock_constraints = types.SimpleNamespace(
+            addMidPoint=lambda e1, e2: added.append(("midpoint", e1, e2))
+        )
+        mock_sketch = types.SimpleNamespace(
+            name="TestSketch",
+            sketchPoints=types.SimpleNamespace(count=1, item=lambda idx: "point1"),
+            sketchCurves=types.SimpleNamespace(count=1, item=lambda idx: "line1"),
+            geometricConstraints=mock_constraints
+        )
+        
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                sketches=[mock_sketch],
+                allOccurrences=[]
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+        
+        res = self.tools.execute_tool("add_sketch_constraint", {
+            "sketch_name": "TestSketch",
+            "constraint_type": "midpoint",
+            "use_selection": False,
+            "entity_indices": [0, 1]
+        })
+        self.assertIn("result", res)
+        self.assertEqual(added, [("midpoint", "point1", "line1")])
+
+    def test_combine_bodies(self):
+        added_combines = []
+        class MockCombineFeatures:
+            def createInput(self, target, tools):
+                self.target = target
+                self.tools = tools
+                return self
+            def add(self, input_obj):
+                added_combines.append(input_obj)
+                return types.SimpleNamespace(name="Combine_Target")
+                
+        mock_target = types.SimpleNamespace(name="TargetBody")
+        mock_tool = types.SimpleNamespace(name="ToolBody")
+        
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                bRepBodies=[mock_target, mock_tool],
+                allOccurrences=[],
+                features=types.SimpleNamespace(combineFeatures=MockCombineFeatures())
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+        
+        res = self.tools.execute_tool("combine_bodies", {
+            "target_body_name": "TargetBody",
+            "tool_body_names": ["ToolBody"],
+            "operation": "join"
+        })
+        self.assertIn("result", res)
+        self.assertEqual(len(added_combines), 1)
+        self.assertEqual(added_combines[0].target, mock_target)
+
+    def test_reorganize_body_to_component(self):
+        moved = []
+        mock_body = types.SimpleNamespace(
+            name="Body1",
+            moveToComponent=lambda occ: moved.append(occ)
+        )
+        mock_target_occ = types.SimpleNamespace(
+            name="TargetOcc",
+            component=types.SimpleNamespace(name="TargetComp")
+        )
+        
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                bRepBodies=[mock_body],
+                allOccurrences=[mock_target_occ]
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+        
+        res = self.tools.execute_tool("reorganize_body_to_component", {
+            "body_name": "Body1",
+            "target_component_name": "TargetComp"
+        })
+        self.assertIn("result", res)
+        self.assertEqual(moved, [mock_target_occ])
+
 
 if __name__ == "__main__":
     unittest.main()

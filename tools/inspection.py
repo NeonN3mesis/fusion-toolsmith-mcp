@@ -436,3 +436,41 @@ def set_timeline_marker(index=None, name=None):
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error setting timeline marker: {e}\n{err}")
         return {"error": f"Failed to set timeline marker: {str(e)}"}
+
+
+def _find_sketch_by_name(name):
+    design = get_active_design()
+    for sketch in design.rootComponent.sketches:
+        if sketch.name == name:
+            return sketch
+    for occ in design.rootComponent.allOccurrences:
+        for sketch in occ.component.sketches:
+            if sketch.name == name:
+                return sketch
+    return None
+
+
+@register_tool("get_sketch_dimensions")
+def get_sketch_dimensions(sketch_name):
+    import traceback
+    try:
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            return {"error": f"Sketch '{sketch_name}' not found."}
+        
+        dimensions = []
+        for i in range(sketch.sketchDimensions.count):
+            dim = sketch.sketchDimensions.item(i)
+            param = dim.parameter
+            dimensions.append({
+                "index": i,
+                "parameterName": param.name if param else None,
+                "expression": param.expression if param else None,
+                "value": param.value if param else None,
+                "type": dim.objectType
+            })
+        return {"result": {"sketch": sketch_name, "dimensions": dimensions}}
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error getting sketch dimensions: {e}\n{err}")
+        return {"error": f"Failed to retrieve sketch dimensions: {str(e)}"}

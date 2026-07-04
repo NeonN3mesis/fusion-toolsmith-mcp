@@ -37,6 +37,8 @@ sessions_lock = threading.Lock()
 sessions = {}  # session_id -> queue.Queue
 subscriptions_lock = threading.Lock()
 subscriptions = {} # session_id -> set of URIs
+http_sessions_lock = threading.Lock()
+http_sessions = set()
 
 def discovery_file_path():
     return os.path.join(os.path.expanduser("~"), ".fusion_mcp.json")
@@ -151,6 +153,92 @@ class MCPServerHandler(BaseHTTPRequestHandler):
         except Exception as e:
             log_message(f"HTTP response send error: {e}")
 
+    def _send_json_with_headers(self, data, headers, status=200):
+        try:
+            body = json.dumps(data).encode('utf-8')
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Connection', 'close')
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            log_message(f"HTTP response send error: {e}")
+
+    def _handle_mcp_request_direct(self, request_data):
+        if not isinstance(request_data, dict):
+            return make_jsonrpc_error(None, -32600, "Request must be a JSON object.")
+
+        method = request_data.get("method")
+        req_id = request_data.get("id")
+        params_obj = request_data.get("params", {})
+        is_notification = "id" not in request_data
+
+        if not isinstance(method, str) or not method:
+            if is_notification:
+                return None
+            return make_jsonrpc_error(req_id, -32600, "Request method must be a non-empty string.")
+
+        if params_obj is None:
+            params_obj = {}
+        if not isinstance(params_obj, dict):
+            if is_notification:
+                return None
+            return make_jsonrpc_error(req_id, -32602, "Request params must be an object.")
+
+        if is_notification:
+            return None
+
+        if method == "initialize":
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {},
+                        "resourceTemplates": {},
+                        "resources": {"subscribe": True, "listChanged": False},
+                        "prompts": {},
+                        "logging": {}
+                    },
+                    "serverInfo": {"name": "fusion-mcp", "version": "1.0.0"}
+                }
+            }
+        if method == "logging/setLevel":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+        if method == "tools/list":
+            tools_module = import_tools_module()
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": tools_module.get_tool_schemas()}}
+        if method == "resources/list":
+            tools_module = import_tools_module()
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": tools_module.get_resources_schemas()}}
+        if method == "resources/templates/list":
+            tools_module = import_tools_module()
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"resourceTemplates": tools_module.get_resource_templates()}}
+        if method == "prompts/list":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": PROMPTS}}
+        if method == "prompts/get":
+            return handle_prompt_get(req_id, params_obj.get("name"), params_obj.get("arguments", {}) or {})
+
+        if method in ("tools/call", "resources/read"):
+            response_queue = queue.Queue()
+            session_id = uuid.uuid4().hex
+            with sessions_lock:
+                sessions[session_id] = response_queue
+            try:
+                execute_mcp_request_main_thread(session_id, req_id, method, params_obj)
+                return json.loads(response_queue.get(timeout=30))
+            except queue.Empty:
+                return make_jsonrpc_error(req_id, -32000, "Timed out waiting for Fusion response.")
+            finally:
+                with sessions_lock:
+                    sessions.pop(session_id, None)
+
+        return make_jsonrpc_error(req_id, -32601, f"Method not found: {method}")
+
     def do_GET(self):
         if not self._is_loopback():
             self._send_empty(403)
@@ -170,7 +258,9 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == '/sse':
-            if not self._is_authorized():
+            # Allow loopback MCP clients to use a stable /sse URL. The endpoint
+            # event still carries the per-instance token required for messages.
+            if self._query_value("token") and not self._is_authorized():
                 self._send_empty(403)
                 return
 
@@ -229,6 +319,61 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_empty(403)
             return
         parsed = self._parsed_url()
+        if parsed.path in ('/', '/sse'):
+            try:
+                content_length = int(self.headers.get('Content-Length', 0))
+            except ValueError:
+                self._send_empty(400)
+                return
+
+            if content_length > MAX_REQUEST_BYTES:
+                self._send_empty(413)
+                return
+
+            if content_length <= 0:
+                self._send_empty(400)
+                return
+
+            try:
+                post_data = self.rfile.read(content_length)
+                request_data = json.loads(post_data)
+            except json.JSONDecodeError as e:
+                self._send_json(make_jsonrpc_error(None, -32700, f"Parse error: {e}"), status=400)
+                return
+            except Exception as e:
+                log_message(f"Failed to read streamable HTTP request: {e}")
+                self._send_empty(400)
+                return
+
+            method = request_data.get("method") if isinstance(request_data, dict) else None
+            session_id = self.headers.get("Mcp-Session-Id") or self.headers.get("mcp-session-id")
+
+            if method == "initialize" and not session_id:
+                session_id = uuid.uuid4().hex
+                with http_sessions_lock:
+                    http_sessions.add(session_id)
+            else:
+                with http_sessions_lock:
+                    session_found = session_id in http_sessions if session_id else False
+                if not session_found:
+                    self._send_json(make_jsonrpc_error(
+                        request_data.get("id") if isinstance(request_data, dict) else None,
+                        -32001,
+                        "Session not found."
+                    ), status=404)
+                    return
+
+            response = self._handle_mcp_request_direct(request_data)
+            headers = {
+                "Mcp-Session-Id": session_id,
+                "Mcp-Protocol-Version": "2024-11-05"
+            }
+            if response is None:
+                self._send_empty(202)
+            else:
+                self._send_json_with_headers(response, headers)
+            return
+
         if parsed.path == '/messages':
             try:
                 content_length = int(self.headers.get('Content-Length', 0))

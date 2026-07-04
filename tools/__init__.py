@@ -395,6 +395,105 @@ def get_tool_schemas():
                     "max_depth": {"type": "integer", "default": 1}
                 }
             }
+        },
+        {
+            "name": "get_sketch_dimensions",
+            "description": "Retrieve all parametric dimensions (index, parameter name, type, expression, and current value) in a specific sketch.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "The exact name of the sketch to read."}
+                },
+                "required": ["sketch_name"]
+            }
+        },
+        {
+            "name": "edit_sketch_dimension",
+            "description": "Modify the value/expression of an existing parametric dimension in a sketch.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "The name of the sketch containing the dimension."},
+                    "parameter_name": {"type": "string", "description": "The name of the dimension parameter (e.g. 'd5') or the index of the dimension (0-based)."},
+                    "expression": {"type": "string", "description": "The new parametric expression or value (e.g., '15 mm', 'width / 2')."}
+                },
+                "required": ["sketch_name", "parameter_name", "expression"]
+            }
+        },
+        {
+            "name": "delete_sketch_dimension",
+            "description": "Delete/remove a specific dimension constraint from a sketch.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "The name of the sketch containing the dimension."},
+                    "parameter_name": {"type": "string", "description": "The name of the dimension parameter (e.g. 'd5') or the index of the dimension (0-based) to delete."}
+                },
+                "required": ["sketch_name", "parameter_name"]
+            }
+        },
+        {
+            "name": "add_sketch_constraint",
+            "description": "Apply geometric constraints (such as midpoint, horizontal/vertical points, tangent, parallel) between sketch curves or points.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "The name of the sketch to apply constraints in."},
+                    "constraint_type": {
+                        "type": "string",
+                        "enum": ["midpoint", "horizontal_points", "vertical_points", "coincident", "parallel", "perpendicular", "tangent", "equal", "horizontal", "vertical"],
+                        "description": "The geometric relationship to apply."
+                    },
+                    "use_selection": {"type": "boolean", "default": True, "description": "If true, applies constraint to the currently selected entities in the Fusion 360 UI."},
+                    "selection_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Specify which active selection indexes to use. Default uses the first two."
+                    },
+                    "entity_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "If use_selection is false, specify index of sketchPoints (0 to count-1) or sketchCurves (count to points+curves-1) to constrain."
+                    }
+                },
+                "required": ["sketch_name", "constraint_type"]
+            }
+        },
+        {
+            "name": "combine_bodies",
+            "description": "Perform a Boolean Combine operation (Join, Cut, or Intersect) between a target body and one or more tool bodies.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_body_name": {"type": "string", "description": "The name of the main body that will be kept and modified."},
+                    "tool_body_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of names of bodies to join, cut, or intersect with the target body."
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["join", "cut", "intersect"],
+                        "default": "join",
+                        "description": "The Boolean operation to perform."
+                    },
+                    "keep_tool_bodies": {"type": "boolean", "default": False, "description": "If true, tool bodies are preserved instead of being consumed/deleted."}
+                },
+                "required": ["target_body_name", "tool_body_names"]
+            }
+        },
+        {
+            "name": "reorganize_body_to_component",
+            "description": "Move a solid body from its current component into a different sub-component, creating a new component if requested.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "The name of the body to relocate."},
+                    "target_component_name": {"type": "string", "description": "The name of the existing sub-component/occurrence to move the body to."},
+                    "new_component_name": {"type": "string", "description": "Create a new sub-component with this name and move the body into it."}
+                },
+                "required": ["body_name"]
+            }
         }
     ]
 
