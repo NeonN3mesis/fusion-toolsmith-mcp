@@ -600,7 +600,7 @@ def git_status():
         return {"error": f"Git command failed: {e}"}
 
 @register_tool("create_2d_drawing")
-def create_2d_drawing(export_pdf_path):
+def create_2d_drawing(export_pdf_path, allow_unhealthy_model=False, require_compute=True, override_reason=None):
     doc = None
     drawing_doc = None
     try:
@@ -618,6 +618,25 @@ def create_2d_drawing(export_pdf_path):
         source_doc = app.activeDocument
         if not source_doc or not source_doc.dataFile:
             return {"error": "The active design must be saved to Fusion before a drawing can be created."}
+
+        preflight = preflight_model_change(change_type="create_2d_drawing", require_compute=require_compute)
+        if "error" in preflight:
+            return preflight
+        preflight_result = preflight.get("result", {})
+        if not preflight_result.get("okToProceed", False):
+            if not allow_unhealthy_model:
+                return {
+                    "error": (
+                        "Drawing export blocked by preflight checks. Fix compute/timeline health issues "
+                        "or explicitly set allow_unhealthy_model=true with override_reason."
+                    ),
+                    "preflight": preflight_result,
+                }
+            if not isinstance(override_reason, str) or not override_reason.strip():
+                return {
+                    "error": "override_reason is required when creating a drawing despite failed model preflight checks.",
+                    "preflight": preflight_result,
+                }
             
         export_dir = os.path.dirname(export_pdf_path)
         if export_dir and not os.path.exists(export_dir):
@@ -674,7 +693,16 @@ def create_2d_drawing(export_pdf_path):
         if not os.path.exists(export_pdf_path):
             return {"error": f"Drawing export completed but PDF was not found at '{export_pdf_path}'."}
             
-        return {"result": f"Successfully created 2D drawing sheet and saved PDF to '{export_pdf_path}'"}
+        return {
+            "result": {
+                "created": True,
+                "exportPath": export_pdf_path,
+                "allowedUnhealthyModel": bool(allow_unhealthy_model),
+                "overrideReason": override_reason if allow_unhealthy_model else None,
+                "preflight": preflight_result,
+                "message": f"Successfully created 2D drawing sheet and saved PDF to '{export_pdf_path}'",
+            }
+        }
     except Exception as e:
         return {"error": f"Failed to create 2D drawing sheet: {str(e)}"}
     finally:

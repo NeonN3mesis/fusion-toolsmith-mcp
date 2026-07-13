@@ -540,6 +540,132 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertTrue(res["result"]["preflight"]["okToExport"])
         self.assertTrue(res["result"]["preflight"]["compute"]["succeeded"])
 
+    def test_create_2d_drawing_blocks_failed_preflight_before_export(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_preflight = utilities.preflight_model_change
+
+        design = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
+        _fake_app.activeProduct = design
+        _fake_app.activeDocument = types.SimpleNamespace(dataFile=types.SimpleNamespace(name="SourceData"))
+        utilities.preflight_model_change = lambda **_kwargs: {
+            "result": {
+                "okToProceed": False,
+                "blockingReasons": ["Fusion computeAll failed."],
+                "compute": {"succeeded": False},
+            }
+        }
+        try:
+            res = self.tools.execute_tool("create_2d_drawing", {
+                "export_pdf_path": os.path.join(self.temp_dir.name, "blocked.pdf"),
+            })
+        finally:
+            utilities.preflight_model_change = original_preflight
+
+        self.assertIn("error", res)
+        self.assertIn("Drawing export blocked", res["error"])
+        self.assertEqual(res["preflight"]["blockingReasons"], ["Fusion computeAll failed."])
+
+    def test_create_2d_drawing_unhealthy_override_requires_reason(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_preflight = utilities.preflight_model_change
+
+        design = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
+        _fake_app.activeProduct = design
+        _fake_app.activeDocument = types.SimpleNamespace(dataFile=types.SimpleNamespace(name="SourceData"))
+        utilities.preflight_model_change = lambda **_kwargs: {
+            "result": {
+                "okToProceed": False,
+                "blockingReasons": ["Timeline or feature health issues are present."],
+                "compute": {"succeeded": True},
+            }
+        }
+        try:
+            res = self.tools.execute_tool("create_2d_drawing", {
+                "export_pdf_path": os.path.join(self.temp_dir.name, "override.pdf"),
+                "allow_unhealthy_model": True,
+            })
+        finally:
+            utilities.preflight_model_change = original_preflight
+
+        self.assertIn("error", res)
+        self.assertIn("override_reason is required", res["error"])
+
+    def test_create_2d_drawing_exports_with_preflight_proof(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_preflight = utilities.preflight_model_change
+        original_drawing_module = sys.modules.get("adsk.drawing")
+
+        design = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
+        _fake_app.activeProduct = design
+        _fake_app.activeDocument = types.SimpleNamespace(dataFile=types.SimpleNamespace(name="SourceData"))
+        utilities.preflight_model_change = lambda **_kwargs: {
+            "result": {
+                "okToProceed": True,
+                "riskLevel": "low",
+                "blockingReasons": [],
+                "compute": {"succeeded": True},
+            }
+        }
+
+        drawing_module = types.ModuleType("adsk.drawing")
+        create_input = types.SimpleNamespace(
+            automationPreferences=types.SimpleNamespace(
+                componentSheetViewPreferences=types.SimpleNamespace(),
+                assemblySheetPreferences=types.SimpleNamespace(),
+                drawingViewPreferences=types.SimpleNamespace(),
+            )
+        )
+        drawing_module.DrawingCreationModes = types.SimpleNamespace(AutomaticDrawingCreationMode=1)
+        drawing_module.DrawingStandardTypes = types.SimpleNamespace(ASMEDrawingStandardType=1)
+        drawing_module.DrawingUnitTypes = types.SimpleNamespace(MillimeterDrawingUnitType=1)
+        drawing_module.ASMESheetSizes = types.SimpleNamespace(BASMESheetSize=1)
+        drawing_module.SheetOrientationTypes = types.SimpleNamespace(LandscapeSheetOrientationType=1)
+        drawing_module.SheetCreationTypes = types.SimpleNamespace(FirstLevelOnlySheetCreationType=1)
+        drawing_module.DrawingViewStyleTypes = types.SimpleNamespace(VisibleEdgesDrawingViewStyleType=1)
+        drawing_data_file = types.SimpleNamespace(name="DrawingData")
+        drawing_module.DrawingManager = types.SimpleNamespace(get=lambda: types.SimpleNamespace(
+            createDrawingInput=lambda data_file, mode: create_input,
+            createDrawing=lambda input_obj: drawing_data_file,
+        ))
+
+        export_path = os.path.join(self.temp_dir.name, "healthy.pdf")
+        export_calls = []
+
+        def execute_pdf(options):
+            export_calls.append(options)
+            with open(options.path, "wb") as handle:
+                handle.write(b"%PDF-1.4\n")
+            return True
+
+        drawing_doc = types.SimpleNamespace(drawing=types.SimpleNamespace(
+            exportManager=types.SimpleNamespace(
+                createPDFExportOptions=lambda path: types.SimpleNamespace(path=path, openPDF=True),
+                execute=execute_pdf,
+            )
+        ))
+        drawing_module.DrawingDocument = types.SimpleNamespace(cast=lambda doc: drawing_doc)
+        sys.modules["adsk.drawing"] = drawing_module
+
+        closed = []
+        _fake_app.documents = types.SimpleNamespace(
+            open=lambda data_file: types.SimpleNamespace(close=lambda save: closed.append(save))
+        )
+        try:
+            res = self.tools.execute_tool("create_2d_drawing", {"export_pdf_path": export_path})
+        finally:
+            utilities.preflight_model_change = original_preflight
+            if original_drawing_module is None:
+                sys.modules.pop("adsk.drawing", None)
+            else:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertTrue(res["result"]["created"])
+        self.assertEqual(res["result"]["exportPath"], export_path)
+        self.assertTrue(res["result"]["preflight"]["okToProceed"])
+        self.assertEqual(len(export_calls), 1)
+        self.assertTrue(os.path.exists(export_path))
+        self.assertEqual(closed, [False])
+
     def test_run_fusion_script_blocks_raw_export_api_by_default(self):
         script = """
 def run(context):

@@ -533,11 +533,25 @@ def get_tool_schemas():
         },
         {
             "name": "create_2d_drawing",
-            "description": "Generate a 2D drafting sheet (blueprint) of the active model and export it to PDF.",
+            "description": "Generate a 2D drafting sheet (blueprint) of the active model and export it to PDF after model-health preflight checks.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "export_pdf_path": {"type": "string", "description": "Absolute path to save the generated PDF drawing blueprint."}
+                    "export_pdf_path": {"type": "string", "description": "Absolute path to save the generated PDF drawing blueprint."},
+                    "allow_unhealthy_model": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Allow drawing export even when preflight detects compute or timeline health issues. Requires override_reason."
+                    },
+                    "require_compute": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Run Fusion computeAll during preflight and block on compute failure."
+                    },
+                    "override_reason": {
+                        "type": "string",
+                        "description": "Required explanation when allow_unhealthy_model is true and preflight fails."
+                    }
                 },
                 "required": ["export_pdf_path"]
             }
