@@ -77,6 +77,11 @@ PROMPTS = [
             {"name": "width", "description": "Width expression, for example 5 cm.", "required": True},
             {"name": "height", "description": "Height expression, for example 2 cm.", "required": True}
         ]
+    },
+    {
+        "name": "export_readiness",
+        "description": "Guide the agent to verify compute and timeline health before any STEP, STL, or drawing/PDF export.",
+        "arguments": []
     }
 ]
 
@@ -629,6 +634,13 @@ def handle_prompt_get(req_id, prompt_name, prompt_args):
         width = prompt_args.get("width", "<width>")
         height = prompt_args.get("height", "<height>")
         text = f"Create a parametric box with length {length}, width {width}, and height {height}. Name created sketches, features, and bodies."
+    elif prompt_name == "export_readiness":
+        text = (
+            "Before exporting, run preflight_export for STEP/STL or create_2d_drawing for drawings/PDFs. "
+            "Do not use raw Fusion export APIs through run_fusion_script. If preflight reports compute, timeline, "
+            "or feature health problems, stop and report the blockingReasons unless the user explicitly asks for "
+            "a diagnostic export of known-broken geometry and provides an override reason."
+        )
     else:
         return make_jsonrpc_error(req_id, -32602, f"Unknown prompt: {prompt_name}")
     return {

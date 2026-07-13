@@ -4,7 +4,14 @@ Inspection and selection tools/resources package.
 
 import adsk.core, adsk.fusion
 import json
+import re
 from . import register_tool, register_resource
+
+_EXPRESSION_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+_EXPRESSION_FUNCTION_NAMES = {
+    "abs", "acos", "asin", "atan", "atan2", "ceil", "cos", "floor", "ln", "log",
+    "max", "min", "round", "sin", "sqrt", "tan",
+}
 
 def get_active_design():
     app = adsk.core.Application.get()
@@ -897,10 +904,11 @@ def _entity_ref_to_dict(entity):
 def _parameter_to_dict(param, role=None, owner=None):
     if not param:
         return None
+    expression = _safe_value(lambda: param.expression)
     data = {
         "name": _safe_value(lambda: param.name),
         "role": role,
-        "expression": _safe_value(lambda: param.expression),
+        "expression": expression,
         "value": _safe_value(lambda: param.value),
         "unit": _safe_value(lambda: param.unit),
         "comment": _safe_value(lambda: param.comment),
@@ -908,7 +916,36 @@ def _parameter_to_dict(param, role=None, owner=None):
         "entityToken": _safe_value(lambda: param.entityToken),
         "owner": owner,
     }
+    user_refs = _user_parameter_references(expression)
+    if user_refs:
+        data["userParameterReferences"] = user_refs
     return {k: v for k, v in data.items() if v is not None}
+
+
+def _user_parameter_references(expression):
+    if not isinstance(expression, str) or not expression:
+        return []
+    design = _safe_value(get_active_design)
+    user_parameters = _safe_value(lambda: design.userParameters) if design else None
+    if not user_parameters:
+        return []
+    refs = []
+    seen = set()
+    for name in _EXPRESSION_IDENTIFIER_RE.findall(expression):
+        if name in seen or name.lower() in _EXPRESSION_FUNCTION_NAMES:
+            continue
+        user_param = _safe_value(lambda name=name: user_parameters.itemByName(name))
+        if not user_param:
+            continue
+        seen.add(name)
+        refs.append({
+            "name": _safe_value(lambda user_param=user_param: user_param.name),
+            "expression": _safe_value(lambda user_param=user_param: user_param.expression),
+            "value": _safe_value(lambda user_param=user_param: user_param.value),
+            "unit": _safe_value(lambda user_param=user_param: user_param.unit),
+            "comment": _safe_value(lambda user_param=user_param: user_param.comment),
+        })
+    return refs
 
 
 def _dedupe_parameters(parameters):

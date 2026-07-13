@@ -227,6 +227,14 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         text = response["result"]["messages"][0]["content"]["text"]
         self.assertIn("10 cm", text)
 
+    def test_export_readiness_prompt_warns_against_raw_exports(self):
+        response = self.mcp_server.handle_prompt_get(23, "export_readiness", {})
+        self.assertEqual(response["id"], 23)
+        text = response["result"]["messages"][0]["content"]["text"]
+        self.assertIn("preflight_export", text)
+        self.assertIn("create_2d_drawing", text)
+        self.assertIn("Do not use raw Fusion export APIs", text)
+
     def test_create_parametric_feature_does_not_simulate_success(self):
         result = self.tools.execute_tool("create_parametric_feature", {"feature_type": "extrude", "parameters": {}})
         self.assertIn("error", result)
@@ -1745,7 +1753,8 @@ def run(context):
     def test_inspect_sketch_returns_coordinate_mapping_and_curves(self):
         point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
         vector = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
-        mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0, unit="cm")
+        user_param = types.SimpleNamespace(name="fixtureWidth", expression="10 cm", value=10.0, unit="cm", comment="Width control")
+        mock_param = types.SimpleNamespace(name="d1", expression="fixtureWidth", value=10.0, unit="cm")
         mock_dim = types.SimpleNamespace(name="LengthDim", parameter=mock_param, objectType="SketchLinearDimension")
         source_edge = types.SimpleNamespace(
             name="SourceEdge",
@@ -1795,7 +1804,8 @@ def run(context):
             ),
         )
         self.mock_design = types.SimpleNamespace(
-            rootComponent=types.SimpleNamespace(sketches=[mock_sketch], allOccurrences=[])
+            rootComponent=types.SimpleNamespace(sketches=[mock_sketch], allOccurrences=[]),
+            userParameters=types.SimpleNamespace(itemByName=lambda name: user_param if name == "fixtureWidth" else None),
         )
         _fake_app.activeProduct = self.mock_design
 
@@ -1806,6 +1816,7 @@ def run(context):
         self.assertEqual(result["curves"]["lines"][0]["worldEndPoint"], [11, 20, 30])
         self.assertEqual(result["dimensions"][0]["parameterName"], "d1")
         self.assertEqual(result["parameters"][0]["name"], "d1")
+        self.assertEqual(result["parameters"][0]["userParameterReferences"][0]["name"], "fixtureWidth")
         self.assertEqual(result["curves"]["lines"][0]["source"]["entityToken"], "edge-token")
 
     def test_map_coordinates_returns_both_transform_directions(self):
@@ -1878,9 +1889,10 @@ def run(context):
     def test_inspect_feature_returns_extrude_operation_and_bodies(self):
         original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature
         mock_body = types.SimpleNamespace(name="Body1")
+        user_param = types.SimpleNamespace(name="slotDepth", expression="5 mm", value=0.5, unit="cm", comment="Slot depth")
         mock_distance_param = types.SimpleNamespace(
             name="d228",
-            expression="5 mm",
+            expression="slotDepth",
             value=0.5,
             unit="cm",
             objectType="adsk::fusion::ModelParameter",
@@ -1915,6 +1927,7 @@ def run(context):
             self.mock_design = types.SimpleNamespace(
                 timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
                 rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+                userParameters=types.SimpleNamespace(itemByName=lambda name: user_param if name == "slotDepth" else None),
             )
             _fake_app.activeProduct = self.mock_design
 
@@ -1924,10 +1937,11 @@ def run(context):
 
         self.assertEqual(res["result"]["featureType"], "ExtrudeFeature")
         self.assertEqual(res["result"]["operation"], "Cut")
-        self.assertEqual(res["result"]["extentOne"]["distanceExpression"], "5 mm")
+        self.assertEqual(res["result"]["extentOne"]["distanceExpression"], "slotDepth")
         self.assertEqual(res["result"]["participantBodies"], ["Body1"])
         self.assertEqual(res["result"]["parameters"][0]["name"], "d228")
         self.assertEqual(res["result"]["parameters"][0]["role"], "extentOne.distance")
+        self.assertEqual(res["result"]["parameters"][0]["userParameterReferences"][0]["name"], "slotDepth")
 
     def test_get_feature_dependencies_reports_profile_sketch_and_downstream(self):
         original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature

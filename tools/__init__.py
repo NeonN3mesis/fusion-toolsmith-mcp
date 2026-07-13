@@ -64,7 +64,7 @@ def get_tool_schemas():
         },
         {
             "name": "inspect_sketch",
-            "description": "Return structured sketch details including local-to-model coordinate mapping, points, lines, arcs, circles, dimensions, and geometric constraints.",
+            "description": "Return structured sketch details including local-to-model coordinate mapping, points, lines, arcs, circles, dimensions, geometric constraints, dimension parameters, and referenced user parameters.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -75,7 +75,7 @@ def get_tool_schemas():
         },
         {
             "name": "inspect_feature",
-            "description": "Return structured timeline feature details including operation, extent definitions, health state, participant bodies, result bodies, and feature-specific metadata.",
+            "description": "Return structured timeline feature details including operation, extent definitions, health state, participant bodies, result bodies, feature model parameters, and referenced user parameters.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
