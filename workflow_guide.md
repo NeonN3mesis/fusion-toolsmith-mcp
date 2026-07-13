@@ -15,6 +15,7 @@ Follow this systematic workflow to interact with Autodesk Fusion 360 reliably an
 1. **Rollback Marker**: If adding a feature that logically belongs earlier in the design history, use `set_timeline_marker` to roll back, execute the feature, and roll forward.
 2. **Prefer Primitives**: Use `create_box`, `create_cylinder`, and `create_coil` instead of writing custom Python scripts whenever possible.
 3. **Name Everything**: Always assign descriptive names to sketches, bodies, and components immediately upon creation.
+4. **Destructive Timeline Changes**: Before suppressing or deleting timeline features or deleting sketch dimensions, inspect dependencies and provide a concrete reason. Do not override downstream-risk blocks unless the user explicitly accepts the risk.
 
 ---
 

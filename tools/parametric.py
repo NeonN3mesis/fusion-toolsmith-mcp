@@ -8,7 +8,7 @@ import math
 import os
 import traceback
 from . import register_tool
-from .inspection import get_active_design
+from .inspection import _design_state_snapshot, compare_design_state, get_active_design, get_feature_dependencies
 
 def _operation(value):
     mapping = {
@@ -18,6 +18,43 @@ def _operation(value):
         "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
     }
     return mapping.get((value or "new_body").lower(), adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+
+
+def _require_reason(reason, operation):
+    if not isinstance(reason, str) or not reason.strip():
+        return {"error": f"reason is required before {operation}. State why this model change is intentional."}
+    return None
+
+
+def _find_timeline_item(timeline, name=None, index=None):
+    if index is not None:
+        try:
+            idx = int(index)
+            if 0 <= idx < timeline.count:
+                return timeline.item(idx)
+        except (TypeError, ValueError):
+            pass
+
+    if name:
+        for i in range(timeline.count):
+            item = timeline.item(i)
+            if item.name == name:
+                return item
+    return None
+
+
+def _downstream_dependency_report(feature_name):
+    if not feature_name:
+        return {"likelyDownstreamConsumers": [], "bestEffort": True}
+    dependencies = get_feature_dependencies(feature_name)
+    if "error" in dependencies:
+        return {"error": dependencies["error"], "likelyDownstreamConsumers": [], "bestEffort": True}
+    return dependencies.get("result") or {}
+
+
+def _has_downstream_consumers(dependency_report):
+    return bool((dependency_report or {}).get("likelyDownstreamConsumers") or [])
+
 
 @register_tool("create_parametric_feature")
 def create_parametric_feature(feature_type, parameters):
@@ -465,66 +502,84 @@ def create_sketch_offset(sketch_name, distance):
         return {"error": f"Failed to create sketch offset: {str(e)}"}
 
 @register_tool("suppress_timeline_feature")
-def suppress_timeline_feature(name=None, index=None, suppress=True):
+def suppress_timeline_feature(name=None, index=None, suppress=True, reason=None, allow_downstream_risk=False):
     try:
+        reason_error = _require_reason(reason, "suppressing or unsuppressing a timeline feature")
+        if reason_error:
+            return reason_error
+
         design = get_active_design()
         timeline = design.timeline
-        target_item = None
-        
-        if index is not None:
-            try:
-                idx = int(index)
-                if 0 <= idx < timeline.count:
-                    target_item = timeline.item(idx)
-            except ValueError:
-                pass
-                
-        if not target_item and name:
-            for i in range(timeline.count):
-                item = timeline.item(i)
-                if item.name == name:
-                    target_item = item
-                    break
+        target_item = _find_timeline_item(timeline, name=name, index=index)
                     
         if not target_item:
             return {"error": f"Timeline item not found (name='{name}', index={index})"}
-            
+
+        feature_name = target_item.name
+        dependency_report = _downstream_dependency_report(feature_name)
+        if _has_downstream_consumers(dependency_report) and not allow_downstream_risk:
+            return {
+                "error": "Suppressing this timeline feature may affect downstream consumers. Inspect dependencies or set allow_downstream_risk=true with a reason.",
+                "dependencyReport": dependency_report,
+            }
+
+        before = _design_state_snapshot(include_selections=False)
         target_item.isSuppressed = bool(suppress)
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
         status_str = "suppressed" if suppress else "unsuppressed"
-        return {"result": f"Successfully {status_str} timeline feature '{target_item.name}'"}
+        return {
+            "result": {
+                "message": f"Successfully {status_str} timeline feature '{feature_name}'",
+                "featureName": feature_name,
+                "suppressed": bool(suppress),
+                "reason": reason,
+                "allowedDownstreamRisk": bool(allow_downstream_risk),
+                "dependencyReport": dependency_report,
+                "stateComparison": comparison,
+            }
+        }
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error suppressing timeline feature: {e}\n{err}")
         return {"error": f"Failed to suppress/unsuppress timeline feature: {str(e)}"}
 
 @register_tool("delete_timeline_feature")
-def delete_timeline_feature(name=None, index=None):
+def delete_timeline_feature(name=None, index=None, reason=None, allow_downstream_risk=False):
     try:
+        reason_error = _require_reason(reason, "deleting a timeline feature")
+        if reason_error:
+            return reason_error
+
         design = get_active_design()
         timeline = design.timeline
-        target_item = None
-        
-        if index is not None:
-            try:
-                idx = int(index)
-                if 0 <= idx < timeline.count:
-                    target_item = timeline.item(idx)
-            except ValueError:
-                pass
-                
-        if not target_item and name:
-            for i in range(timeline.count):
-                item = timeline.item(i)
-                if item.name == name:
-                    target_item = item
-                    break
+        target_item = _find_timeline_item(timeline, name=name, index=index)
                     
         if not target_item:
             return {"error": f"Timeline item not found (name='{name}', index={index})"}
             
         feature_name = target_item.name
+        dependency_report = _downstream_dependency_report(feature_name)
+        if _has_downstream_consumers(dependency_report) and not allow_downstream_risk:
+            return {
+                "error": "Deleting this timeline feature may affect downstream consumers. Inspect dependencies or set allow_downstream_risk=true with a reason.",
+                "dependencyReport": dependency_report,
+            }
+
+        before = _design_state_snapshot(include_selections=False)
         target_item.deleteMe()
-        return {"result": f"Successfully deleted timeline feature '{feature_name}'"}
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        return {
+            "result": {
+                "message": f"Successfully deleted timeline feature '{feature_name}'",
+                "featureName": feature_name,
+                "reason": reason,
+                "allowedDownstreamRisk": bool(allow_downstream_risk),
+                "dependencyReport": dependency_report,
+                "stateComparison": comparison,
+            }
+        }
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error deleting timeline feature: {e}\n{err}")
@@ -684,7 +739,7 @@ def edit_sketch_dimension(sketch_name, parameter_name, expression):
 
 
 @register_tool("delete_sketch_dimension")
-def delete_sketch_dimension(sketch_name, parameter_name):
+def delete_sketch_dimension(sketch_name, parameter_name, reason=None):
     import traceback
     try:
         from .inspection import _find_sketch_by_name
@@ -692,6 +747,10 @@ def delete_sketch_dimension(sketch_name, parameter_name):
         from inspection import _find_sketch_by_name
 
     try:
+        reason_error = _require_reason(reason, "deleting a sketch dimension")
+        if reason_error:
+            return reason_error
+
         sketch = _find_sketch_by_name(sketch_name)
         if not sketch:
             return {"error": f"Sketch '{sketch_name}' not found."}
@@ -713,9 +772,20 @@ def delete_sketch_dimension(sketch_name, parameter_name):
                 
         if not target_dim:
             return {"error": f"Dimension parameter '{parameter_name}' not found in sketch '{sketch_name}'."}
-            
+
+        before = _design_state_snapshot(include_selections=False)
         target_dim.deleteMe()
-        return {"result": f"Successfully deleted dimension '{parameter_name}' from sketch '{sketch_name}'."}
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        return {
+            "result": {
+                "message": f"Successfully deleted dimension '{parameter_name}' from sketch '{sketch_name}'.",
+                "sketchName": sketch_name,
+                "parameterName": parameter_name,
+                "reason": reason,
+                "stateComparison": comparison,
+            }
+        }
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error deleting sketch dimension: {e}\n{err}")

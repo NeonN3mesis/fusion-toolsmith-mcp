@@ -763,7 +763,7 @@ def run(context):
             count=1,
             item=lambda idx: mock_dim
         ))
-        
+
         self.mock_design = types.SimpleNamespace(
             rootComponent=types.SimpleNamespace(
                 sketches=[mock_sketch],
@@ -771,7 +771,7 @@ def run(context):
             )
         )
         _fake_app.activeProduct = self.mock_design
-        
+
         res = self.tools.execute_tool("get_sketch_dimensions", {"sketch_name": "TestSketch"})
         self.assertIn("result", res)
         dims = res["result"]["dimensions"]
@@ -1755,6 +1755,151 @@ def run(context):
         self.assertEqual(opened[0], data_file)
         self.assertEqual(opened[1], "activated")
 
+    def test_delete_timeline_feature_requires_reason(self):
+        deleted = []
+        mock_item = types.SimpleNamespace(name="FeatureA", deleteMe=lambda: deleted.append(True))
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+            rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("delete_timeline_feature", {"name": "FeatureA"})
+
+        self.assertIn("error", res)
+        self.assertIn("reason is required", res["error"])
+        self.assertEqual(deleted, [])
+
+    def test_delete_timeline_feature_blocks_downstream_consumers(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_dependencies = parametric.get_feature_dependencies
+        deleted = []
+        mock_item = types.SimpleNamespace(name="FeatureA", deleteMe=lambda: deleted.append(True))
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+            rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+        )
+        _fake_app.activeProduct = self.mock_design
+        parametric.get_feature_dependencies = lambda feature_name: {
+            "result": {
+                "featureName": feature_name,
+                "likelyDownstreamConsumers": [{"timelineName": "CutB", "reasons": ["usesResultBodyAsParticipant"]}],
+            }
+        }
+        try:
+            res = self.tools.execute_tool("delete_timeline_feature", {
+                "name": "FeatureA",
+                "reason": "Remove obsolete test feature.",
+            })
+        finally:
+            parametric.get_feature_dependencies = original_dependencies
+
+        self.assertIn("error", res)
+        self.assertIn("downstream consumers", res["error"])
+        self.assertEqual(deleted, [])
+        self.assertEqual(res["dependencyReport"]["likelyDownstreamConsumers"][0]["timelineName"], "CutB")
+
+    def test_delete_timeline_feature_allows_override_and_returns_state_comparison(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_dependencies = parametric.get_feature_dependencies
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+        deleted = []
+        mock_item = types.SimpleNamespace(name="FeatureA", deleteMe=lambda: deleted.append(True))
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+            rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+        )
+        _fake_app.activeProduct = self.mock_design
+        parametric.get_feature_dependencies = lambda feature_name: {
+            "result": {
+                "featureName": feature_name,
+                "likelyDownstreamConsumers": [{"timelineName": "CutB", "reasons": ["usesResultBodyAsParticipant"]}],
+            }
+        }
+        parametric._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 1 - len(deleted)}
+        }
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "medium", "before": before, "after": after}
+        }
+        try:
+            res = self.tools.execute_tool("delete_timeline_feature", {
+                "name": "FeatureA",
+                "reason": "User approved deleting this obsolete branch.",
+                "allow_downstream_risk": True,
+            })
+        finally:
+            parametric.get_feature_dependencies = original_dependencies
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(deleted, [True])
+        self.assertTrue(res["result"]["allowedDownstreamRisk"])
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "medium")
+
+    def test_suppress_timeline_feature_blocks_downstream_consumers(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_dependencies = parametric.get_feature_dependencies
+        mock_item = types.SimpleNamespace(name="FeatureA", isSuppressed=False)
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+            rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+        )
+        _fake_app.activeProduct = self.mock_design
+        parametric.get_feature_dependencies = lambda feature_name: {
+            "result": {
+                "featureName": feature_name,
+                "likelyDownstreamConsumers": [{"timelineName": "CutB"}],
+            }
+        }
+        try:
+            res = self.tools.execute_tool("suppress_timeline_feature", {
+                "name": "FeatureA",
+                "reason": "Temporarily isolate feature.",
+            })
+        finally:
+            parametric.get_feature_dependencies = original_dependencies
+
+        self.assertIn("error", res)
+        self.assertFalse(mock_item.isSuppressed)
+
+    def test_suppress_timeline_feature_allows_override_and_returns_state_comparison(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_dependencies = parametric.get_feature_dependencies
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+        mock_item = types.SimpleNamespace(name="FeatureA", isSuppressed=False)
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+            rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+        )
+        _fake_app.activeProduct = self.mock_design
+        parametric.get_feature_dependencies = lambda feature_name: {
+            "result": {"featureName": feature_name, "likelyDownstreamConsumers": [{"timelineName": "CutB"}]}
+        }
+        parametric._design_state_snapshot = lambda include_selections=False: {
+            "timeline": {"items": [{"name": "FeatureA", "isSuppressed": mock_item.isSuppressed}]}
+        }
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "medium", "before": before, "after": after}
+        }
+        try:
+            res = self.tools.execute_tool("suppress_timeline_feature", {
+                "name": "FeatureA",
+                "reason": "User approved temporary suppression.",
+                "allow_downstream_risk": True,
+            })
+        finally:
+            parametric.get_feature_dependencies = original_dependencies
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertTrue(mock_item.isSuppressed)
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "medium")
+
     def test_edit_sketch_dimension(self):
         mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)
         mock_dim = types.SimpleNamespace(parameter=mock_param)
@@ -1762,7 +1907,7 @@ def run(context):
             count=1,
             item=lambda idx: mock_dim
         ))
-        
+
         self.mock_design = types.SimpleNamespace(
             rootComponent=types.SimpleNamespace(
                 sketches=[mock_sketch],
@@ -1770,7 +1915,7 @@ def run(context):
             )
         )
         _fake_app.activeProduct = self.mock_design
-        
+
         res = self.tools.execute_tool("edit_sketch_dimension", {
             "sketch_name": "TestSketch",
             "parameter_name": "d1",
@@ -1779,7 +1924,7 @@ def run(context):
         self.assertIn("result", res)
         self.assertEqual(mock_param.expression, "15 cm")
 
-    def test_delete_sketch_dimension(self):
+    def test_delete_sketch_dimension_requires_reason(self):
         deleted = []
         mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)
         mock_dim = types.SimpleNamespace(parameter=mock_param, deleteMe=lambda: deleted.append(True))
@@ -1787,7 +1932,7 @@ def run(context):
             count=1,
             item=lambda idx: mock_dim
         ))
-        
+
         self.mock_design = types.SimpleNamespace(
             rootComponent=types.SimpleNamespace(
                 sketches=[mock_sketch],
@@ -1795,13 +1940,53 @@ def run(context):
             )
         )
         _fake_app.activeProduct = self.mock_design
-        
+
         res = self.tools.execute_tool("delete_sketch_dimension", {
             "sketch_name": "TestSketch",
             "parameter_name": "d1"
         })
+        self.assertIn("error", res)
+        self.assertIn("reason is required", res["error"])
+        self.assertEqual(deleted, [])
+
+    def test_delete_sketch_dimension(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+        deleted = []
+        mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)
+        mock_dim = types.SimpleNamespace(parameter=mock_param, deleteMe=lambda: deleted.append(True))
+        mock_sketch = types.SimpleNamespace(name="TestSketch", sketchDimensions=types.SimpleNamespace(
+            count=1,
+            item=lambda idx: mock_dim
+        ))
+
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                sketches=[mock_sketch],
+                allOccurrences=[]
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        parametric._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"sketchDimensions": 1 - len(deleted)}
+        }
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        try:
+            res = self.tools.execute_tool("delete_sketch_dimension", {
+                "sketch_name": "TestSketch",
+                "parameter_name": "d1",
+                "reason": "Remove obsolete driving dimension.",
+            })
+        finally:
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
         self.assertIn("result", res)
         self.assertTrue(deleted)
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
     def test_add_sketch_constraint_midpoint(self):
         added = []
@@ -1814,7 +1999,7 @@ def run(context):
             sketchCurves=types.SimpleNamespace(count=1, item=lambda idx: "line1"),
             geometricConstraints=mock_constraints
         )
-        
+
         self.mock_design = types.SimpleNamespace(
             rootComponent=types.SimpleNamespace(
                 sketches=[mock_sketch],
@@ -1822,7 +2007,7 @@ def run(context):
             )
         )
         _fake_app.activeProduct = self.mock_design
-        
+
         res = self.tools.execute_tool("add_sketch_constraint", {
             "sketch_name": "TestSketch",
             "constraint_type": "midpoint",
@@ -1842,10 +2027,10 @@ def run(context):
             def add(self, input_obj):
                 added_combines.append(input_obj)
                 return types.SimpleNamespace(name="Combine_Target")
-                
+
         mock_target = types.SimpleNamespace(name="TargetBody")
         mock_tool = types.SimpleNamespace(name="ToolBody")
-        
+
         self.mock_design = types.SimpleNamespace(
             rootComponent=types.SimpleNamespace(
                 bRepBodies=[mock_target, mock_tool],
@@ -1854,7 +2039,7 @@ def run(context):
             )
         )
         _fake_app.activeProduct = self.mock_design
-        
+
         res = self.tools.execute_tool("combine_bodies", {
             "target_body_name": "TargetBody",
             "tool_body_names": ["ToolBody"],
@@ -1874,7 +2059,7 @@ def run(context):
             name="TargetOcc",
             component=types.SimpleNamespace(name="TargetComp")
         )
-        
+
         self.mock_design = types.SimpleNamespace(
             rootComponent=types.SimpleNamespace(
                 bRepBodies=[mock_body],
@@ -1882,7 +2067,7 @@ def run(context):
             )
         )
         _fake_app.activeProduct = self.mock_design
-        
+
         res = self.tools.execute_tool("reorganize_body_to_component", {
             "body_name": "Body1",
             "target_component_name": "TargetComp"

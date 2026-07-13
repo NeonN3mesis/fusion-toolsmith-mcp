@@ -416,25 +416,31 @@ def get_tool_schemas():
         },
         {
             "name": "suppress_timeline_feature",
-            "description": "Suppress or unsuppress a historical feature in the active design timeline.",
+            "description": "Suppress or unsuppress a historical feature in the active design timeline. Requires a reason and blocks likely downstream dependency risk unless explicitly overridden.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "The name of the feature in the timeline."},
                     "index": {"type": "integer", "description": "The 0-based timeline index of the feature."},
-                    "suppress": {"type": "boolean", "default": True, "description": "True to suppress, False to unsuppress."}
-                }
+                    "suppress": {"type": "boolean", "default": True, "description": "True to suppress, False to unsuppress."},
+                    "reason": {"type": "string", "description": "Required. State why changing this feature's suppression state is intentional."},
+                    "allow_downstream_risk": {"type": "boolean", "default": False, "description": "Explicitly allow the operation when dependency analysis finds likely downstream consumers."}
+                },
+                "required": ["reason"]
             }
         },
         {
             "name": "delete_timeline_feature",
-            "description": "Delete an existing feature from the design timeline.",
+            "description": "Delete an existing feature from the design timeline. Requires a reason, captures before/after state, and blocks likely downstream dependency risk unless explicitly overridden.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "The name of the feature in the timeline."},
-                    "index": {"type": "integer", "description": "The 0-based timeline index of the feature."}
-                }
+                    "index": {"type": "integer", "description": "The 0-based timeline index of the feature."},
+                    "reason": {"type": "string", "description": "Required. State why deleting this timeline feature is intentional."},
+                    "allow_downstream_risk": {"type": "boolean", "default": False, "description": "Explicitly allow the deletion when dependency analysis finds likely downstream consumers."}
+                },
+                "required": ["reason"]
             }
         },
         {
@@ -676,14 +682,15 @@ def get_tool_schemas():
         },
         {
             "name": "delete_sketch_dimension",
-            "description": "Delete/remove a specific dimension constraint from a sketch.",
+            "description": "Delete/remove a specific dimension constraint from a sketch. Requires a reason and returns before/after design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "sketch_name": {"type": "string", "description": "The name of the sketch containing the dimension."},
-                    "parameter_name": {"type": "string", "description": "The name of the dimension parameter (e.g. 'd5') or the index of the dimension (0-based) to delete."}
+                    "parameter_name": {"type": "string", "description": "The name of the dimension parameter (e.g. 'd5') or the index of the dimension (0-based) to delete."},
+                    "reason": {"type": "string", "description": "Required. State why removing this dimension is intentional."}
                 },
-                "required": ["sketch_name", "parameter_name"]
+                "required": ["sketch_name", "parameter_name", "reason"]
             }
         },
         {
