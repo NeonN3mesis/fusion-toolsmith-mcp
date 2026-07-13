@@ -203,6 +203,31 @@ def get_tool_schemas():
                 "required": ["sketch_name"]
             }
         },
+        {
+            "name": "extrude_feature",
+            "description": "Create an extrusion from a named sketch profile with explicit NewBody/Join/Cut/Intersect operation and built-in before/after design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "Sketch containing the profile to extrude."},
+                    "profile_index": {"type": "integer", "default": 0, "description": "0-based profile index in the sketch."},
+                    "distance": {"type": "string", "description": "Fusion distance expression, e.g. '10 mm' or 'height / 2'."},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["NewBody", "Join", "Cut", "Intersect", "new_body", "join", "cut", "intersect"],
+                        "description": "Required explicit feature operation. Do not guess."
+                    },
+                    "name": {"type": "string", "description": "Optional name for the created extrude feature."},
+                    "body_name": {"type": "string", "description": "Optional name for the first result body."},
+                    "participant_body_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit participant bodies for Join/Cut/Intersect operations."
+                    }
+                },
+                "required": ["sketch_name", "distance", "operation"]
+            }
+        },
 
         {
             "name": "create_parametric_feature",
@@ -747,5 +772,6 @@ def read_resource(uri):
 # Import submodules to register tools/resources
 from . import inspection
 from . import sketching
+from . import features
 from . import parametric
 from . import utilities

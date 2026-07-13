@@ -551,6 +551,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("draw_rectangle", tool_names)
         self.assertIn("draw_circle", tool_names)
         self.assertIn("project_geometry", tool_names)
+        self.assertIn("extrude_feature", tool_names)
         self.assertIn("revert_active_document", tool_names)
 
     def test_capture_design_state_returns_structural_snapshot(self):
@@ -891,6 +892,108 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(projected, [source_line])
         self.assertEqual(res["result"]["projectedCount"], 1)
         self.assertEqual(res["result"]["projected"][0]["entityToken"], "projected-source-token")
+
+    def test_extrude_feature_requires_explicit_operation(self):
+        res = self.tools.execute_tool("extrude_feature", {
+            "sketch_name": "SketchA",
+            "distance": "5 mm",
+            "operation": "",
+        })
+        self.assertIn("error", res)
+        self.assertIn("operation is required", res["error"])
+
+    def test_extrude_feature_creates_named_body_and_state_diff(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+
+        class MockCollection:
+            def __init__(self, items):
+                self._items = items
+                self.count = len(items)
+            def item(self, index):
+                return self._items[index]
+
+        profile = types.SimpleNamespace(name="Profile0")
+        result_body = types.SimpleNamespace(name="Body0")
+        participant_body = types.SimpleNamespace(name="ParticipantBody")
+        created_inputs = []
+
+        class MockParticipantBodies:
+            def __init__(self):
+                self.items = []
+            def add(self, body):
+                self.items.append(body)
+
+        class MockExtrudeInput:
+            def __init__(self, profile_arg, operation_arg):
+                self.profile = profile_arg
+                self.operation = operation_arg
+                self.participantBodies = MockParticipantBodies()
+                self.distance = None
+            def setDistanceExtent(self, _is_symmetric, distance):
+                self.distance = distance
+
+        class MockExtrudes:
+            def createInput(self, profile_arg, operation_arg):
+                input_obj = MockExtrudeInput(profile_arg, operation_arg)
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                self.last_input = input_obj
+                return types.SimpleNamespace(
+                    name="",
+                    bodies=MockCollection([result_body]),
+                    participantBodies=MockCollection(input_obj.participantBodies.items),
+                )
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(extrudeFeatures=MockExtrudes()),
+        )
+        sketch = types.SimpleNamespace(
+            name="SketchA",
+            parentComponent=component,
+            profiles=MockCollection([profile]),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            sketches=[sketch],
+            bRepBodies=[participant_body],
+            allOccurrences=[],
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1, "unhealthyTimelineItems": 0}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {
+            "result": {"featureName": feature_name, "operation": "NewBody"}
+        }
+        try:
+            res = self.tools.execute_tool("extrude_feature", {
+                "sketch_name": "SketchA",
+                "distance": "5 mm",
+                "operation": "NewBody",
+                "name": "ExtrudeA",
+                "body_name": "BodyA",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["featureName"], "ExtrudeA")
+        self.assertEqual(res["result"]["operation"], "NewBody")
+        self.assertEqual(res["result"]["resultBodies"], ["BodyA"])
+        self.assertEqual(created_inputs[0].distance, "5 mm")
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
     def test_inspect_sketch_returns_coordinate_mapping_and_curves(self):
         point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
