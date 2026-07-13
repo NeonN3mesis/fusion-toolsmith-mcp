@@ -10,7 +10,7 @@ import sys
 import io
 import traceback
 from . import register_tool
-from .inspection import _design_state_snapshot, _health_to_string, _safe_value, compare_design_state, get_active_design
+from .inspection import _design_state_snapshot, _health_to_string, _safe_value, compare_design_state, get_active_design, get_feature_dependencies
 
 class FusionScriptExecutionError(Exception):
     def __init__(self, message, stdout_text, traceback_text):
@@ -135,6 +135,106 @@ def _export_blocking_reasons(compute_error, unhealthy, comparison):
         if key in count_changes:
             reasons.append(f"Compute changed {key}.")
     return reasons
+
+
+def _model_change_risk_level(blocking_reasons, warnings):
+    if blocking_reasons:
+        return "high"
+    if warnings:
+        return "medium"
+    return "low"
+
+
+@register_tool("preflight_model_change")
+def preflight_model_change(change_type="generic", target_features=None, target_bodies=None, require_compute=True):
+    """
+    Read-only readiness check before mutating the active model.
+
+    It intentionally does not approve the operation. It reports the current
+    health, compute behavior, and likely downstream dependency risk so an
+    agent can decide whether to proceed, ask for confirmation, or inspect more.
+    """
+    try:
+        design = get_active_design()
+        target_features = target_features or []
+        target_bodies = target_bodies or []
+        if isinstance(target_features, str):
+            target_features = [target_features]
+        if isinstance(target_bodies, str):
+            target_bodies = [target_bodies]
+
+        before = _design_state_snapshot(include_selections=True)
+        compute_error = None
+        if require_compute:
+            try:
+                design.computeAll()
+            except Exception as e:
+                compute_error = str(e)
+        after = _design_state_snapshot(include_selections=True)
+        comparison = compare_design_state(before, after).get("result")
+        unhealthy = _timeline_health_report(design)
+
+        dependency_reports = []
+        downstream_consumers = []
+        for feature_name in target_features:
+            report = get_feature_dependencies(feature_name)
+            if "error" in report:
+                dependency_reports.append({"featureName": feature_name, "error": report["error"]})
+                continue
+            result = report.get("result") or {}
+            dependency_reports.append(result)
+            for consumer in result.get("likelyDownstreamConsumers") or []:
+                downstream_consumers.append({
+                    "targetFeature": feature_name,
+                    "consumer": consumer,
+                })
+
+        blocking_reasons = []
+        warnings = []
+        if compute_error:
+            blocking_reasons.append("Fusion computeAll failed.")
+        if unhealthy:
+            blocking_reasons.append("Timeline or feature health issues are present.")
+        if downstream_consumers:
+            blocking_reasons.append("Target feature has likely downstream consumers.")
+
+        active_doc = after.get("document", {}).get("active") or {}
+        if active_doc.get("isModified"):
+            warnings.append("Active document has unsaved changes.")
+
+        diff = (comparison or {}).get("diff") or {}
+        count_changes = diff.get("countChanges") or {}
+        if count_changes:
+            warnings.append("computeAll changed design-state counts.")
+        for warning in diff.get("warnings") or []:
+            warnings.append(warning)
+
+        return {
+            "result": {
+                "okToProceed": not blocking_reasons,
+                "riskLevel": _model_change_risk_level(blocking_reasons, warnings),
+                "changeType": change_type,
+                "targetFeatures": list(target_features),
+                "targetBodies": list(target_bodies),
+                "blockingReasons": blocking_reasons,
+                "warnings": warnings,
+                "compute": {
+                    "required": bool(require_compute),
+                    "succeeded": compute_error is None,
+                    "error": compute_error,
+                },
+                "activeDocument": active_doc,
+                "counts": after.get("counts"),
+                "unhealthyFeatures": unhealthy,
+                "dependencyReports": dependency_reports,
+                "downstreamConsumers": downstream_consumers,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error during model-change preflight: {e}\n{err}")
+        return {"error": f"Failed model-change preflight: {str(e)}"}
 
 
 @register_tool("preflight_export")

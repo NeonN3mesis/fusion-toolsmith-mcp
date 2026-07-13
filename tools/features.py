@@ -128,6 +128,88 @@ def _edge_refs(edges):
     ]
 
 
+def _edge_body_index(body, edge):
+    edges = _safe_value(lambda: body.edges)
+    count = _safe_value(lambda: edges.count, 0) or 0
+    for index in range(count):
+        if edges.item(index) == edge:
+            return index
+    return None
+
+
+def _vertex_point(vertex):
+    point = _safe_value(lambda: vertex.geometry)
+    if not point:
+        return None
+    return [
+        _safe_value(lambda: point.x),
+        _safe_value(lambda: point.y),
+        _safe_value(lambda: point.z),
+    ]
+
+
+def _edge_ref(body, edge, index):
+    geometry = _safe_value(lambda: edge.geometry)
+    evaluator = _safe_value(lambda: geometry.evaluator)
+    midpoint = None
+    if evaluator:
+        parameter_range = _safe_value(lambda: evaluator.getParameterExtents())
+        try:
+            if isinstance(parameter_range, tuple) and parameter_range[0]:
+                start_param = parameter_range[1]
+                end_param = parameter_range[2]
+                _, point = evaluator.getPointAtParameter((start_param + end_param) / 2.0)
+                midpoint = [
+                    _safe_value(lambda: point.x),
+                    _safe_value(lambda: point.y),
+                    _safe_value(lambda: point.z),
+                ] if point else None
+        except Exception:
+            midpoint = None
+    return {
+        "index": index,
+        "name": _safe_value(lambda: edge.name),
+        "entityToken": _safe_value(lambda: edge.entityToken),
+        "length": _safe_value(lambda: edge.length),
+        "objectType": _safe_value(lambda: edge.objectType),
+        "geometryType": _safe_value(lambda: geometry.objectType) if geometry else None,
+        "startVertex": _vertex_point(_safe_value(lambda: edge.startVertex)),
+        "endVertex": _vertex_point(_safe_value(lambda: edge.endVertex)),
+        "midpoint": midpoint,
+    }
+
+
+@register_tool("get_body_edges")
+def get_body_edges(body_name, edge_indices=None):
+    """
+    Return indexed edge metadata for a named body.
+
+    This is the safe targeting companion for fillet_feature and
+    chamfer_feature. It gives agents stable edge indices plus tokens and basic
+    geometry hints before they choose edges for a mutating operation.
+    """
+    try:
+        body = _find_body_by_name(body_name)
+        if not body:
+            return {"error": f"Body '{body_name}' not found."}
+        edges = _body_edges_by_indices(body, edge_indices)
+        return {
+            "result": {
+                "bodyName": _safe_value(lambda: body.name),
+                "componentName": _safe_value(lambda: body.parentComponent.name),
+                "edgeCount": _safe_value(lambda: body.edges.count, len(edges)),
+                "edges": [
+                    _edge_ref(body, edge, _edge_body_index(body, edge))
+                    for edge in edges
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error inspecting body edges: {e}\n{err}")
+        return {"error": f"Failed to inspect body edges: {str(e)}"}
+
+
 @register_tool("extrude_feature")
 def extrude_feature(sketch_name, distance, operation, name=None, profile_index=0, body_name=None, participant_body_names=None):
     """

@@ -204,6 +204,22 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "get_body_edges",
+            "description": "Return indexed edge metadata for a named body, including entity tokens, lengths, geometry type, endpoints, and midpoint when available. Use before fillet_feature or chamfer_feature to choose explicit edge indices.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name to inspect."},
+                    "edge_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Optional subset of 0-based edge indices. Omit to return all edges."
+                    }
+                },
+                "required": ["body_name"]
+            }
+        },
+        {
             "name": "extrude_feature",
             "description": "Create an extrusion from a named sketch profile with explicit NewBody/Join/Cut/Intersect operation and built-in before/after design-state comparison.",
             "inputSchema": {
@@ -562,6 +578,31 @@ def get_tool_schemas():
             "name": "validate_model",
             "description": "Check for constraints, broken references, timeline warnings, and naming conventions. Instructions: Run this before finishing a task to ensure the model remains in a healthy, parametric state.",
             "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "preflight_model_change",
+            "description": "Run a read-only risk check before a model-changing operation. Checks compute health, timeline health, unsaved document state, optional target feature dependencies, and returns okToProceed/riskLevel.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "change_type": {"type": "string", "default": "generic", "description": "Short label for the planned change, e.g. fillet, cut, parameter_update, delete_feature."},
+                    "target_features": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional feature name or list of feature names to dependency-check."
+                    },
+                    "target_bodies": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional body name or list of body names involved in the planned change."
+                    },
+                    "require_compute": {"type": "boolean", "default": True, "description": "Force Fusion computeAll during the preflight."}
+                }
+            }
         },
         {
             "name": "preflight_export",

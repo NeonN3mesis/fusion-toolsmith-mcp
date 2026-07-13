@@ -238,6 +238,104 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(export_result, {"error": "CSV path must be absolute."})
         self.assertEqual(import_result, {"error": "CSV path must be absolute."})
 
+    def test_preflight_model_change_healthy_returns_low_risk(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+
+        design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(name="Root"),
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=True: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}, "warnings": []}}
+        }
+        try:
+            res = self.tools.execute_tool("preflight_model_change", {"change_type": "fillet"})
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["riskLevel"], "low")
+        self.assertTrue(res["result"]["compute"]["succeeded"])
+
+    def test_preflight_model_change_blocks_compute_failure(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+
+        design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(name="Root"),
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: (_ for _ in ()).throw(RuntimeError("compute failed")),
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=True: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}, "warnings": []}}
+        }
+        try:
+            res = self.tools.execute_tool("preflight_model_change", {"change_type": "cut"})
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertFalse(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["riskLevel"], "high")
+        self.assertIn("Fusion computeAll failed.", res["result"]["blockingReasons"])
+
+    def test_preflight_model_change_blocks_downstream_dependencies(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        original_dependencies = utilities.get_feature_dependencies
+
+        design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(name="Root"),
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=True: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}, "warnings": []}}
+        }
+        utilities.get_feature_dependencies = lambda feature_name: {
+            "result": {
+                "featureName": feature_name,
+                "likelyDownstreamConsumers": [{"timelineName": "CutB"}],
+            }
+        }
+        try:
+            res = self.tools.execute_tool("preflight_model_change", {
+                "change_type": "delete_feature",
+                "target_features": ["ExtrudeA"],
+            })
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+            utilities.get_feature_dependencies = original_dependencies
+
+        self.assertFalse(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["riskLevel"], "high")
+        self.assertEqual(res["result"]["downstreamConsumers"][0]["targetFeature"], "ExtrudeA")
+
     def test_export_asset_blocks_compute_errors_before_writing_file(self):
         utilities = importlib.import_module("tools.utilities")
         original_snapshot = utilities._design_state_snapshot
@@ -792,9 +890,11 @@ def run(context):
         self.assertIn("draw_rectangle", tool_names)
         self.assertIn("draw_circle", tool_names)
         self.assertIn("project_geometry", tool_names)
+        self.assertIn("get_body_edges", tool_names)
         self.assertIn("extrude_feature", tool_names)
         self.assertIn("fillet_feature", tool_names)
         self.assertIn("chamfer_feature", tool_names)
+        self.assertIn("preflight_model_change", tool_names)
         self.assertIn("revert_active_document", tool_names)
 
     def test_capture_design_state_returns_structural_snapshot(self):
@@ -1135,6 +1235,56 @@ def run(context):
         self.assertEqual(projected, [source_line])
         self.assertEqual(res["result"]["projectedCount"], 1)
         self.assertEqual(res["result"]["projected"][0]["entityToken"], "projected-source-token")
+
+    def test_get_body_edges_returns_indexed_edge_metadata(self):
+        class MockCollection:
+            def __init__(self, items):
+                self._items = items
+                self.count = len(items)
+            def item(self, index):
+                return self._items[index]
+
+        point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        edge0 = types.SimpleNamespace(
+            name="Edge0",
+            entityToken="edge0",
+            length=1.5,
+            objectType="adsk::fusion::BRepEdge",
+            geometry=types.SimpleNamespace(objectType="adsk::core::Line3D"),
+            startVertex=types.SimpleNamespace(geometry=point(0, 0, 0)),
+            endVertex=types.SimpleNamespace(geometry=point(1, 0, 0)),
+        )
+        edge1 = types.SimpleNamespace(
+            name="Edge1",
+            entityToken="edge1",
+            length=2.5,
+            objectType="adsk::fusion::BRepEdge",
+            geometry=types.SimpleNamespace(objectType="adsk::core::Arc3D"),
+            startVertex=types.SimpleNamespace(geometry=point(0, 1, 0)),
+            endVertex=types.SimpleNamespace(geometry=point(1, 1, 0)),
+        )
+        body = types.SimpleNamespace(
+            name="BodyA",
+            parentComponent=types.SimpleNamespace(name="Root"),
+            edges=MockCollection([edge0, edge1]),
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(bRepBodies=[body], allOccurrences=[])
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("get_body_edges", {
+            "body_name": "BodyA",
+            "edge_indices": [1],
+        })
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["bodyName"], "BodyA")
+        self.assertEqual(res["result"]["edgeCount"], 2)
+        self.assertEqual(res["result"]["edges"][0]["index"], 1)
+        self.assertEqual(res["result"]["edges"][0]["entityToken"], "edge1")
+        self.assertEqual(res["result"]["edges"][0]["geometryType"], "adsk::core::Arc3D")
+        self.assertEqual(res["result"]["edges"][0]["startVertex"], [0, 1, 0])
 
     def test_extrude_feature_requires_explicit_operation(self):
         res = self.tools.execute_tool("extrude_feature", {
