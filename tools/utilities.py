@@ -27,6 +27,10 @@ _SCRIPT_EXPORT_MARKERS = (
     "createsmtfileexportoptions",
     "createfusionarchiveexportoptions",
     "createusdexportoptions",
+    "createpdfexportoptions",
+    "drawingmanager",
+    "createdrawing",
+    "drawingdocument",
     "exportmgr.execute",
     "exportmanager.execute",
 )

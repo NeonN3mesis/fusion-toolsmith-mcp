@@ -688,6 +688,32 @@ def run(context):
         self.assertIn("error", res)
         self.assertIn("export_override_reason is required", res["error"])
 
+    def test_run_fusion_script_blocks_raw_drawing_export_api_by_default(self):
+        script = """
+def run(context):
+    import adsk.drawing
+    drawing_mgr = adsk.drawing.DrawingManager.get()
+    drawing_doc = adsk.drawing.DrawingDocument.cast(app.activeDocument)
+    drawing_doc.drawing.exportManager.createPDFExportOptions('C:/tmp/drawing.pdf')
+"""
+        res = self.tools.execute_tool("run_fusion_script", {"script": script})
+        self.assertIn("error", res)
+        self.assertIn("Scripted Fusion exports are blocked", res["error"])
+
+    def test_run_fusion_script_drawing_export_override_requires_reason(self):
+        script = """
+def run(context):
+    import adsk.drawing
+    drawing_mgr = adsk.drawing.DrawingManager.get()
+    drawing_data_file = drawing_mgr.createDrawing(None)
+"""
+        res = self.tools.execute_tool("run_fusion_script", {
+            "script": script,
+            "allow_export": True,
+        })
+        self.assertIn("error", res)
+        self.assertIn("export_override_reason is required", res["error"])
+
     def test_run_fusion_script_allows_export_marker_with_reason(self):
         _fake_app.activeProduct = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
         script = """
