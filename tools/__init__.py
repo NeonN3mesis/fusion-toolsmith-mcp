@@ -107,6 +107,17 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "get_parameter_usage",
+            "description": "Find sketch dimensions and feature parameters that directly use a model parameter or reference a user parameter by name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parameter_name": {"type": "string", "description": "User parameter or model parameter name to search for, e.g. screenWidth or d228."}
+                },
+                "required": ["parameter_name"]
+            }
+        },
+        {
             "name": "get_feature_dependencies",
             "description": "Return a best-effort dependency report for a timeline feature, including direct inputs, nearby predecessors, and likely downstream consumers with confidence levels.",
             "inputSchema": {

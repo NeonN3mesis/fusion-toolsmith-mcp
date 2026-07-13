@@ -1045,6 +1045,7 @@ def run(context):
         self.assertIn("inspect_feature", tool_names)
         self.assertIn("get_sketch_parameters", tool_names)
         self.assertIn("get_feature_parameters", tool_names)
+        self.assertIn("get_parameter_usage", tool_names)
         self.assertIn("get_feature_dependencies", tool_names)
         self.assertIn("map_coordinates", tool_names)
         self.assertIn("create_sketch", tool_names)
@@ -2043,6 +2044,78 @@ def run(context):
         self.assertEqual(res["result"]["parameterCount"], 1)
         self.assertEqual(res["result"]["parameters"][0]["role"], "extentOne.distance")
         self.assertEqual(res["result"]["parameters"][0]["userParameterReferences"][0]["name"], "slotDepth")
+
+    def test_get_parameter_usage_finds_sketch_and_feature_references(self):
+        original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature
+        point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        vector = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        user_param = types.SimpleNamespace(name="slotDepth", expression="5 mm", value=0.5, unit="cm", comment="Slot depth")
+        sketch_param = types.SimpleNamespace(name="d1", expression="slotDepth + 1 mm", value=0.6, unit="cm")
+        sketch_dim = types.SimpleNamespace(name="LengthDim", parameter=sketch_param, objectType="SketchLinearDimension")
+        mock_sketch = types.SimpleNamespace(
+            name="UsageSketch",
+            objectType="adsk::fusion::Sketch",
+            parentComponent=types.SimpleNamespace(name="Root"),
+            isVisible=True,
+            isFullyConstrained=False,
+            referencePlane=types.SimpleNamespace(
+                geometry=types.SimpleNamespace(
+                    origin=point(0, 0, 0),
+                    uDirection=vector(1, 0, 0),
+                    vDirection=vector(0, 1, 0),
+                    normal=vector(0, 0, 1),
+                ),
+            ),
+            sketchDimensions=types.SimpleNamespace(count=1, item=lambda idx: sketch_dim),
+        )
+        feature_param = types.SimpleNamespace(
+            name="d228",
+            expression="slotDepth",
+            value=0.5,
+            unit="cm",
+            objectType="adsk::fusion::ModelParameter",
+        )
+        mock_extrude = types.SimpleNamespace(
+            name="UsageExtrude",
+            objectType="adsk::fusion::ExtrudeFeature",
+            healthState=0,
+            operation=3,
+            extentOne=types.SimpleNamespace(objectType="adsk::fusion::DistanceExtentDefinition", distance=feature_param),
+            extentTwo=None,
+            isSymmetric=False,
+            isSolid=True,
+            participantBodies=types.SimpleNamespace(count=0, item=lambda idx: None),
+            bodies=types.SimpleNamespace(count=0, item=lambda idx: None),
+            profiles=types.SimpleNamespace(count=0, item=lambda idx: None),
+        )
+        sys.modules["adsk.fusion"].ExtrudeFeature = types.SimpleNamespace(cast=lambda value: value if value is mock_extrude else None)
+        try:
+            mock_item = types.SimpleNamespace(
+                name="UsageExtrude",
+                index=8,
+                healthState=0,
+                isSuppressed=False,
+                entity=mock_extrude,
+            )
+            self.mock_design = types.SimpleNamespace(
+                rootComponent=types.SimpleNamespace(sketches=[mock_sketch], allOccurrences=[]),
+                timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+                userParameters=types.SimpleNamespace(itemByName=lambda name: user_param if name == "slotDepth" else None),
+                allParameters=types.SimpleNamespace(count=0, item=lambda idx: None, itemByName=lambda name: None),
+            )
+            _fake_app.activeProduct = self.mock_design
+
+            res = self.tools.execute_tool("get_parameter_usage", {"parameter_name": "slotDepth"})
+        finally:
+            sys.modules["adsk.fusion"].ExtrudeFeature = original_extrude
+
+        self.assertEqual(res["result"]["parameterName"], "slotDepth")
+        self.assertEqual(res["result"]["targetParameter"]["name"], "slotDepth")
+        self.assertEqual(res["result"]["usageCount"], 2)
+        self.assertEqual(res["result"]["sketchUsages"][0]["sketchName"], "UsageSketch")
+        self.assertEqual(res["result"]["sketchUsages"][0]["parameters"][0]["name"], "d1")
+        self.assertEqual(res["result"]["featureUsages"][0]["featureName"], "UsageExtrude")
+        self.assertEqual(res["result"]["featureUsages"][0]["parameters"][0]["name"], "d228")
 
     def test_get_feature_dependencies_reports_profile_sketch_and_downstream(self):
         original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature

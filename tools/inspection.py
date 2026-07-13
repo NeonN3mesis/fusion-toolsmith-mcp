@@ -1413,6 +1413,125 @@ def get_feature_parameters(feature_name):
     }
 
 
+def _parameter_matches_name(parameter, parameter_name):
+    if not parameter:
+        return False
+    if parameter.get("name") == parameter_name:
+        return True
+    expression = parameter.get("expression")
+    if isinstance(expression, str) and parameter_name in _EXPRESSION_IDENTIFIER_RE.findall(expression):
+        return True
+    for ref in parameter.get("userParameterReferences") or []:
+        if ref.get("name") == parameter_name:
+            return True
+    return False
+
+
+def _all_sketch_contexts(design):
+    root = design.rootComponent
+    contexts = [
+        {
+            "sketch": sketch,
+            "componentName": _safe_value(lambda: root.name),
+            "occurrenceName": None,
+        }
+        for sketch in _collection_items(_safe_value(lambda: root.sketches))
+    ]
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        for sketch in _collection_items(_safe_value(lambda component=component: component.sketches)):
+            contexts.append({
+                "sketch": sketch,
+                "componentName": _safe_value(lambda component=component: component.name),
+                "occurrenceName": _safe_value(lambda occ=occ: occ.name),
+            })
+    return contexts
+
+
+def _parameter_by_name(design, parameter_name):
+    user_param = _safe_value(lambda: design.userParameters.itemByName(parameter_name))
+    if user_param:
+        return _parameter_to_dict(user_param, role="targetUserParameter")
+    all_parameters = _safe_value(lambda: design.allParameters)
+    direct_model_param = _safe_value(lambda: all_parameters.itemByName(parameter_name)) if all_parameters else None
+    if direct_model_param:
+        return _parameter_to_dict(direct_model_param, role="targetModelParameter")
+    for param in _collection_items(all_parameters):
+        if _safe_value(lambda param=param: param.name) == parameter_name:
+            return _parameter_to_dict(param, role="targetModelParameter")
+    return None
+
+
+@register_tool("get_parameter_usage")
+def get_parameter_usage(parameter_name):
+    if not isinstance(parameter_name, str) or not parameter_name.strip():
+        return {"error": "parameter_name must be a non-empty string."}
+    parameter_name = parameter_name.strip()
+    design = get_active_design()
+
+    sketch_usages = []
+    for context in _all_sketch_contexts(design):
+        sketch = context["sketch"]
+        dimensions = [
+            _dimension_to_dict(dim, i)
+            for i, dim in enumerate(_collection_items(_safe_value(lambda sketch=sketch: sketch.sketchDimensions)))
+        ]
+        parameters = _dedupe_parameters([
+            _parameter_to_dict(
+                _safe_value(lambda dim=dim: dim.parameter),
+                role="dimension",
+                owner=f"dimension[{i}]",
+            )
+            for i, dim in enumerate(_collection_items(_safe_value(lambda sketch=sketch: sketch.sketchDimensions)))
+        ])
+        matching_dimensions = [
+            dim for dim in dimensions
+            if _parameter_matches_name(dim.get("parameter"), parameter_name)
+        ]
+        matching_parameters = [
+            param for param in parameters
+            if _parameter_matches_name(param, parameter_name)
+        ]
+        if matching_parameters or matching_dimensions:
+            sketch_usages.append({
+                "kind": "sketch",
+                "sketchName": _safe_value(lambda sketch=sketch: sketch.name),
+                "componentName": context.get("componentName"),
+                "occurrenceName": context.get("occurrenceName"),
+                "parameters": matching_parameters,
+                "dimensions": matching_dimensions,
+            })
+
+    feature_usages = []
+    timeline = _safe_value(lambda: design.timeline)
+    for i in range(_safe_value(lambda: timeline.count, 0) or 0):
+        item = _safe_value(lambda i=i: timeline.item(i))
+        entity = _safe_value(lambda item=item: item.entity)
+        parameters = [
+            param for param in _feature_parameters(entity)
+            if _parameter_matches_name(param, parameter_name)
+        ]
+        if parameters:
+            feature_usages.append({
+                "kind": "feature",
+                "timelineName": _safe_value(lambda item=item: item.name),
+                "timelineIndex": _safe_value(lambda item=item: item.index),
+                "featureName": _safe_value(lambda entity=entity: entity.name),
+                "objectType": _safe_value(lambda entity=entity: entity.objectType),
+                "parameters": parameters,
+            })
+
+    return {
+        "result": {
+            "parameterName": parameter_name,
+            "targetParameter": _parameter_by_name(design, parameter_name),
+            "usageCount": len(sketch_usages) + len(feature_usages),
+            "sketchUsages": sketch_usages,
+            "featureUsages": feature_usages,
+        }
+    }
+
+
 def _point_from_input(point):
     if not isinstance(point, (list, tuple)) or len(point) != 3:
         raise ValueError("point must be an array of three numbers.")
