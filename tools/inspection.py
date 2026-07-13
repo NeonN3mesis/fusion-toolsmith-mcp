@@ -1187,6 +1187,26 @@ def inspect_sketch(sketch_name):
         return {"error": f"Failed to inspect sketch: {str(e)}"}
 
 
+@register_tool("get_sketch_parameters")
+def get_sketch_parameters(sketch_name):
+    inspected = inspect_sketch(sketch_name)
+    if "error" in inspected:
+        return inspected
+    result = inspected.get("result") or {}
+    dimensions = result.get("dimensions") or []
+    parameters = result.get("parameters") or []
+    return {
+        "result": {
+            "sketchName": result.get("name"),
+            "componentName": result.get("componentName"),
+            "parameterCount": len(parameters),
+            "dimensionCount": len(dimensions),
+            "parameters": parameters,
+            "dimensions": dimensions,
+        }
+    }
+
+
 def _health_to_string(value):
     mapping = {
         adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState: "Healthy",
@@ -1371,6 +1391,26 @@ def inspect_feature(feature_name):
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error inspecting feature: {e}\n{err}")
         return {"error": f"Failed to inspect feature: {str(e)}"}
+
+
+@register_tool("get_feature_parameters")
+def get_feature_parameters(feature_name):
+    inspected = inspect_feature(feature_name)
+    if "error" in inspected:
+        return inspected
+    result = inspected.get("result") or {}
+    parameters = result.get("parameters") or []
+    return {
+        "result": {
+            "featureName": result.get("featureName"),
+            "timelineName": result.get("timelineName"),
+            "timelineIndex": result.get("timelineIndex"),
+            "featureType": result.get("featureType"),
+            "operation": result.get("operation"),
+            "parameterCount": len(parameters),
+            "parameters": parameters,
+        }
+    }
 
 
 def _point_from_input(point):

@@ -85,6 +85,28 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "get_sketch_parameters",
+            "description": "Return only the dimension/model parameters owned by a sketch, including roles, expressions, values, dimensions, and referenced user parameters.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "Exact sketch name whose parameters should be extracted."}
+                },
+                "required": ["sketch_name"]
+            }
+        },
+        {
+            "name": "get_feature_parameters",
+            "description": "Return only the model parameters owned by a timeline feature, including roles, expressions, values, and referenced user parameters.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name whose parameters should be extracted."}
+                },
+                "required": ["feature_name"]
+            }
+        },
+        {
             "name": "get_feature_dependencies",
             "description": "Return a best-effort dependency report for a timeline feature, including direct inputs, nearby predecessors, and likely downstream consumers with confidence levels.",
             "inputSchema": {
