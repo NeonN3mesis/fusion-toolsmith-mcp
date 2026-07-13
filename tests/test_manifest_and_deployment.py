@@ -71,6 +71,20 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         ]:
             self.assertIn(text, script)
 
+    def test_antigravity_config_sync_script_uses_live_discovery(self):
+        script_path = os.path.join(ROOT, "scripts", "sync_antigravity_fusion_mcp_config.ps1")
+        with open(script_path, "r", encoding="utf-8") as f:
+            script = f.read()
+        for text in [
+            ".gemini\\config\\mcp_config.json",
+            ".fusion_mcp.json",
+            "autodesk-fusion-mcp",
+            "sse_url",
+            "serverUrl",
+            ".bak-",
+        ]:
+            self.assertIn(text, script)
+
 
 if __name__ == "__main__":
     unittest.main()
