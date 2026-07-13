@@ -546,6 +546,11 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("inspect_feature", tool_names)
         self.assertIn("get_feature_dependencies", tool_names)
         self.assertIn("map_coordinates", tool_names)
+        self.assertIn("create_sketch", tool_names)
+        self.assertIn("draw_line", tool_names)
+        self.assertIn("draw_rectangle", tool_names)
+        self.assertIn("draw_circle", tool_names)
+        self.assertIn("project_geometry", tool_names)
         self.assertIn("revert_active_document", tool_names)
 
     def test_capture_design_state_returns_structural_snapshot(self):
@@ -655,6 +660,237 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(result["diff"]["bodies"]["added"], ["Root/BodyB"])
         self.assertEqual(result["diff"]["userParameters"]["changed"][0]["changes"]["expression"]["after"], "12 mm")
         self.assertIn("New unhealthy timeline items appeared.", result["diff"]["warnings"])
+
+    def test_create_sketch_returns_coordinate_mapping(self):
+        point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        vector = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        component = types.SimpleNamespace(name="Root")
+        plane = types.SimpleNamespace(
+            name="XY",
+            objectType="adsk::fusion::ConstructionPlane",
+            geometry=types.SimpleNamespace(
+                origin=point(0, 0, 0),
+                uDirection=vector(1, 0, 0),
+                vDirection=vector(0, 1, 0),
+                normal=vector(0, 0, 1),
+            ),
+        )
+        created = []
+
+        def add_sketch(input_plane):
+            sketch = types.SimpleNamespace(
+                name="",
+                parentComponent=component,
+                referencePlane=input_plane,
+                transform=None,
+            )
+            created.append(sketch)
+            return sketch
+
+        component.xYConstructionPlane = plane
+        component.xZConstructionPlane = plane
+        component.yZConstructionPlane = plane
+        component.constructionPlanes = []
+        component.sketches = types.SimpleNamespace(add=add_sketch)
+        component.allOccurrences = []
+        self.mock_design = types.SimpleNamespace(rootComponent=component)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("create_sketch", {"name": "SmartSketch", "plane": "xy"})
+        self.assertEqual(res["result"]["sketchName"], "SmartSketch")
+        self.assertEqual(res["result"]["coordinateSystem"]["localXAxisInModel"], [1, 0, 0])
+        self.assertEqual(created[0].name, "SmartSketch")
+
+    def test_draw_line_circle_and_rectangle_return_entities(self):
+        point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        vector = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+
+        class MockLine:
+            def __init__(self, start, end):
+                self.name = ""
+                self.objectType = "adsk::fusion::SketchLine"
+                self.isConstruction = False
+                self.isReference = False
+                self.entityToken = "line-token"
+                self.startSketchPoint = types.SimpleNamespace(geometry=start, worldGeometry=start)
+                self.endSketchPoint = types.SimpleNamespace(geometry=end, worldGeometry=end)
+                self.geometry = types.SimpleNamespace(startPoint=start, endPoint=end)
+                self.worldGeometry = types.SimpleNamespace(startPoint=start, endPoint=end)
+                self.length = 1.0
+
+        class MockCircle:
+            def __init__(self, center, radius):
+                self.name = ""
+                self.objectType = "adsk::fusion::SketchCircle"
+                self.isConstruction = False
+                self.isReference = False
+                self.entityToken = "circle-token"
+                self.centerSketchPoint = types.SimpleNamespace(geometry=center, worldGeometry=center)
+                self.radius = radius
+
+        lines = []
+        circles = []
+
+        def add_line(start, end):
+            line = MockLine(start, end)
+            lines.append(line)
+            return line
+
+        def add_rectangle(corner1, corner2):
+            rectangle = [
+                MockLine(corner1, point(corner2.x, corner1.y, 0)),
+                MockLine(point(corner2.x, corner1.y, 0), corner2),
+                MockLine(corner2, point(corner1.x, corner2.y, 0)),
+                MockLine(point(corner1.x, corner2.y, 0), corner1),
+            ]
+            lines.extend(rectangle)
+            return rectangle
+
+        def add_circle(center, radius):
+            circle = MockCircle(center, radius)
+            circles.append(circle)
+            return circle
+
+        plane = types.SimpleNamespace(
+            name="XY",
+            objectType="adsk::fusion::ConstructionPlane",
+            geometry=types.SimpleNamespace(
+                origin=point(0, 0, 0),
+                uDirection=vector(1, 0, 0),
+                vDirection=vector(0, 1, 0),
+                normal=vector(0, 0, 1),
+            ),
+        )
+        sketch = types.SimpleNamespace(
+            name="SmartSketch",
+            parentComponent=types.SimpleNamespace(name="Root"),
+            referencePlane=plane,
+            transform=None,
+            sketchCurves=types.SimpleNamespace(
+                sketchLines=types.SimpleNamespace(addByTwoPoints=add_line, addTwoPointRectangle=add_rectangle),
+                sketchCircles=types.SimpleNamespace(addByCenterRadius=add_circle),
+            ),
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(sketches=[sketch], allOccurrences=[]),
+            unitsManager=types.SimpleNamespace(evaluateExpression=lambda expression, units: 0.25),
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        line_res = self.tools.execute_tool("draw_line", {
+            "sketch_name": "SmartSketch",
+            "start": [0, 0],
+            "end": [1, 0],
+            "name": "EdgeA",
+        })
+        rect_res = self.tools.execute_tool("draw_rectangle", {
+            "sketch_name": "SmartSketch",
+            "corner1": [0, 0],
+            "corner2": [1, 1],
+            "name_prefix": "Box",
+        })
+        circle_res = self.tools.execute_tool("draw_circle", {
+            "sketch_name": "SmartSketch",
+            "center": [0.5, 0.5],
+            "radius": "2.5 mm",
+            "name": "HoleCircle",
+        })
+
+        self.assertEqual(line_res["result"]["line"]["name"], "EdgeA")
+        self.assertEqual(len(rect_res["result"]["lines"]), 4)
+        self.assertEqual(circle_res["result"]["circle"]["name"], "HoleCircle")
+        self.assertEqual(circles[0].radius, 0.25)
+
+    def test_project_geometry_projects_named_body(self):
+        projected_entity = types.SimpleNamespace(
+            objectType="adsk::fusion::SketchLine",
+            name="ProjectedLine",
+            entityToken="projected-token",
+        )
+        body = types.SimpleNamespace(name="SourceBody")
+        projected = []
+        sketch = types.SimpleNamespace(
+            name="ProjectSketch",
+            parentComponent=types.SimpleNamespace(name="Root"),
+            referencePlane=types.SimpleNamespace(
+                name="XY",
+                objectType="adsk::fusion::ConstructionPlane",
+                geometry=types.SimpleNamespace(
+                    origin=types.SimpleNamespace(x=0, y=0, z=0),
+                    uDirection=types.SimpleNamespace(x=1, y=0, z=0),
+                    vDirection=types.SimpleNamespace(x=0, y=1, z=0),
+                    normal=types.SimpleNamespace(x=0, y=0, z=1),
+                ),
+            ),
+            transform=None,
+            project=lambda entity: projected.append(entity) or [projected_entity],
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                bRepBodies=[body],
+                sketches=[sketch],
+                allOccurrences=[],
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("project_geometry", {
+            "sketch_name": "ProjectSketch",
+            "entity_name": "SourceBody",
+        })
+        self.assertEqual(projected, [body])
+        self.assertEqual(res["result"]["projectedCount"], 1)
+        self.assertEqual(res["result"]["projected"][0]["entityToken"], "projected-token")
+
+    def test_project_geometry_projects_source_sketch_curve(self):
+        source_line = types.SimpleNamespace(name="SourceLine")
+        projected_entity = types.SimpleNamespace(
+            objectType="adsk::fusion::SketchLine",
+            name="ProjectedSourceLine",
+            entityToken="projected-source-token",
+        )
+        projected = []
+        plane = types.SimpleNamespace(
+            name="XY",
+            objectType="adsk::fusion::ConstructionPlane",
+            geometry=types.SimpleNamespace(
+                origin=types.SimpleNamespace(x=0, y=0, z=0),
+                uDirection=types.SimpleNamespace(x=1, y=0, z=0),
+                vDirection=types.SimpleNamespace(x=0, y=1, z=0),
+                normal=types.SimpleNamespace(x=0, y=0, z=1),
+            ),
+        )
+        source_sketch = types.SimpleNamespace(
+            name="SourceSketch",
+            sketchCurves=types.SimpleNamespace(
+                sketchLines=types.SimpleNamespace(count=1, item=lambda idx: source_line),
+            ),
+        )
+        target_sketch = types.SimpleNamespace(
+            name="TargetSketch",
+            parentComponent=types.SimpleNamespace(name="Root"),
+            referencePlane=plane,
+            transform=None,
+            project=lambda entity: projected.append(entity) or [projected_entity],
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                bRepBodies=[],
+                sketches=[source_sketch, target_sketch],
+                allOccurrences=[],
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("project_geometry", {
+            "sketch_name": "TargetSketch",
+            "source_sketch_name": "SourceSketch",
+            "curve_type": "lines",
+            "curve_index": 0,
+        })
+        self.assertEqual(projected, [source_line])
+        self.assertEqual(res["result"]["projectedCount"], 1)
+        self.assertEqual(res["result"]["projected"][0]["entityToken"], "projected-source-token")
 
     def test_inspect_sketch_returns_coordinate_mapping_and_curves(self):
         point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)

@@ -120,6 +120,89 @@ def get_tool_schemas():
                 "required": ["point", "from_sketch"]
             }
         },
+        {
+            "name": "create_sketch",
+            "description": "Create a named sketch on a component construction plane and return coordinate-system mapping for safe local/model alignment.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name for the new sketch."},
+                    "plane": {"type": "string", "default": "xy", "description": "Plane: xy, xz, yz, or a named construction plane in the target component."},
+                    "component": {"type": "string", "default": "root", "description": "Component or occurrence name. Defaults to root."}
+                },
+                "required": ["name"]
+            }
+        },
+        {
+            "name": "draw_line",
+            "description": "Draw a line in an existing sketch using local sketch coordinates. Returns structured line metadata including local/world endpoints when Fusion exposes them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string"},
+                    "start": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3},
+                    "end": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3},
+                    "name": {"type": "string"},
+                    "construction": {"type": "boolean", "default": False}
+                },
+                "required": ["sketch_name", "start", "end"]
+            }
+        },
+        {
+            "name": "draw_rectangle",
+            "description": "Draw a rectangle in an existing sketch using local sketch coordinates. Accepts either corner1/corner2 or center plus width/height.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string"},
+                    "corner1": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3},
+                    "corner2": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3},
+                    "center": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3},
+                    "width": {"description": "Width as model units expression or numeric internal units."},
+                    "height": {"description": "Height as model units expression or numeric internal units."},
+                    "name_prefix": {"type": "string"},
+                    "construction": {"type": "boolean", "default": False}
+                },
+                "required": ["sketch_name"]
+            }
+        },
+        {
+            "name": "draw_circle",
+            "description": "Draw a circle in an existing sketch using local sketch coordinates. Radius can be a Fusion unit expression such as '5 mm'.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string"},
+                    "center": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3},
+                    "radius": {"description": "Radius as a Fusion unit expression or numeric internal units."},
+                    "name": {"type": "string"},
+                    "construction": {"type": "boolean", "default": False}
+                },
+                "required": ["sketch_name", "center", "radius"]
+            }
+        },
+        {
+            "name": "project_geometry",
+            "description": "Project a selected or named body/sketch/entity token into a sketch, returning projected entity metadata. Prefer entity_token or UI selection for exact edges/faces.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string"},
+                    "entity_name": {"type": "string", "description": "Name of a body or sketch to project."},
+                    "entity_token": {"type": "string", "description": "Fusion entity token to project when available."},
+                    "source_sketch_name": {"type": "string", "description": "Project a curve from this source sketch by curve_type and curve_index."},
+                    "curve_type": {
+                        "type": "string",
+                        "enum": ["lines", "circles", "arcs", "ellipses", "fittedSplines", "fixedSplines", "conics"],
+                        "default": "lines"
+                    },
+                    "curve_index": {"type": "integer", "default": 0},
+                    "use_selection": {"type": "boolean", "default": False},
+                    "selection_indices": {"type": "array", "items": {"type": "integer"}}
+                },
+                "required": ["sketch_name"]
+            }
+        },
 
         {
             "name": "create_parametric_feature",
@@ -663,5 +746,6 @@ def read_resource(uri):
 
 # Import submodules to register tools/resources
 from . import inspection
+from . import sketching
 from . import parametric
 from . import utilities
