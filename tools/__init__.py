@@ -569,7 +569,7 @@ def get_tool_schemas():
         },
         {
             "name": "export_asset",
-            "description": "Safely export the design to STL or STEP. Runs preflight_export first and blocks compute/timeline-health problems unless allow_unhealthy_export is explicitly true.",
+            "description": "Safely export the design to STL or STEP. Runs preflight_export first and blocks compute/timeline-health problems unless allow_unhealthy_export is explicitly true and override_reason explains the risk.",
             "inputSchema": {
                 "type": "object", 
                 "properties": {
@@ -584,6 +584,10 @@ def get_tool_schemas():
                         "type": "boolean",
                         "default": True,
                         "description": "Force Fusion computeAll before export."
+                    },
+                    "override_reason": {
+                        "type": "string",
+                        "description": "Required when allow_unhealthy_export=true and preflight checks fail. State why exporting a potentially incomplete model is intentional."
                     }
                 },
                 "required": ["format", "export_path"]
@@ -747,11 +751,20 @@ def get_tool_schemas():
         },
         {
             "name": "run_fusion_script",
-            "description": "⚠️ FALLBACK TOOL OF LAST RESORT. Do NOT use this tool if any high-level parametric, inspection, or constraint tools (e.g. modify_parameters, set_parameter, create_box, create_cylinder, etc.) can accomplish the task. Executing arbitrary scripts is dangerous, bypasses safety validation, and can crash Fusion. Use only when absolutely no other tool fits.",
+            "description": "⚠️ FALLBACK TOOL OF LAST RESORT. Do NOT use this tool if any high-level parametric, inspection, export, or constraint tools can accomplish the task. Raw scripts that call Fusion export APIs are blocked by default; use export_asset for safe preflight-gated exports.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "script": {"type": "string", "description": "The python script to execute"}
+                    "script": {"type": "string", "description": "The python script to execute"},
+                    "allow_export": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Explicitly allow a raw script that uses Fusion export APIs. Prefer export_asset instead."
+                    },
+                    "export_override_reason": {
+                        "type": "string",
+                        "description": "Required when allow_export=true for scripts that use Fusion export APIs."
+                    }
                 },
                 "required": ["script"]
             }

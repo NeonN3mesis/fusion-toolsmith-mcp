@@ -18,10 +18,39 @@ class FusionScriptExecutionError(Exception):
         self.stdout_text = stdout_text
         self.traceback_text = traceback_text
 
+
+_SCRIPT_EXPORT_MARKERS = (
+    "exportmanager",
+    "createstepexportoptions",
+    "createstlexportoptions",
+    "createigesexportoptions",
+    "createsmtfileexportoptions",
+    "createfusionarchiveexportoptions",
+    "createusdexportoptions",
+    "exportmgr.execute",
+    "exportmanager.execute",
+)
+
+
+def _script_looks_like_export(script):
+    normalized = script.lower()
+    return any(marker in normalized for marker in _SCRIPT_EXPORT_MARKERS)
+
+
 @register_tool("run_fusion_script")
-def run_fusion_script(script):
+def run_fusion_script(script, allow_export=False, export_override_reason=None):
     if not isinstance(script, str) or not script.strip():
         return {"error": "Script must be a non-empty string."}
+    if _script_looks_like_export(script) and not allow_export:
+        return {
+            "error": (
+                "Scripted Fusion exports are blocked by default. Use export_asset so compute and timeline health "
+                "preflight checks run before writing files. If this raw export is intentional, call run_fusion_script "
+                "with allow_export=true and export_override_reason."
+            )
+        }
+    if _script_looks_like_export(script) and (not isinstance(export_override_reason, str) or not export_override_reason.strip()):
+        return {"error": "export_override_reason is required when allow_export=true for a script that uses Fusion export APIs."}
 
     app = adsk.core.Application.get()
     ui = app.userInterface
@@ -146,7 +175,7 @@ def preflight_export(require_compute=True):
 
 
 @register_tool("export_asset")
-def export_asset(format, export_path, allow_unhealthy_export=False, require_compute=True):
+def export_asset(format, export_path, allow_unhealthy_export=False, require_compute=True, override_reason=None):
     if not isinstance(format, str):
         return {"error": "Export format must be a string."}
     if not isinstance(export_path, str) or not export_path:
@@ -167,6 +196,11 @@ def export_asset(format, export_path, allow_unhealthy_export=False, require_comp
             "error": "Export blocked by preflight checks. Fix compute/timeline health issues or explicitly set allow_unhealthy_export=true.",
             "preflight": preflight_result,
         }
+    if not preflight_result["okToExport"] and (not isinstance(override_reason, str) or not override_reason.strip()):
+        return {
+            "error": "override_reason is required when exporting despite failed preflight checks.",
+            "preflight": preflight_result,
+        }
 
     export_dir = os.path.dirname(export_path)
     if export_dir and not os.path.exists(export_dir):
@@ -185,6 +219,7 @@ def export_asset(format, export_path, allow_unhealthy_export=False, require_comp
             "format": format,
             "exportPath": export_path,
             "allowedUnhealthyExport": bool(allow_unhealthy_export),
+            "overrideReason": override_reason if allow_unhealthy_export else None,
             "preflight": preflight_result,
         }
     }

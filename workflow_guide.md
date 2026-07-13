@@ -27,4 +27,6 @@ Follow this systematic workflow to interact with Autodesk Fusion 360 reliably an
 
 ## 4. Finalizing & Exporting
 1. **Check Parameters**: Verify final parameter expressions with `get_parameter`.
-2. **Asset Export**: Run `export_asset` to save step or stl files to their target paths.
+2. **Preflight Export**: Run `preflight_export` or use `export_asset`, which runs preflight automatically. Do not export when compute or timeline health checks fail.
+3. **Asset Export**: Run `export_asset` to save step or stl files to their target paths.
+4. **No Raw Export Scripts**: Do not call Fusion `exportManager` from `run_fusion_script`. Raw scripted exports bypass model-health proof and are blocked by default.

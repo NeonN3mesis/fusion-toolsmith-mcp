@@ -277,6 +277,86 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(executed, [])
         self.assertFalse(res["preflight"]["compute"]["succeeded"])
 
+    def test_export_asset_unhealthy_override_requires_reason(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+
+        executed = []
+        timeline = types.SimpleNamespace(count=0, item=lambda idx: None)
+        design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(name="Root"),
+            timeline=timeline,
+            computeAll=lambda: (_ for _ in ()).throw(RuntimeError("compute failed")),
+            exportManager=types.SimpleNamespace(
+                createSTEPExportOptions=lambda path, root: ("step", path, root),
+                execute=lambda options: executed.append(options),
+            ),
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("export_asset", {
+                "format": "step",
+                "export_path": os.path.join(self.temp_dir.name, "override.step"),
+                "allow_unhealthy_export": True,
+            })
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("error", res)
+        self.assertIn("override_reason is required", res["error"])
+        self.assertEqual(executed, [])
+
+    def test_export_asset_unhealthy_override_records_reason(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+
+        executed = []
+        timeline = types.SimpleNamespace(count=0, item=lambda idx: None)
+        design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(name="Root"),
+            timeline=timeline,
+            computeAll=lambda: (_ for _ in ()).throw(RuntimeError("compute failed")),
+            exportManager=types.SimpleNamespace(
+                createSTEPExportOptions=lambda path, root: ("step", path, root),
+                execute=lambda options: executed.append(options),
+            ),
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            export_path = os.path.join(self.temp_dir.name, "override.step")
+            res = self.tools.execute_tool("export_asset", {
+                "format": "step",
+                "export_path": export_path,
+                "allow_unhealthy_export": True,
+                "override_reason": "User requested a diagnostic export of known broken geometry.",
+            })
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertTrue(res["result"]["exported"])
+        self.assertEqual(executed, [("step", export_path, design.rootComponent)])
+        self.assertEqual(res["result"]["overrideReason"], "User requested a diagnostic export of known broken geometry.")
+
     def test_export_asset_blocks_unhealthy_timeline_before_writing_file(self):
         utilities = importlib.import_module("tools.utilities")
         original_snapshot = utilities._design_state_snapshot
@@ -361,6 +441,43 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(executed, [("step", export_path, design.rootComponent)])
         self.assertTrue(res["result"]["preflight"]["okToExport"])
         self.assertTrue(res["result"]["preflight"]["compute"]["succeeded"])
+
+    def test_run_fusion_script_blocks_raw_export_api_by_default(self):
+        script = """
+def run(context):
+    exportMgr = design.exportManager
+    exportMgr.createSTEPExportOptions('C:/tmp/model.step', rootComp)
+"""
+        res = self.tools.execute_tool("run_fusion_script", {"script": script})
+        self.assertIn("error", res)
+        self.assertIn("Scripted Fusion exports are blocked", res["error"])
+
+    def test_run_fusion_script_export_override_requires_reason(self):
+        script = """
+def run(context):
+    exportMgr = design.exportManager
+"""
+        res = self.tools.execute_tool("run_fusion_script", {
+            "script": script,
+            "allow_export": True,
+        })
+        self.assertIn("error", res)
+        self.assertIn("export_override_reason is required", res["error"])
+
+    def test_run_fusion_script_allows_export_marker_with_reason(self):
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
+        script = """
+def run(context):
+    # exportManager is mentioned for a diagnostic dry run only.
+    print('acknowledged')
+"""
+        res = self.tools.execute_tool("run_fusion_script", {
+            "script": script,
+            "allow_export": True,
+            "export_override_reason": "Diagnostic script that does not write an export.",
+        })
+        self.assertIn("result", res)
+        self.assertIn("acknowledged", res["output"])
 
     def test_health_endpoint_returns_json(self):
         server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
