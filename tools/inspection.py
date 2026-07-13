@@ -23,6 +23,340 @@ def inspect_design():
     }
     return {"result": summary}
 
+
+def _document_snapshot(app):
+    documents = []
+    for index, doc in enumerate(_collection_items(_safe_value(lambda: app.documents))):
+        documents.append({
+            "index": index,
+            "name": _safe_value(lambda doc=doc: doc.name),
+            "isModified": _safe_value(lambda doc=doc: doc.isModified),
+            "isActive": doc == _safe_value(lambda: app.activeDocument),
+        })
+    active_doc = _safe_value(lambda: app.activeDocument)
+    return {
+        "active": {
+            "name": _safe_value(lambda: active_doc.name),
+            "isModified": _safe_value(lambda: active_doc.isModified),
+        } if active_doc else None,
+        "openDocuments": documents,
+        "openDocumentCount": len(documents),
+    }
+
+
+def _parameter_snapshot(parameter, parameter_type):
+    return {
+        "name": _safe_value(lambda: parameter.name),
+        "parameterType": parameter_type,
+        "expression": _safe_value(lambda: parameter.expression),
+        "value": _safe_value(lambda: parameter.value),
+        "unit": _safe_value(lambda: parameter.unit),
+        "role": _safe_value(lambda: parameter.role),
+        "isFavorite": _safe_value(lambda: parameter.isFavorite),
+    }
+
+
+def _parameters_snapshot(design):
+    user_parameters = [
+        _parameter_snapshot(param, "user")
+        for param in _collection_items(_safe_value(lambda: design.userParameters))
+    ]
+    model_parameters = [
+        _parameter_snapshot(param, "model")
+        for param in _collection_items(_safe_value(lambda: design.allParameters))
+    ]
+    return {
+        "user": sorted(user_parameters, key=lambda p: p.get("name") or ""),
+        "model": sorted(model_parameters, key=lambda p: p.get("name") or ""),
+    }
+
+
+def _component_signature(component, occurrence=None):
+    return {
+        "name": _safe_value(lambda: component.name),
+        "occurrenceName": _safe_value(lambda: occurrence.name) if occurrence else None,
+        "bodyCount": len(_collection_items(_safe_value(lambda: component.bRepBodies))),
+        "sketchCount": len(_collection_items(_safe_value(lambda: component.sketches))),
+        "occurrenceCount": len(_collection_items(_safe_value(lambda: component.occurrences))),
+    }
+
+
+def _component_snapshots(root):
+    components = [_component_signature(root)]
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        if component:
+            components.append(_component_signature(component, occ))
+    return sorted(components, key=lambda c: (c.get("occurrenceName") or "", c.get("name") or ""))
+
+
+def _body_snapshot(body, component_name):
+    physical_props = _safe_value(lambda: body.physicalProperties)
+    return {
+        "key": f"{component_name}/{_safe_value(lambda: body.name)}",
+        "name": _safe_value(lambda: body.name),
+        "componentName": component_name,
+        "isVisible": _safe_value(lambda: body.isVisible),
+        "isSolid": _safe_value(lambda: body.isSolid),
+        "entityToken": _safe_value(lambda: body.entityToken),
+        "boundingBox": _bbox_to_dict(body),
+        "volume": _safe_value(lambda: physical_props.volume) if physical_props else None,
+        "area": _safe_value(lambda: physical_props.area) if physical_props else None,
+    }
+
+
+def _body_snapshots(root):
+    bodies = []
+    root_name = _safe_value(lambda: root.name)
+    for body in _collection_items(_safe_value(lambda: root.bRepBodies)):
+        bodies.append(_body_snapshot(body, root_name))
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        component_name = _safe_value(lambda component=component: component.name)
+        for body in _collection_items(_safe_value(lambda component=component: component.bRepBodies)):
+            bodies.append(_body_snapshot(body, component_name))
+    return sorted(bodies, key=lambda b: b.get("key") or "")
+
+
+def _curve_counts(sketch):
+    curves = _safe_value(lambda: sketch.sketchCurves)
+    if not curves:
+        return {}
+    return {
+        "lines": len(_collection_items(_safe_value(lambda: curves.sketchLines))),
+        "circles": len(_collection_items(_safe_value(lambda: curves.sketchCircles))),
+        "arcs": len(_collection_items(_safe_value(lambda: curves.sketchArcs))),
+        "ellipses": len(_collection_items(_safe_value(lambda: curves.sketchEllipses))),
+        "splines": (
+            len(_collection_items(_safe_value(lambda: curves.sketchFittedSplines))) +
+            len(_collection_items(_safe_value(lambda: curves.sketchFixedSplines)))
+        ),
+        "conics": len(_collection_items(_safe_value(lambda: curves.sketchConicCurves))),
+    }
+
+
+def _sketch_snapshot(sketch, component_name):
+    return {
+        "key": f"{component_name}/{_safe_value(lambda: sketch.name)}",
+        "name": _safe_value(lambda: sketch.name),
+        "componentName": component_name,
+        "isVisible": _safe_value(lambda: sketch.isVisible),
+        "isFullyConstrained": _safe_value(lambda: sketch.isFullyConstrained),
+        "dimensionCount": len(_collection_items(_safe_value(lambda: sketch.sketchDimensions))),
+        "constraintCount": len(_collection_items(_safe_value(lambda: sketch.geometricConstraints))),
+        "pointCount": len(_collection_items(_safe_value(lambda: sketch.sketchPoints))),
+        "curveCounts": _curve_counts(sketch),
+        "boundingBox": _bbox_to_dict(sketch),
+    }
+
+
+def _sketch_snapshots(root):
+    sketches = []
+    root_name = _safe_value(lambda: root.name)
+    for sketch in _collection_items(_safe_value(lambda: root.sketches)):
+        sketches.append(_sketch_snapshot(sketch, root_name))
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        component_name = _safe_value(lambda component=component: component.name)
+        for sketch in _collection_items(_safe_value(lambda component=component: component.sketches)):
+            sketches.append(_sketch_snapshot(sketch, component_name))
+    return sorted(sketches, key=lambda s: s.get("key") or "")
+
+
+def _timeline_snapshot(design):
+    timeline = _safe_value(lambda: design.timeline)
+    if not timeline:
+        return {"count": 0, "markerPosition": None, "items": [], "unhealthyItems": []}
+    items = []
+    unhealthy = []
+    for i in range(_safe_value(lambda: timeline.count, 0) or 0):
+        item = timeline.item(i)
+        entity = _safe_value(lambda item=item: item.entity)
+        data = {
+            "index": i,
+            "name": _safe_value(lambda item=item: item.name),
+            "objectType": _safe_value(lambda entity=entity: entity.objectType) if entity else "SystemEvent",
+            "featureName": _safe_value(lambda entity=entity: entity.name) if entity else None,
+            "health": _health_to_string(_safe_value(lambda item=item: item.healthState)),
+            "isSuppressed": _safe_value(lambda item=item: item.isSuppressed),
+            "isBeforeMarker": i < (_safe_value(lambda: timeline.markerPosition, 0) or 0),
+        }
+        items.append(data)
+        if data["health"] not in ("Healthy", "0", "None"):
+            unhealthy.append(data)
+    return {
+        "count": _safe_value(lambda: timeline.count, len(items)),
+        "markerPosition": _safe_value(lambda: timeline.markerPosition),
+        "items": items,
+        "unhealthyItems": unhealthy,
+    }
+
+
+def _selection_snapshot(app):
+    ui = _safe_value(lambda: app.userInterface)
+    active_selections = _safe_value(lambda: ui.activeSelections)
+    selections = []
+    for i, selection in enumerate(_collection_items(active_selections)):
+        info = _describe_selected_entity(_safe_value(lambda selection=selection: selection.entity))
+        info["selectionIndex"] = i
+        selections.append(info)
+    return {"count": len(selections), "items": selections}
+
+
+def _design_state_snapshot(include_selections=True):
+    app = adsk.core.Application.get()
+    design = get_active_design()
+    root = design.rootComponent
+    components = _component_snapshots(root)
+    bodies = _body_snapshots(root)
+    sketches = _sketch_snapshots(root)
+    timeline = _timeline_snapshot(design)
+    parameters = _parameters_snapshot(design)
+    snapshot = {
+        "schemaVersion": 1,
+        "document": _document_snapshot(app),
+        "design": {
+            "rootComponent": _safe_value(lambda: root.name),
+            "units": _safe_value(lambda: design.unitsManager.defaultLengthUnits),
+            "designType": _safe_value(lambda: design.designType),
+        },
+        "counts": {
+            "components": len(components),
+            "bodies": len(bodies),
+            "sketches": len(sketches),
+            "userParameters": len(parameters["user"]),
+            "modelParameters": len(parameters["model"]),
+            "timelineItems": timeline["count"],
+            "unhealthyTimelineItems": len(timeline["unhealthyItems"]),
+        },
+        "components": components,
+        "bodies": bodies,
+        "sketches": sketches,
+        "parameters": parameters,
+        "timeline": timeline,
+        "warnings": [],
+    }
+    if include_selections:
+        snapshot["selection"] = _selection_snapshot(app)
+    if timeline["unhealthyItems"]:
+        snapshot["warnings"].append("Timeline contains warning or error health states.")
+    active_doc = snapshot["document"].get("active")
+    if active_doc and active_doc.get("isModified"):
+        snapshot["warnings"].append("Active document has unsaved changes.")
+    return snapshot
+
+
+@register_tool("capture_design_state")
+def capture_design_state(include_selections=True):
+    import traceback
+    try:
+        return {"result": _design_state_snapshot(include_selections=include_selections)}
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error capturing design state: {e}\n{err}")
+        return {"error": f"Failed to capture design state: {str(e)}"}
+
+
+def _list_by_key(items, key):
+    result = {}
+    for index, item in enumerate(items or []):
+        item_key = str(item.get(key) or item.get("key") or item.get("name") or index)
+        if item_key in result:
+            item_key = f"{item_key}#{index}"
+        result[item_key] = item
+    return result
+
+
+def _changed_items(before_items, after_items, key, fields):
+    before_map = _list_by_key(before_items, key)
+    after_map = _list_by_key(after_items, key)
+    changed = []
+    for item_key in sorted(set(before_map).intersection(after_map)):
+        field_changes = {}
+        before_item = before_map[item_key]
+        after_item = after_map[item_key]
+        for field in fields:
+            if before_item.get(field) != after_item.get(field):
+                field_changes[field] = {
+                    "before": before_item.get(field),
+                    "after": after_item.get(field),
+                }
+        if field_changes:
+            changed.append({"key": item_key, "changes": field_changes})
+    return {
+        "added": sorted(set(after_map) - set(before_map)),
+        "removed": sorted(set(before_map) - set(after_map)),
+        "changed": changed,
+    }
+
+
+def _compare_parameters(before, after, parameter_type):
+    before_items = (before.get("parameters") or {}).get(parameter_type, [])
+    after_items = (after.get("parameters") or {}).get(parameter_type, [])
+    return _changed_items(before_items, after_items, "name", ["expression", "value", "unit"])
+
+
+@register_tool("compare_design_state")
+def compare_design_state(before, after):
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return {"error": "before and after must be snapshot objects returned by capture_design_state."}
+
+    document_changed = before.get("document", {}).get("active") != after.get("document", {}).get("active")
+    counts_before = before.get("counts") or {}
+    counts_after = after.get("counts") or {}
+    count_changes = {}
+    for key in sorted(set(counts_before).union(counts_after)):
+        if counts_before.get(key) != counts_after.get(key):
+            count_changes[key] = {"before": counts_before.get(key), "after": counts_after.get(key)}
+
+    diff = {
+        "documentChanged": document_changed,
+        "countChanges": count_changes,
+        "components": _changed_items(before.get("components"), after.get("components"), "occurrenceName", ["name", "bodyCount", "sketchCount", "occurrenceCount"]),
+        "bodies": _changed_items(before.get("bodies"), after.get("bodies"), "key", ["name", "componentName", "isVisible", "isSolid", "boundingBox", "volume", "area"]),
+        "sketches": _changed_items(before.get("sketches"), after.get("sketches"), "key", ["isVisible", "isFullyConstrained", "dimensionCount", "constraintCount", "pointCount", "curveCounts", "boundingBox"]),
+        "userParameters": _compare_parameters(before, after, "user"),
+        "modelParameters": _compare_parameters(before, after, "model"),
+        "timeline": _changed_items(
+            (before.get("timeline") or {}).get("items"),
+            (after.get("timeline") or {}).get("items"),
+            "index",
+            ["name", "objectType", "featureName", "health", "isSuppressed", "isBeforeMarker"],
+        ),
+        "warnings": [],
+    }
+
+    before_unhealthy = counts_before.get("unhealthyTimelineItems") or 0
+    after_unhealthy = counts_after.get("unhealthyTimelineItems") or 0
+    if after_unhealthy > before_unhealthy:
+        diff["warnings"].append("New unhealthy timeline items appeared.")
+    if before.get("design", {}).get("units") != after.get("design", {}).get("units"):
+        diff["warnings"].append("Default design units changed.")
+    if document_changed:
+        diff["warnings"].append("Active document state changed.")
+
+    changed_categories = [
+        name for name in ("components", "bodies", "sketches", "userParameters", "modelParameters", "timeline")
+        if diff[name]["added"] or diff[name]["removed"] or diff[name]["changed"]
+    ]
+    has_changes = bool(document_changed or count_changes or changed_categories)
+    risk_level = "none"
+    if has_changes:
+        risk_level = "low"
+    if diff["warnings"]:
+        risk_level = "medium"
+    if after_unhealthy > before_unhealthy:
+        risk_level = "high"
+
+    return {
+        "result": {
+            "hasChanges": has_changes,
+            "riskLevel": risk_level,
+            "changedCategories": changed_categories,
+            "diff": diff,
+        }
+    }
+
 @register_tool("query_selection")
 def query_selection():
     app = adsk.core.Application.get()

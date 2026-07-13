@@ -540,11 +540,121 @@ class ProtocolAndRegistryTests(unittest.TestCase):
 
     def test_structural_inspection_tools_are_advertised(self):
         tool_names = {tool["name"] for tool in self.tools.get_tool_schemas()}
+        self.assertIn("capture_design_state", tool_names)
+        self.assertIn("compare_design_state", tool_names)
         self.assertIn("inspect_sketch", tool_names)
         self.assertIn("inspect_feature", tool_names)
         self.assertIn("get_feature_dependencies", tool_names)
         self.assertIn("map_coordinates", tool_names)
         self.assertIn("revert_active_document", tool_names)
+
+    def test_capture_design_state_returns_structural_snapshot(self):
+        mock_param = types.SimpleNamespace(name="screenWidth", expression="100 mm", value=10.0, unit="mm")
+        mock_body = types.SimpleNamespace(
+            name="BodyA",
+            isVisible=True,
+            isSolid=True,
+            entityToken="body-token",
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0, y=0, z=0),
+                maxPoint=types.SimpleNamespace(x=1, y=2, z=3),
+            ),
+            physicalProperties=types.SimpleNamespace(volume=6.0, area=22.0),
+        )
+        mock_sketch = types.SimpleNamespace(
+            name="SketchA",
+            isVisible=True,
+            isFullyConstrained=False,
+            boundingBox=None,
+            sketchDimensions=[types.SimpleNamespace()],
+            geometricConstraints=[types.SimpleNamespace(), types.SimpleNamespace()],
+            sketchPoints=[],
+            sketchCurves=types.SimpleNamespace(
+                sketchLines=[types.SimpleNamespace()],
+                sketchCircles=[],
+                sketchArcs=[],
+                sketchEllipses=[],
+                sketchFittedSplines=[],
+                sketchFixedSplines=[],
+                sketchConicCurves=[],
+            ),
+        )
+        mock_feature = types.SimpleNamespace(objectType="adsk::fusion::ExtrudeFeature", name="ExtrudeA")
+        mock_timeline_item = types.SimpleNamespace(
+            name="ExtrudeA",
+            entity=mock_feature,
+            healthState=0,
+            isSuppressed=False,
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[mock_body],
+            sketches=[mock_sketch],
+            occurrences=[],
+            allOccurrences=[],
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+            designType="parametric",
+            userParameters=[mock_param],
+            allParameters=[],
+            timeline=types.SimpleNamespace(
+                count=1,
+                markerPosition=1,
+                item=lambda idx: mock_timeline_item,
+            ),
+        )
+        _fake_app.activeProduct = self.mock_design
+        _fake_app.activeDocument = types.SimpleNamespace(name="FixtureDoc", isModified=False)
+        _fake_app.documents = [_fake_app.activeDocument]
+
+        res = self.tools.execute_tool("capture_design_state", {"include_selections": False})
+        self.assertIn("result", res)
+        snapshot = res["result"]
+        self.assertEqual(snapshot["design"]["units"], "mm")
+        self.assertEqual(snapshot["counts"]["bodies"], 1)
+        self.assertEqual(snapshot["counts"]["sketches"], 1)
+        self.assertEqual(snapshot["counts"]["timelineItems"], 1)
+        self.assertEqual(snapshot["parameters"]["user"][0]["name"], "screenWidth")
+        self.assertEqual(snapshot["bodies"][0]["key"], "Root/BodyA")
+        self.assertEqual(snapshot["sketches"][0]["curveCounts"]["lines"], 1)
+        self.assertNotIn("selection", snapshot)
+
+    def test_compare_design_state_reports_unintended_changes(self):
+        before = {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "design": {"units": "mm"},
+            "counts": {"bodies": 1, "unhealthyTimelineItems": 0},
+            "components": [],
+            "bodies": [{"key": "Root/BodyA", "name": "BodyA", "componentName": "Root"}],
+            "sketches": [],
+            "parameters": {"user": [{"name": "width", "expression": "10 mm", "value": 1.0, "unit": "mm"}], "model": []},
+            "timeline": {"items": [{"index": 0, "name": "ExtrudeA", "health": "Healthy"}]},
+        }
+        after = {
+            "document": {"active": {"name": "DocA", "isModified": True}},
+            "design": {"units": "mm"},
+            "counts": {"bodies": 2, "unhealthyTimelineItems": 1},
+            "components": [],
+            "bodies": [
+                {"key": "Root/BodyA", "name": "BodyA", "componentName": "Root"},
+                {"key": "Root/BodyB", "name": "BodyB", "componentName": "Root"},
+            ],
+            "sketches": [],
+            "parameters": {"user": [{"name": "width", "expression": "12 mm", "value": 1.2, "unit": "mm"}], "model": []},
+            "timeline": {"items": [{"index": 0, "name": "ExtrudeA", "health": "Error"}]},
+        }
+
+        res = self.tools.execute_tool("compare_design_state", {"before": before, "after": after})
+        result = res["result"]
+        self.assertTrue(result["hasChanges"])
+        self.assertEqual(result["riskLevel"], "high")
+        self.assertIn("bodies", result["changedCategories"])
+        self.assertIn("userParameters", result["changedCategories"])
+        self.assertEqual(result["diff"]["bodies"]["added"], ["Root/BodyB"])
+        self.assertEqual(result["diff"]["userParameters"]["changed"][0]["changes"]["expression"]["after"], "12 mm")
+        self.assertIn("New unhealthy timeline items appeared.", result["diff"]["warnings"])
 
     def test_inspect_sketch_returns_coordinate_mapping_and_curves(self):
         point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)

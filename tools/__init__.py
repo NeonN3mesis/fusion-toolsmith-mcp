@@ -27,6 +27,32 @@ def get_tool_schemas():
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
+            "name": "capture_design_state",
+            "description": "Capture a compact structural snapshot of the active Fusion design for before/after safety checks. Includes open documents, active document, units, components, bodies, sketches, parameters, timeline health, and optional selection state.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_selections": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Include currently selected UI entities in the snapshot."
+                    }
+                }
+            }
+        },
+        {
+            "name": "compare_design_state",
+            "description": "Compare two capture_design_state snapshots and report added, removed, and changed structures plus warnings. Use after mutating tools to detect unintended changes or new timeline health issues.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "before": {"type": "object", "description": "Snapshot object returned by capture_design_state before an operation."},
+                    "after": {"type": "object", "description": "Snapshot object returned by capture_design_state after an operation."}
+                },
+                "required": ["before", "after"]
+            }
+        },
+        {
             "name": "query_selection",
             "description": "Describe currently selected entities in the Fusion UI in agent-friendly terms (e.g., coordinates, type, owning component). Instructions: Ask the user to select the target entity in the Fusion UI if it's too difficult to find programmatically. Use this tool to read their selection.",
             "inputSchema": {"type": "object", "properties": {}}
