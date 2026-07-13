@@ -247,6 +247,25 @@ def get_tool_schemas():
                 "required": ["body_name", "edge_indices", "radius"]
             }
         },
+        {
+            "name": "chamfer_feature",
+            "description": "Create an equal-distance chamfer on explicit edge indices of a named body with built-in before/after design-state comparison. Inspect or select edges before choosing indices.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Name of the body whose edges should be chamfered."},
+                    "edge_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Required explicit 0-based edge indices on the body."
+                    },
+                    "distance": {"type": "string", "description": "Fusion chamfer distance expression, e.g. '1 mm'."},
+                    "name": {"type": "string", "description": "Optional name for the created chamfer feature."},
+                    "tangent_chain": {"type": "boolean", "default": True}
+                },
+                "required": ["body_name", "edge_indices", "distance"]
+            }
+        },
 
         {
             "name": "create_parametric_feature",

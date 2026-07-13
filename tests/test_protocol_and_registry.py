@@ -677,6 +677,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("project_geometry", tool_names)
         self.assertIn("extrude_feature", tool_names)
         self.assertIn("fillet_feature", tool_names)
+        self.assertIn("chamfer_feature", tool_names)
         self.assertIn("revert_active_document", tool_names)
 
     def test_capture_design_state_returns_structural_snapshot(self):
@@ -1218,6 +1219,108 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(created_inputs[0].edge_sets[0][0], [edge1])
         self.assertEqual(created_inputs[0].edge_sets[0][1], "1 mm")
         self.assertFalse(created_inputs[0].edge_sets[0][2])
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_chamfer_feature_requires_edge_indices(self):
+        res = self.tools.execute_tool("chamfer_feature", {
+            "body_name": "BodyA",
+            "edge_indices": [],
+            "distance": "1 mm",
+        })
+        self.assertIn("error", res)
+        self.assertIn("edge_indices is required", res["error"])
+
+    def test_chamfer_feature_creates_equal_distance_chamfer(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+
+        class MockCollection:
+            def __init__(self, items):
+                self._items = items
+                self.count = len(items)
+            def item(self, index):
+                return self._items[index]
+
+        class MockObjectCollection(list):
+            @property
+            def count(self):
+                return len(self)
+            def add(self, item):
+                self.append(item)
+
+        original_object_collection = sys.modules["adsk.core"].ObjectCollection
+        sys.modules["adsk.core"].ObjectCollection = types.SimpleNamespace(create=lambda: MockObjectCollection())
+
+        edge0 = types.SimpleNamespace(name="Edge0", entityToken="edge0", length=1.0, objectType="BRepEdge")
+        edge1 = types.SimpleNamespace(name="Edge1", entityToken="edge1", length=2.0, objectType="BRepEdge")
+        created_inputs = []
+
+        class MockChamferInput:
+            def __init__(self, edges, tangent_chain):
+                self.edges = list(edges)
+                self.tangent_chain = tangent_chain
+                self.distance = None
+            def setToEqualDistance(self, distance):
+                self.distance = distance
+
+        class MockChamfers:
+            def createInput(self, edges, tangent_chain):
+                input_obj = MockChamferInput(edges, tangent_chain)
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                return types.SimpleNamespace(name="")
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(chamferFeatures=MockChamfers()),
+        )
+        body = types.SimpleNamespace(
+            name="BodyA",
+            parentComponent=component,
+            edges=MockCollection([edge0, edge1]),
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                bRepBodies=[body],
+                allOccurrences=[],
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1, "unhealthyTimelineItems": 0}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {
+            "result": {"featureName": feature_name, "featureType": "ChamferFeature"}
+        }
+        try:
+            res = self.tools.execute_tool("chamfer_feature", {
+                "body_name": "BodyA",
+                "edge_indices": [1],
+                "distance": "1 mm",
+                "name": "ChamferA",
+                "tangent_chain": False,
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+            sys.modules["adsk.core"].ObjectCollection = original_object_collection
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["featureName"], "ChamferA")
+        self.assertEqual(res["result"]["bodyName"], "BodyA")
+        self.assertEqual(res["result"]["edgeIndices"], [1])
+        self.assertEqual(res["result"]["edges"][0]["entityToken"], "edge1")
+        self.assertEqual(created_inputs[0].edges, [edge1])
+        self.assertEqual(created_inputs[0].distance, "1 mm")
+        self.assertFalse(created_inputs[0].tangent_chain)
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
     def test_inspect_sketch_returns_coordinate_mapping_and_curves(self):

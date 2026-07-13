@@ -232,3 +232,52 @@ def fillet_feature(body_name, edge_indices, radius, name=None, tangent_chain=Tru
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error creating fillet feature: {e}\n{err}")
         return {"error": f"Failed to create fillet feature: {str(e)}"}
+
+
+@register_tool("chamfer_feature")
+def chamfer_feature(body_name, edge_indices, distance, name=None, tangent_chain=True):
+    """
+    Create an equal-distance chamfer on selected edges of a named body.
+
+    Edge indices are required for the same reason as fillets: chamfering the
+    wrong edge is easy to miss visually and hard to diagnose after export.
+    """
+    try:
+        if edge_indices is None or len(edge_indices) == 0:
+            return {"error": "edge_indices is required. Inspect the body or use selection before choosing edges."}
+        body = _find_body_by_name(body_name)
+        if not body:
+            return {"error": f"Body '{body_name}' not found."}
+
+        before = _design_state_snapshot(include_selections=False)
+        edges = _body_edges_by_indices(body, edge_indices)
+        edge_collection = _edge_collection(edges)
+        component = _safe_value(lambda: body.parentComponent) or get_active_design().rootComponent
+        chamfers = component.features.chamferFeatures
+        chamfer_input = chamfers.createInput(edge_collection, bool(tangent_chain))
+        chamfer_input.setToEqualDistance(adsk.core.ValueInput.createByString(distance))
+        chamfer = chamfers.add(chamfer_input)
+        if name:
+            chamfer.name = name
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        feature_name = _safe_value(lambda: chamfer.name) or name
+        inspected = inspect_feature(feature_name).get("result") if feature_name else None
+        return {
+            "result": {
+                "featureName": feature_name,
+                "bodyName": body.name,
+                "edgeIndices": [int(index) for index in edge_indices],
+                "edges": _edge_refs(edges),
+                "distance": distance,
+                "chamferType": "EqualDistance",
+                "tangentChain": bool(tangent_chain),
+                "feature": inspected,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating chamfer feature: {e}\n{err}")
+        return {"error": f"Failed to create chamfer feature: {str(e)}"}
