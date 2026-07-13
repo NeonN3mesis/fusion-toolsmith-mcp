@@ -122,6 +122,7 @@ def _install_adsk_stub():
         "BRepBody",
         "Occurrence",
         "SketchEntity",
+        "Sketch",
         "ConstructionPlane",
         "ExtrudeFeature",
         "FilletFeature",
@@ -316,18 +317,14 @@ class ProtocolAndRegistryTests(unittest.TestCase):
             thread.join(timeout=2)
             self.mcp_server.sessions.pop(session_id, None)
 
-    def test_sse_allows_stable_loopback_url_without_token(self):
+    def test_sse_requires_token(self):
         server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/sse", timeout=2) as response:
-                first_line = response.readline().decode("utf-8").strip()
-                second_line = response.readline().decode("utf-8").strip()
-            self.assertEqual(response.status, 200)
-            self.assertEqual(first_line, "event: endpoint")
-            self.assertIn("/messages?session_id=", second_line)
-            self.assertIn("&token=", second_line)
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/sse", timeout=2)
+            self.assertEqual(ctx.exception.code, 403)
         finally:
             server.shutdown()
             server.server_close()
@@ -345,6 +342,45 @@ class ProtocolAndRegistryTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_sse_allows_authorized_token(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{server.server_port}/sse?token={self.mcp_server.auth_token}",
+                timeout=2,
+            ) as response:
+                first_line = response.readline().decode("utf-8").strip()
+                second_line = response.readline().decode("utf-8").strip()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(first_line, "event: endpoint")
+            self.assertIn("/messages?session_id=", second_line)
+            self.assertIn("&token=", second_line)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_sse_rejects_extra_active_clients(self):
+        session_id = "existing-sse-session"
+        self.mcp_server.sessions[session_id] = queue.Queue()
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{server.server_port}/sse?token={self.mcp_server.auth_token}",
+                    timeout=2,
+                )
+            self.assertEqual(ctx.exception.code, 503)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.mcp_server.sessions.pop(session_id, None)
 
     def test_streamable_http_initialize_creates_session(self):
         server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
@@ -400,6 +436,85 @@ class ProtocolAndRegistryTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_streamable_http_delete_closes_session(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            init_payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
+            init_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/sse",
+                data=init_payload,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(init_request, timeout=2) as response:
+                session_id = response.headers.get("Mcp-Session-Id")
+
+            delete_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/sse",
+                data=b"",
+                method="DELETE",
+                headers={"Mcp-Session-Id": session_id},
+            )
+            with urllib.request.urlopen(delete_request, timeout=2) as response:
+                self.assertEqual(response.status, 200)
+
+            tools_payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).encode("utf-8")
+            tools_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/sse",
+                data=tools_payload,
+                method="POST",
+                headers={"Content-Type": "application/json", "Mcp-Session-Id": session_id},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(tools_request, timeout=2)
+            self.assertEqual(ctx.exception.code, 404)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_streamable_http_tool_call_posts_to_task_manager(self):
+        original_post = self.mcp_server.TaskManager.post
+        original_execute = self.mcp_server.execute_mcp_request_main_thread
+        posted = []
+
+        def fake_execute(session_id, req_id, method, params):
+            posted.append((session_id, req_id, method, params))
+            self.mcp_server.queue_session_message(
+                session_id,
+                {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": "queued"}], "isError": False},
+                },
+            )
+
+        def fake_post(command, callback, data):
+            posted.append(command)
+            callback(data)
+            return "task-id"
+
+        self.mcp_server.TaskManager.post = fake_post
+        self.mcp_server.execute_mcp_request_main_thread = fake_execute
+        try:
+            handler = object.__new__(self.mcp_server.MCPServerHandler)
+            response = handler._handle_mcp_request_direct({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {"name": "inspect_design", "arguments": {}},
+            })
+        finally:
+            self.mcp_server.TaskManager.post = original_post
+            self.mcp_server.execute_mcp_request_main_thread = original_execute
+
+        self.assertIn("mcp_request", posted)
+        self.assertEqual(posted[1][2], "tools/call")
+        self.assertEqual(response["id"], 7)
+        self.assertFalse(response["result"]["isError"])
+
     def test_get_sketch_dimensions_returns_details(self):
         mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)
         mock_dim = types.SimpleNamespace(parameter=mock_param, objectType="SketchLinearDimension")
@@ -422,6 +537,329 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(len(dims), 1)
         self.assertEqual(dims[0]["parameterName"], "d1")
         self.assertEqual(dims[0]["expression"], "10 cm")
+
+    def test_structural_inspection_tools_are_advertised(self):
+        tool_names = {tool["name"] for tool in self.tools.get_tool_schemas()}
+        self.assertIn("inspect_sketch", tool_names)
+        self.assertIn("inspect_feature", tool_names)
+        self.assertIn("get_feature_dependencies", tool_names)
+        self.assertIn("map_coordinates", tool_names)
+        self.assertIn("revert_active_document", tool_names)
+
+    def test_inspect_sketch_returns_coordinate_mapping_and_curves(self):
+        point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        vector = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0, unit="cm")
+        mock_dim = types.SimpleNamespace(name="LengthDim", parameter=mock_param, objectType="SketchLinearDimension")
+        source_edge = types.SimpleNamespace(
+            name="SourceEdge",
+            objectType="adsk::fusion::BRepEdge",
+            entityToken="edge-token",
+        )
+        mock_line = types.SimpleNamespace(
+            name="Line1",
+            objectType="adsk::fusion::SketchLine",
+            isConstruction=False,
+            isReference=True,
+            entityToken="line-token",
+            referencedEntity=source_edge,
+            startSketchPoint=types.SimpleNamespace(geometry=point(0, 0, 0)),
+            endSketchPoint=types.SimpleNamespace(geometry=point(1, 0, 0)),
+            geometry=types.SimpleNamespace(startPoint=point(0, 0, 0), endPoint=point(1, 0, 0)),
+            worldGeometry=types.SimpleNamespace(startPoint=point(10, 20, 30), endPoint=point(11, 20, 30)),
+            length=1.0,
+        )
+        mock_sketch = types.SimpleNamespace(
+            name="TestSketch",
+            objectType="adsk::fusion::Sketch",
+            parentComponent=types.SimpleNamespace(name="Root"),
+            isVisible=True,
+            isFullyConstrained=False,
+            referencePlane=types.SimpleNamespace(
+                name="XZ",
+                objectType="adsk::fusion::ConstructionPlane",
+                geometry=types.SimpleNamespace(
+                    origin=point(0, 0, 0),
+                    uDirection=vector(1, 0, 0),
+                    vDirection=vector(0, 0, -1),
+                    normal=vector(0, 1, 0),
+                ),
+            ),
+            sketchPoints=types.SimpleNamespace(count=0, item=lambda idx: None),
+            sketchDimensions=types.SimpleNamespace(count=1, item=lambda idx: mock_dim),
+            geometricConstraints=types.SimpleNamespace(count=0, item=lambda idx: None),
+            sketchCurves=types.SimpleNamespace(
+                sketchLines=types.SimpleNamespace(count=1, item=lambda idx: mock_line),
+                sketchCircles=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchArcs=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchEllipses=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchFittedSplines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchFixedSplines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchConicCurves=types.SimpleNamespace(count=0, item=lambda idx: None),
+            ),
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(sketches=[mock_sketch], allOccurrences=[])
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("inspect_sketch", {"sketch_name": "TestSketch"})
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertEqual(result["coordinateSystem"]["localYAxisInModel"], [0, 0, -1])
+        self.assertEqual(result["curves"]["lines"][0]["worldEndPoint"], [11, 20, 30])
+        self.assertEqual(result["dimensions"][0]["parameterName"], "d1")
+        self.assertEqual(result["parameters"][0]["name"], "d1")
+        self.assertEqual(result["curves"]["lines"][0]["source"]["entityToken"], "edge-token")
+
+    def test_map_coordinates_returns_both_transform_directions(self):
+        original_point3d = sys.modules["adsk.core"].Point3D
+        class MockPoint:
+            def __init__(self, x, y, z):
+                self.x = x
+                self.y = y
+                self.z = z
+            def copy(self):
+                return MockPoint(self.x, self.y, self.z)
+            def transformBy(self, matrix):
+                self.x += matrix.dx
+                self.y += matrix.dy
+                self.z += matrix.dz
+
+        class MockMatrix:
+            def __init__(self, dx, dy, dz):
+                self.dx = dx
+                self.dy = dy
+                self.dz = dz
+            def copy(self):
+                return MockMatrix(self.dx, self.dy, self.dz)
+            def invert(self):
+                self.dx = -self.dx
+                self.dy = -self.dy
+                self.dz = -self.dz
+                return True
+            def asArray(self):
+                return [1, 0, 0, self.dx, 0, 1, 0, self.dy, 0, 0, 1, self.dz]
+
+        point = lambda x, y, z: MockPoint(x, y, z)
+        vector = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        sys.modules["adsk.core"].Point3D = types.SimpleNamespace(create=point)
+        try:
+            mock_sketch = types.SimpleNamespace(
+                name="TestSketch",
+                referencePlane=types.SimpleNamespace(
+                    geometry=types.SimpleNamespace(
+                        origin=point(0, 0, 0),
+                        uDirection=vector(1, 0, 0),
+                        vDirection=vector(0, 0, -1),
+                        normal=vector(0, 1, 0),
+                    )
+                ),
+                sketchToModelSpace=lambda p: point(p.x, 100 + p.y, p.z),
+                modelToSketchSpace=lambda p: point(p.x, p.y - 100, p.z),
+            )
+            target_occ = types.SimpleNamespace(
+                name="TargetOcc",
+                component=types.SimpleNamespace(name="TargetComp"),
+                transform=MockMatrix(10, 0, 0),
+            )
+            root = types.SimpleNamespace(name="Root", sketches=[mock_sketch], allOccurrences=[target_occ])
+            self.mock_design = types.SimpleNamespace(rootComponent=root)
+            _fake_app.activeProduct = self.mock_design
+
+            res = self.tools.execute_tool("map_coordinates", {
+                "point": [1, 2, 3],
+                "from_sketch": "TestSketch",
+                "to_component": "TargetOcc",
+            })
+        finally:
+            sys.modules["adsk.core"].Point3D = original_point3d
+        self.assertEqual(res["result"]["sketchToModel"], [1, 102, 3])
+        self.assertEqual(res["result"]["sketchToTargetComponent"], [-9, 102, 3])
+        self.assertEqual(res["result"]["targetComponentToModel"], [11, 2, 3])
+        self.assertEqual(res["result"]["modelToSketch"], [11, -98, 3])
+
+    def test_inspect_feature_returns_extrude_operation_and_bodies(self):
+        original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature
+        mock_body = types.SimpleNamespace(name="Body1")
+        mock_distance_param = types.SimpleNamespace(
+            name="d228",
+            expression="5 mm",
+            value=0.5,
+            unit="cm",
+            objectType="adsk::fusion::ModelParameter",
+            entityToken="param-token",
+        )
+        mock_extent = types.SimpleNamespace(
+            objectType="adsk::fusion::DistanceExtentDefinition",
+            distance=mock_distance_param,
+        )
+        mock_extrude = types.SimpleNamespace(
+            name="CutSlot",
+            objectType="adsk::fusion::ExtrudeFeature",
+            healthState=0,
+            operation=3,
+            extentOne=mock_extent,
+            extentTwo=None,
+            isSymmetric=False,
+            isSolid=True,
+            participantBodies=types.SimpleNamespace(count=1, item=lambda idx: mock_body),
+            bodies=types.SimpleNamespace(count=1, item=lambda idx: mock_body),
+            profiles=types.SimpleNamespace(count=0, item=lambda idx: None),
+        )
+        sys.modules["adsk.fusion"].ExtrudeFeature = types.SimpleNamespace(cast=lambda value: value if value is mock_extrude else None)
+        try:
+            mock_item = types.SimpleNamespace(
+                name="CutSlot",
+                index=4,
+                healthState=0,
+                isSuppressed=False,
+                entity=mock_extrude,
+            )
+            self.mock_design = types.SimpleNamespace(
+                timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+                rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+            )
+            _fake_app.activeProduct = self.mock_design
+
+            res = self.tools.execute_tool("inspect_feature", {"feature_name": "CutSlot"})
+        finally:
+            sys.modules["adsk.fusion"].ExtrudeFeature = original_extrude
+
+        self.assertEqual(res["result"]["featureType"], "ExtrudeFeature")
+        self.assertEqual(res["result"]["operation"], "Cut")
+        self.assertEqual(res["result"]["extentOne"]["distanceExpression"], "5 mm")
+        self.assertEqual(res["result"]["participantBodies"], ["Body1"])
+        self.assertEqual(res["result"]["parameters"][0]["name"], "d228")
+        self.assertEqual(res["result"]["parameters"][0]["role"], "extentOne.distance")
+
+    def test_get_feature_dependencies_reports_profile_sketch_and_downstream(self):
+        original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature
+        original_sketch = sys.modules["adsk.fusion"].Sketch
+        mock_body = types.SimpleNamespace(name="Body1")
+        mock_sketch = types.SimpleNamespace(
+            name="SketchA",
+            objectType="adsk::fusion::Sketch",
+            parentComponent=types.SimpleNamespace(name="Root"),
+            referencePlane=types.SimpleNamespace(name="XY", objectType="adsk::fusion::ConstructionPlane"),
+            sketchCurves=types.SimpleNamespace(
+                sketchLines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchCircles=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchArcs=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchEllipses=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchFittedSplines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchFixedSplines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchConicCurves=types.SimpleNamespace(count=0, item=lambda idx: None),
+            ),
+        )
+        mock_profile = types.SimpleNamespace(
+            profileLoops=types.SimpleNamespace(
+                count=1,
+                item=lambda idx: types.SimpleNamespace(
+                    profileCurves=types.SimpleNamespace(
+                        count=1,
+                        item=lambda cidx: types.SimpleNamespace(
+                            sketchEntity=types.SimpleNamespace(parentSketch=mock_sketch)
+                        )
+                    )
+                )
+            )
+        )
+        target_extrude = types.SimpleNamespace(
+            name="ExtrudeA",
+            objectType="adsk::fusion::ExtrudeFeature",
+            bodies=types.SimpleNamespace(count=1, item=lambda idx: mock_body),
+            profiles=types.SimpleNamespace(count=1, item=lambda idx: mock_profile),
+        )
+        downstream_extrude = types.SimpleNamespace(
+            name="CutB",
+            objectType="adsk::fusion::ExtrudeFeature",
+            participantBodies=types.SimpleNamespace(count=1, item=lambda idx: mock_body),
+            bodies=types.SimpleNamespace(count=0, item=lambda idx: None),
+            profiles=types.SimpleNamespace(count=0, item=lambda idx: None),
+        )
+        items = [
+            types.SimpleNamespace(name="ExtrudeA", index=0, healthState=0, entity=target_extrude),
+            types.SimpleNamespace(name="CutB", index=1, healthState=0, entity=downstream_extrude),
+        ]
+        sys.modules["adsk.fusion"].ExtrudeFeature = types.SimpleNamespace(
+            cast=lambda value: value if value in (target_extrude, downstream_extrude) else None
+        )
+        sys.modules["adsk.fusion"].Sketch = types.SimpleNamespace(cast=lambda value: value if value is mock_sketch else None)
+        try:
+            self.mock_design = types.SimpleNamespace(
+                timeline=types.SimpleNamespace(count=2, item=lambda idx: items[idx]),
+                rootComponent=types.SimpleNamespace(sketches=[mock_sketch], allOccurrences=[]),
+            )
+            _fake_app.activeProduct = self.mock_design
+
+            res = self.tools.execute_tool("get_feature_dependencies", {"feature_name": "ExtrudeA"})
+        finally:
+            sys.modules["adsk.fusion"].ExtrudeFeature = original_extrude
+            sys.modules["adsk.fusion"].Sketch = original_sketch
+
+        self.assertTrue(res["result"]["bestEffort"])
+        self.assertEqual(res["result"]["directInputs"][0]["sketchName"], "SketchA")
+        self.assertEqual(res["result"]["likelyDownstreamConsumers"][0]["timelineName"], "CutB")
+        self.assertIn("usesResultBodyAsParticipant", res["result"]["likelyDownstreamConsumers"][0]["reasons"])
+
+    def test_get_feature_dependencies_keeps_unresolved_profiles(self):
+        original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature
+        mock_distance_param = types.SimpleNamespace(
+            name="d1",
+            expression="fixtureHeight",
+            value=0.8,
+            unit="mm",
+            objectType="adsk::fusion::ModelParameter",
+        )
+        mock_extent = types.SimpleNamespace(distance=mock_distance_param)
+        mock_profile = types.SimpleNamespace(objectType="adsk::fusion::Profile")
+        mock_extrude = types.SimpleNamespace(
+            name="ExtrudeA",
+            objectType="adsk::fusion::ExtrudeFeature",
+            extentOne=mock_extent,
+            extentTwo=None,
+            bodies=types.SimpleNamespace(count=0, item=lambda idx: None),
+            profiles=types.SimpleNamespace(count=1, item=lambda idx: mock_profile),
+        )
+        mock_item = types.SimpleNamespace(name="ExtrudeA", index=0, healthState=0, entity=mock_extrude)
+        sys.modules["adsk.fusion"].ExtrudeFeature = types.SimpleNamespace(cast=lambda value: value if value is mock_extrude else None)
+        try:
+            self.mock_design = types.SimpleNamespace(
+                timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+                rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+            )
+            _fake_app.activeProduct = self.mock_design
+
+            res = self.tools.execute_tool("get_feature_dependencies", {"feature_name": "ExtrudeA"})
+        finally:
+            sys.modules["adsk.fusion"].ExtrudeFeature = original_extrude
+
+        kinds = [item["kind"] for item in res["result"]["directInputs"]]
+        self.assertIn("featureParameter", kinds)
+        self.assertIn("profile", kinds)
+        profile_input = [item for item in res["result"]["directInputs"] if item["kind"] == "profile"][0]
+        self.assertEqual(profile_input["confidence"], "unknown")
+
+    def test_revert_active_document_closes_and_reopens_saved_document(self):
+        opened = []
+        data_file = types.SimpleNamespace(name="SavedData")
+        reopened_doc = types.SimpleNamespace(name="SavedDoc", activate=lambda: opened.append("activated"))
+        closed = []
+        doc = types.SimpleNamespace(
+            name="SavedDoc",
+            dataFile=data_file,
+            isModified=True,
+            close=lambda save: closed.append(save),
+        )
+        _fake_app.activeDocument = doc
+        _fake_app.documents = types.SimpleNamespace(open=lambda df: opened.append(df) or reopened_doc)
+
+        res = self.tools.execute_tool("revert_active_document", {"save_changes": False})
+        self.assertIn("result", res)
+        self.assertEqual(closed, [False])
+        self.assertEqual(opened[0], data_file)
+        self.assertEqual(opened[1], "activated")
 
     def test_edit_sketch_dimension(self):
         mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)

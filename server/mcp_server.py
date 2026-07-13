@@ -30,6 +30,7 @@ server_instance = None
 auth_token = secrets.token_urlsafe(32)
 MAX_REQUEST_BYTES = 1024 * 1024
 DEFAULT_PORT = 9100
+MAX_SSE_SESSIONS = 1
 server_stop_event = threading.Event()
 
 # Thread-safe structures for SSE
@@ -88,7 +89,8 @@ def queue_session_message(session_id, payload):
     return False
 
 def log_message(message):
-    if app:
+    import threading
+    if app and threading.current_thread() == threading.main_thread():
         app.log(message)
     else:
         print(message)
@@ -229,7 +231,17 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             with sessions_lock:
                 sessions[session_id] = response_queue
             try:
-                execute_mcp_request_main_thread(session_id, req_id, method, params_obj)
+                def main_thread_callback(task_data):
+                    execute_mcp_request_main_thread(session_id, req_id, method, params_obj)
+
+                task_id = TaskManager.post(
+                    command="mcp_request",
+                    callback=main_thread_callback,
+                    data={}
+                )
+                if not task_id:
+                    return make_jsonrpc_error(req_id, -32000, "Fusion task manager is not running.")
+
                 return json.loads(response_queue.get(timeout=30))
             except queue.Empty:
                 return make_jsonrpc_error(req_id, -32000, "Timed out waiting for Fusion response.")
@@ -258,11 +270,16 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == '/sse':
-            # Allow loopback MCP clients to use a stable /sse URL. The endpoint
-            # event still carries the per-instance token required for messages.
-            if self._query_value("token") and not self._is_authorized():
+            if not self._is_authorized():
                 self._send_empty(403)
                 return
+            with sessions_lock:
+                if len(sessions) >= MAX_SSE_SESSIONS:
+                    self._send_json(
+                        {"error": "Fusion MCP already has an active SSE client."},
+                        status=503
+                    )
+                    return
 
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -305,6 +322,12 @@ class MCPServerHandler(BaseHTTPRequestHandler):
                 with subscriptions_lock:
                     if session_id in subscriptions:
                         del subscriptions[session_id]
+        elif parsed.path == '/shutdown':
+            if not self._is_authorized():
+                self._send_empty(403)
+                return
+            self._send_json({"status": "stopping", "server": "fusion-mcp"})
+            threading.Thread(target=stop_server, daemon=True, name="FusionMCP-ShutdownThread").start()
         else:
             self._send_empty(404)
 
@@ -313,6 +336,24 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_empty(403)
             return
         self._send_empty(204)
+
+    def do_DELETE(self):
+        if not self._is_loopback():
+            self._send_empty(403)
+            return
+        parsed = self._parsed_url()
+        if parsed.path not in ('/', '/sse'):
+            self._send_empty(404)
+            return
+
+        session_id = self.headers.get("Mcp-Session-Id") or self.headers.get("mcp-session-id")
+        if not session_id:
+            self._send_empty(400)
+            return
+
+        with http_sessions_lock:
+            http_sessions.discard(session_id)
+        self._send_empty(200)
 
     def do_POST(self):
         if not self._is_loopback():
@@ -717,7 +758,6 @@ def is_port_available(port=DEFAULT_PORT):
 def start_server():
     global server_instance, app
     try:
-        app = adsk.core.Application.get()
         server_stop_event.clear()
         port = DEFAULT_PORT
         wait_logged = False

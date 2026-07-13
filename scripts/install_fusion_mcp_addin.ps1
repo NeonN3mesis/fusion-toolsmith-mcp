@@ -70,4 +70,4 @@ Get-ChildItem -LiteralPath $targetRoot -Directory -Recurse -Force |
     Remove-Item -Recurse -Force
 
 Write-Host "Installed Fusion MCP add-in to: $targetRoot"
-Write-Host "Restart Fusion 360 so only FusionMCP starts on port 9100."
+Write-Host "FusionMCP is installed in opt-in mode. It will not start automatically with Fusion 360."

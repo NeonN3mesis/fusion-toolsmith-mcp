@@ -192,6 +192,35 @@ def set_active_document(name=None, index=None):
     except Exception as e:
         return {"error": f"Failed to activate document: {e}"}
 
+@register_tool("revert_active_document")
+def revert_active_document(save_changes=False):
+    try:
+        app = adsk.core.Application.get()
+        doc = app.activeDocument
+        if not doc:
+            return {"error": "No active Fusion document is open."}
+        data_file = doc.dataFile
+        if not data_file:
+            return {"error": "The active document must be saved to Fusion before it can be reopened from the data panel."}
+
+        name = doc.name
+        was_modified = doc.isModified
+        doc.close(bool(save_changes))
+        reopened = app.documents.open(data_file)
+        if not reopened:
+            return {"error": f"Closed '{name}' but Fusion did not reopen it from the saved data file."}
+        reopened.activate()
+        return {
+            "result": {
+                "documentName": reopened.name,
+                "saveChanges": bool(save_changes),
+                "wasModifiedBeforeClose": was_modified,
+                "message": f"Reopened '{reopened.name}' from its saved Fusion data file."
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to revert active document: {e}"}
+
 @register_tool("get_best_practices")
 def get_best_practices():
     try:
@@ -339,6 +368,8 @@ def git_status():
 
 @register_tool("create_2d_drawing")
 def create_2d_drawing(export_pdf_path):
+    doc = None
+    drawing_doc = None
     try:
         if not isinstance(export_pdf_path, str) or not export_pdf_path:
             return {"error": "Export PDF path must be a non-empty string."}
@@ -351,24 +382,61 @@ def create_2d_drawing(export_pdf_path):
         design = adsk.fusion.Design.cast(app.activeProduct)
         if not design:
             return {"error": "No active design found."}
+        source_doc = app.activeDocument
+        if not source_doc or not source_doc.dataFile:
+            return {"error": "The active design must be saved to Fusion before a drawing can be created."}
             
         export_dir = os.path.dirname(export_pdf_path)
         if export_dir and not os.path.exists(export_dir):
             os.makedirs(export_dir, exist_ok=True)
-            
-        doc = app.documents.add(adsk.core.DocumentTypes.DrawingDocumentType)
-        if not doc:
-            return {"error": "Failed to create new drawing document."}
-            
+
         try:
-            import adsk.drawing
-            drawing_doc = adsk.drawing.DrawingDocument.cast(doc)
-            if not drawing_doc or drawing_doc.sheets.count <= 0:
-                return {"error": "Drawing document did not contain any sheets to export."}
-            sheet = drawing_doc.sheets.item(0)
-            sheet.exportToPDF(export_pdf_path)
-        except Exception as export_error:
-            return {"error": f"Failed to export drawing PDF: {export_error}"}
+            import importlib
+            adsk_drawing = importlib.import_module("adsk.drawing")
+            drawing_mgr = adsk_drawing.DrawingManager.get()
+            if not drawing_mgr:
+                return {"error": "Fusion DrawingManager is not available."}
+
+            create_input = drawing_mgr.createDrawingInput(
+                source_doc.dataFile,
+                adsk_drawing.DrawingCreationModes.AutomaticDrawingCreationMode
+            )
+            if not create_input:
+                return {"error": "Failed to create drawing input."}
+            create_input.standard = adsk_drawing.DrawingStandardTypes.ASMEDrawingStandardType
+            create_input.units = adsk_drawing.DrawingUnitTypes.MillimeterDrawingUnitType
+            create_input.asmeSheetSize = adsk_drawing.ASMESheetSizes.BASMESheetSize
+            create_input.orientationType = adsk_drawing.SheetOrientationTypes.LandscapeSheetOrientationType
+            create_input.sheetCreationType = adsk_drawing.SheetCreationTypes.FirstLevelOnlySheetCreationType
+
+            prefs = create_input.automationPreferences
+            if prefs:
+                try:
+                    prefs.componentSheetViewPreferences.isOrthogonalViewAdded = True
+                    prefs.componentSheetViewPreferences.isIsometricViewAdded = True
+                    prefs.assemblySheetPreferences.isSheetCreated = True
+                    prefs.assemblySheetPreferences.isPartsListIncluded = False
+                    prefs.drawingViewPreferences.style = adsk_drawing.DrawingViewStyleTypes.VisibleEdgesDrawingViewStyleType
+                except Exception:
+                    pass
+
+            drawing_data_file = drawing_mgr.createDrawing(create_input)
+            if not drawing_data_file:
+                return {"error": "Fusion failed to create a drawing from the active design."}
+
+            doc = app.documents.open(drawing_data_file)
+            drawing_doc = adsk_drawing.DrawingDocument.cast(doc)
+            if not drawing_doc:
+                return {"error": "Created document was not a drawing document."}
+
+            drawing = drawing_doc.drawing
+            export_mgr = drawing.exportManager
+            pdf_options = export_mgr.createPDFExportOptions(export_pdf_path)
+            pdf_options.openPDF = False
+            if not export_mgr.execute(pdf_options):
+                return {"error": f"Fusion failed to export drawing PDF to '{export_pdf_path}'."}
+        except Exception as drawing_error:
+            return {"error": f"Failed to create or export drawing PDF: {drawing_error}"}
 
         if not os.path.exists(export_pdf_path):
             return {"error": f"Drawing export completed but PDF was not found at '{export_pdf_path}'."}
@@ -376,3 +444,9 @@ def create_2d_drawing(export_pdf_path):
         return {"result": f"Successfully created 2D drawing sheet and saved PDF to '{export_pdf_path}'"}
     except Exception as e:
         return {"error": f"Failed to create 2D drawing sheet: {str(e)}"}
+    finally:
+        if doc:
+            try:
+                doc.close(False)
+            except Exception:
+                pass

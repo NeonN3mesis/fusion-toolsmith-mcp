@@ -37,16 +37,64 @@ def get_tool_schemas():
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
-            "name": "run_fusion_script",
-            "description": "Execute arbitrary Fusion API Python scripts. Instructions: Use this only when high-level tools are insufficient. Provide a robust `run(context)` function. Do not catch exceptions; let them surface. Ensure your script takes a screenshot before and after changes if modifying the design.",
+            "name": "inspect_sketch",
+            "description": "Return structured sketch details including local-to-model coordinate mapping, points, lines, arcs, circles, dimensions, and geometric constraints.",
             "inputSchema": {
-                "type": "object", 
+                "type": "object",
                 "properties": {
-                    "script": {"type": "string", "description": "The python script to execute"}
+                    "sketch_name": {"type": "string", "description": "Exact sketch name to inspect."}
                 },
-                "required": ["script"]
+                "required": ["sketch_name"]
             }
         },
+        {
+            "name": "inspect_feature",
+            "description": "Return structured timeline feature details including operation, extent definitions, health state, participant bodies, result bodies, and feature-specific metadata.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name to inspect."}
+                },
+                "required": ["feature_name"]
+            }
+        },
+        {
+            "name": "get_feature_dependencies",
+            "description": "Return a best-effort dependency report for a timeline feature, including direct inputs, nearby predecessors, and likely downstream consumers with confidence levels.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name to analyze."}
+                },
+                "required": ["feature_name"]
+            }
+        },
+        {
+            "name": "map_coordinates",
+            "description": "Map a 3D point between a sketch's local coordinate system, root model space, and an optional target component/occurrence using Fusion transforms.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "point": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                        "description": "Point as [x, y, z]."
+                    },
+                    "from_sketch": {"type": "string", "description": "Sketch whose local coordinate system should be used."},
+                    "to_component": {"type": "string", "default": "root", "description": "Component or occurrence name for target component-space coordinates."},
+                    "direction": {
+                        "type": "string",
+                        "enum": ["sketch_to_model", "model_to_sketch", "both"],
+                        "default": "both",
+                        "description": "Transform direction. 'both' returns both interpretations for verification."
+                    }
+                },
+                "required": ["point", "from_sketch"]
+            }
+        },
+
         {
             "name": "create_parametric_feature",
             "description": "Create a named sketch as a safe parametric starting point. Use specialized tools like create_box, create_cylinder, create_coil, create_sketch_offset, set_parameter, and modify_parameters for other operations.",
@@ -142,6 +190,16 @@ def get_tool_schemas():
                 "properties": {
                     "name": {"type": "string", "description": "Name of the target document tab (e.g., 'BoxModel v1')."},
                     "index": {"type": "integer", "description": "Index of the document tab (0-based)."}
+                }
+            }
+        },
+        {
+            "name": "revert_active_document",
+            "description": "Close and reopen the active saved Fusion document from its data file. Use save_changes=false to reset to the last saved state after a failed script.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "save_changes": {"type": "boolean", "default": False, "description": "True saves current changes before closing; false discards unsaved changes."}
                 }
             }
         },
@@ -493,6 +551,17 @@ def get_tool_schemas():
                     "new_component_name": {"type": "string", "description": "Create a new sub-component with this name and move the body into it."}
                 },
                 "required": ["body_name"]
+            }
+        },
+        {
+            "name": "run_fusion_script",
+            "description": "⚠️ FALLBACK TOOL OF LAST RESORT. Do NOT use this tool if any high-level parametric, inspection, or constraint tools (e.g. modify_parameters, set_parameter, create_box, create_cylinder, etc.) can accomplish the task. Executing arbitrary scripts is dangerous, bypasses safety validation, and can crash Fusion. Use only when absolutely no other tool fits.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "script": {"type": "string", "description": "The python script to execute"}
+                },
+                "required": ["script"]
             }
         }
     ]

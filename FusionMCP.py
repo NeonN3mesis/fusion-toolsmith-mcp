@@ -8,9 +8,13 @@ import threading
 
 # Import server and task manager logic
 try:
+    from .server import mcp_server as mcp_server_module
+    from .server import task_manager as task_manager_module
     from .server.mcp_server import start_server, stop_server
     from .server.task_manager import start_task_manager, stop_task_manager
 except ImportError:
+    import server.mcp_server as mcp_server_module
+    import server.task_manager as task_manager_module
     from server.mcp_server import start_server, stop_server
     from server.task_manager import start_task_manager, stop_task_manager
 
@@ -23,6 +27,8 @@ def run(context):
     try:
         app = adsk.core.Application.get()
         ui  = app.userInterface
+        mcp_server_module.app = app
+        task_manager_module.app = app
 
         app.log("Starting Fusion MCP Add-In")
 

@@ -4,6 +4,7 @@ Task Manager Module for FusionMCP
 
 import json
 import uuid
+import threading
 from typing import Dict, Callable, Any, Optional
 
 try:
@@ -11,6 +12,15 @@ try:
     app = adsk.core.Application.get()
 except ImportError:
     app = None
+
+
+def safe_log(message: str):
+    import threading
+    global app
+    if app and threading.current_thread() == threading.main_thread():
+        app.log(message)
+    else:
+        print(message)
 
 
 class TaskManager:
@@ -22,6 +32,7 @@ class TaskManager:
     _event_handler = None
     _custom_event = None
     _pending_tasks: Dict[str, Dict[str, Any]] = {}
+    _pending_tasks_lock = threading.Lock()
     _is_running = False
 
     def __new__(cls):
@@ -54,12 +65,11 @@ class TaskManager:
             cls._event_handler = TaskEventHandler(cls._pending_tasks)
             cls._custom_event.add(cls._event_handler)
             cls._is_running = True
-            app.log("TaskManager: Started successfully")
+            safe_log("TaskManager: Started successfully")
             return True
         except Exception as e:
             print(f"TaskManager: Failed to start - {str(e)}")
-            if app:
-                app.log(f"TaskManager: Failed to start - {str(e)}")
+            safe_log(f"TaskManager: Failed to start - {str(e)}")
             return False
 
     @classmethod
@@ -78,15 +88,14 @@ class TaskManager:
                         app.log(f"TaskManager: Failed to unregister custom event: {unreg_err}")
                 cls._custom_event = None
 
-            cls._pending_tasks.clear()
+            with cls._pending_tasks_lock:
+                cls._pending_tasks.clear()
             cls._is_running = False
-            if app:
-                app.log("TaskManager: Stopped successfully")
+            safe_log("TaskManager: Stopped successfully")
             return True
         except Exception as e:
             print(f"TaskManager: Failed to stop - {str(e)}")
-            if app:
-                app.log(f"TaskManager: Failed to stop - {str(e)}")
+            safe_log(f"TaskManager: Failed to stop - {str(e)}")
             return False
 
     @classmethod
@@ -102,24 +111,29 @@ class TaskManager:
 
         try:
             if not app:
-                app = adsk.core.Application.get()
+                print("TaskManager: Application not initialized")
+                return None
             task_id = str(uuid.uuid4())
-            cls._pending_tasks[task_id] = {
-                'command': command,
-                'callback': callback,
-                'data': data
-            }
+            with cls._pending_tasks_lock:
+                cls._pending_tasks[task_id] = {
+                    'command': command,
+                    'callback': callback,
+                    'data': data
+                }
             event_data = {
                 'task_id': task_id,
                 'command': command,
                 'data': data
             }
             app.fireCustomEvent(cls._custom_event.eventId, json.dumps(event_data))
-            app.log(f"TaskManager: Posted task {task_id} with command '{command}'")
+            safe_log(f"TaskManager: Posted task {task_id} with command '{command}'")
             return task_id
         except Exception as e:
+            if 'task_id' in locals():
+                with cls._pending_tasks_lock:
+                    cls._pending_tasks.pop(task_id, None)
             print(f"TaskManager: Failed to post task - {str(e)}")
-            app.log(f"TaskManager: Failed to post task - {str(e)}")
+            safe_log(f"TaskManager: Failed to post task - {str(e)}")
             return None
 
     @classmethod
@@ -128,7 +142,8 @@ class TaskManager:
 
     @classmethod
     def get_pending_task_count(cls) -> int:
-        return len(cls._pending_tasks)
+        with cls._pending_tasks_lock:
+            return len(cls._pending_tasks)
 
 
 class TaskEventHandler(adsk.core.CustomEventHandler):
@@ -142,25 +157,24 @@ class TaskEventHandler(adsk.core.CustomEventHandler):
             task_id = event_data.get('task_id')
             command = event_data.get('command')
             
-            if not task_id or task_id not in self._pending_tasks:
-                if app:
-                    app.log(f"TaskManager: Unknown task ID {task_id}")
-                return
-
-            task_info = self._pending_tasks[task_id]
-            callback = task_info['callback']
+            with TaskManager._pending_tasks_lock:
+                if not task_id or task_id not in self._pending_tasks:
+                    safe_log(f"TaskManager: Unknown task ID {task_id}")
+                    return
+                task_info = self._pending_tasks[task_id]
+                callback = task_info['callback']
+                task_data = task_info['data']
 
             try:
-                callback(task_info['data'])
-                if app:
-                    app.log(f"TaskManager: Executed task {task_id} with command '{command}'")
+                callback(task_data)
+                safe_log(f"TaskManager: Executed task {task_id} with command '{command}'")
             except Exception as callback_error:
                 print(f"TaskManager: Callback error for task {task_id}: {str(callback_error)}")
-                if app:
-                    app.log(f"TaskManager: Callback error for task {task_id}: {str(callback_error)}")
+                safe_log(f"TaskManager: Callback error for task {task_id}: {str(callback_error)}")
 
-            if task_id in self._pending_tasks:
-                del self._pending_tasks[task_id]
+            with TaskManager._pending_tasks_lock:
+                if task_id in self._pending_tasks:
+                    del self._pending_tasks[task_id]
 
         except json.JSONDecodeError as e:
             print(f"TaskManager: Failed to parse event data: {str(e)}")

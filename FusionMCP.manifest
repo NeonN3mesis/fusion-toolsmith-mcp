@@ -7,7 +7,7 @@
 		"":	"Higher-level Fusion MCP Server"
 	},
 	"version":	"1.0.0",
-	"runOnStartup":	true,
+	"runOnStartup": false,
 	"supportedOS":	"windows|mac",
 	"editEnabled":	true
 }
