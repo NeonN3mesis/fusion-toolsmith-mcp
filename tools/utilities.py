@@ -10,7 +10,7 @@ import sys
 import io
 import traceback
 from . import register_tool
-from .inspection import get_active_design
+from .inspection import _design_state_snapshot, _health_to_string, _safe_value, compare_design_state, get_active_design
 
 class FusionScriptExecutionError(Exception):
     def __init__(self, message, stdout_text, traceback_text):
@@ -65,8 +65,88 @@ def capture_view(view_name="iso"):
     viewport.saveAsImageFile(file_path, 1920, 1080)
     return {"result": f"Screenshot saved to {file_path}"}
 
+
+def _timeline_health_report(design):
+    timeline = design.timeline
+    unhealthy = []
+    for i in range(timeline.count):
+        item = timeline.item(i)
+        entity = _safe_value(lambda item=item: item.entity)
+        item_health = _health_to_string(_safe_value(lambda item=item: item.healthState))
+        feature_health = _health_to_string(_safe_value(lambda entity=entity: entity.healthState)) if entity else None
+        messages = [
+            message for message in (
+                _safe_value(lambda entity=entity: entity.errorOrWarningMessage) if entity else None,
+                _safe_value(lambda item=item: item.errorOrWarningMessage),
+            )
+            if message
+        ]
+        if item_health not in ("Healthy", "0", "None") or (feature_health and feature_health not in ("Healthy", "0", "None")) or messages:
+            unhealthy.append({
+                "index": i,
+                "timelineName": _safe_value(lambda item=item: item.name),
+                "featureName": _safe_value(lambda entity=entity: entity.name) if entity else None,
+                "objectType": _safe_value(lambda entity=entity: entity.objectType) if entity else "SystemEvent",
+                "timelineHealth": item_health,
+                "featureHealth": feature_health,
+                "messages": messages,
+            })
+    return unhealthy
+
+
+def _export_blocking_reasons(compute_error, unhealthy, comparison):
+    reasons = []
+    if compute_error:
+        reasons.append("Fusion computeAll failed.")
+    if unhealthy:
+        reasons.append("Timeline or feature health issues are present.")
+    diff = (comparison or {}).get("diff") or {}
+    count_changes = diff.get("countChanges") or {}
+    for key in ("bodies", "timelineItems", "unhealthyTimelineItems"):
+        if key in count_changes:
+            reasons.append(f"Compute changed {key}.")
+    return reasons
+
+
+@register_tool("preflight_export")
+def preflight_export(require_compute=True):
+    import traceback
+    try:
+        design = get_active_design()
+        before = _design_state_snapshot(include_selections=False)
+        compute_error = None
+        if require_compute:
+            try:
+                design.computeAll()
+            except Exception as e:
+                compute_error = str(e)
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        unhealthy = _timeline_health_report(design)
+        blocking_reasons = _export_blocking_reasons(compute_error, unhealthy, comparison)
+        return {
+            "result": {
+                "okToExport": not blocking_reasons,
+                "blockingReasons": blocking_reasons,
+                "compute": {
+                    "required": bool(require_compute),
+                    "succeeded": compute_error is None,
+                    "error": compute_error,
+                },
+                "activeDocument": after.get("document", {}).get("active"),
+                "counts": after.get("counts"),
+                "unhealthyFeatures": unhealthy,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error during export preflight: {e}\n{err}")
+        return {"error": f"Failed export preflight: {str(e)}"}
+
+
 @register_tool("export_asset")
-def export_asset(format, export_path):
+def export_asset(format, export_path, allow_unhealthy_export=False, require_compute=True):
     if not isinstance(format, str):
         return {"error": "Export format must be a string."}
     if not isinstance(export_path, str) or not export_path:
@@ -78,6 +158,16 @@ def export_asset(format, export_path):
 
     format = format.lower()
     design = get_active_design()
+    preflight = preflight_export(require_compute=require_compute)
+    if "error" in preflight:
+        return preflight
+    preflight_result = preflight["result"]
+    if not preflight_result["okToExport"] and not allow_unhealthy_export:
+        return {
+            "error": "Export blocked by preflight checks. Fix compute/timeline health issues or explicitly set allow_unhealthy_export=true.",
+            "preflight": preflight_result,
+        }
+
     export_dir = os.path.dirname(export_path)
     if export_dir and not os.path.exists(export_dir):
         os.makedirs(export_dir, exist_ok=True)
@@ -89,7 +179,15 @@ def export_asset(format, export_path):
     else:
         return {"error": f"Unsupported format: {format}"}
     exportMgr.execute(options)
-    return {"result": f"Exported {format} to {export_path}"}
+    return {
+        "result": {
+            "exported": True,
+            "format": format,
+            "exportPath": export_path,
+            "allowedUnhealthyExport": bool(allow_unhealthy_export),
+            "preflight": preflight_result,
+        }
+    }
 
 @register_tool("get_fusion_api_help")
 def get_fusion_api_help(topic=None):

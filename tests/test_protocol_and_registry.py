@@ -238,6 +238,130 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(export_result, {"error": "CSV path must be absolute."})
         self.assertEqual(import_result, {"error": "CSV path must be absolute."})
 
+    def test_export_asset_blocks_compute_errors_before_writing_file(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+
+        executed = []
+        timeline = types.SimpleNamespace(count=0, item=lambda idx: None)
+        design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(name="Root"),
+            timeline=timeline,
+            computeAll=lambda: (_ for _ in ()).throw(RuntimeError("compute failed")),
+            exportManager=types.SimpleNamespace(
+                createSTEPExportOptions=lambda path, root: ("step", path, root),
+                execute=lambda options: executed.append(options),
+            ),
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("export_asset", {
+                "format": "step",
+                "export_path": os.path.join(self.temp_dir.name, "blocked.step"),
+            })
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("error", res)
+        self.assertIn("Export blocked", res["error"])
+        self.assertEqual(executed, [])
+        self.assertFalse(res["preflight"]["compute"]["succeeded"])
+
+    def test_export_asset_blocks_unhealthy_timeline_before_writing_file(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+
+        executed = []
+        unhealthy_item = types.SimpleNamespace(
+            name="BrokenExtrude",
+            healthState=2,
+            entity=types.SimpleNamespace(
+                name="BrokenExtrude",
+                objectType="adsk::fusion::ExtrudeFeature",
+                healthState=2,
+                errorOrWarningMessage="Profile missing",
+            ),
+        )
+        design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(name="Root"),
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: unhealthy_item),
+            computeAll=lambda: None,
+            exportManager=types.SimpleNamespace(
+                createSTEPExportOptions=lambda path, root: ("step", path, root),
+                execute=lambda options: executed.append(options),
+            ),
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 1, "unhealthyTimelineItems": 1},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("export_asset", {
+                "format": "step",
+                "export_path": os.path.join(self.temp_dir.name, "blocked.step"),
+            })
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("error", res)
+        self.assertEqual(executed, [])
+        self.assertIn("Timeline or feature health issues are present.", res["preflight"]["blockingReasons"])
+        self.assertEqual(res["preflight"]["unhealthyFeatures"][0]["messages"], ["Profile missing"])
+
+    def test_export_asset_healthy_export_returns_preflight_proof(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+
+        executed = []
+        timeline = types.SimpleNamespace(count=0, item=lambda idx: None)
+        design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(name="Root"),
+            timeline=timeline,
+            computeAll=lambda: None,
+            exportManager=types.SimpleNamespace(
+                createSTEPExportOptions=lambda path, root: ("step", path, root),
+                execute=lambda options: executed.append(options),
+            ),
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            export_path = os.path.join(self.temp_dir.name, "healthy.step")
+            res = self.tools.execute_tool("export_asset", {"format": "step", "export_path": export_path})
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertTrue(res["result"]["exported"])
+        self.assertEqual(executed, [("step", export_path, design.rootComponent)])
+        self.assertTrue(res["result"]["preflight"]["okToExport"])
+        self.assertTrue(res["result"]["preflight"]["compute"]["succeeded"])
+
     def test_health_endpoint_returns_json(self):
         server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

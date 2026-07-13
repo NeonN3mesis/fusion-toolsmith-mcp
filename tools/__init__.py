@@ -539,13 +539,33 @@ def get_tool_schemas():
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
+            "name": "preflight_export",
+            "description": "Run export readiness checks without writing a file. Forces compute by default, checks timeline/feature health, and compares design state before/after compute.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "require_compute": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
             "name": "export_asset",
-            "description": "Export the design to STL, STEP, or F3D. Instructions: Specify an explicit absolute path. Ensure the design is saved or validated before exporting.",
+            "description": "Safely export the design to STL or STEP. Runs preflight_export first and blocks compute/timeline-health problems unless allow_unhealthy_export is explicitly true.",
             "inputSchema": {
                 "type": "object", 
                 "properties": {
                     "format": {"type": "string", "enum": ["step", "stl"]},
-                    "export_path": {"type": "string"}
+                    "export_path": {"type": "string"},
+                    "allow_unhealthy_export": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Explicit override to export even when preflight reports compute or health problems."
+                    },
+                    "require_compute": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Force Fusion computeAll before export."
+                    }
                 },
                 "required": ["format", "export_path"]
             }
