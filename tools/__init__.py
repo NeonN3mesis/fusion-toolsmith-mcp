@@ -228,6 +228,25 @@ def get_tool_schemas():
                 "required": ["sketch_name", "distance", "operation"]
             }
         },
+        {
+            "name": "fillet_feature",
+            "description": "Create a constant-radius fillet on explicit edge indices of a named body with built-in before/after design-state comparison. Inspect or select edges before choosing indices.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Name of the body whose edges should be filleted."},
+                    "edge_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Required explicit 0-based edge indices on the body."
+                    },
+                    "radius": {"type": "string", "description": "Fusion radius expression, e.g. '1 mm'."},
+                    "name": {"type": "string", "description": "Optional name for the created fillet feature."},
+                    "tangent_chain": {"type": "boolean", "default": True}
+                },
+                "required": ["body_name", "edge_indices", "radius"]
+            }
+        },
 
         {
             "name": "create_parametric_feature",

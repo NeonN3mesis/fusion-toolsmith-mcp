@@ -80,6 +80,54 @@ def _set_participant_bodies(ext_input, body_names):
     return [_safe_value(lambda body=body: body.name) for body in resolved]
 
 
+def _find_body_by_name(body_name):
+    design = get_active_design()
+    root = design.rootComponent
+    for body in _collection_items(_safe_value(lambda: root.bRepBodies)):
+        if _safe_value(lambda body=body: body.name) == body_name:
+            return body
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        for body in _collection_items(_safe_value(lambda component=component: component.bRepBodies)):
+            if _safe_value(lambda body=body: body.name) == body_name:
+                return body
+    return None
+
+
+def _body_edges_by_indices(body, edge_indices=None):
+    edges = _safe_value(lambda: body.edges)
+    count = _safe_value(lambda: edges.count, 0) or 0
+    if count == 0:
+        raise ValueError(f"Body '{body.name}' has no edges.")
+    indices = list(range(count)) if edge_indices is None else [int(index) for index in edge_indices]
+    selected = []
+    for index in indices:
+        if index < 0 or index >= count:
+            raise ValueError(f"edge index {index} is out of range for body '{body.name}' with {count} edges.")
+        selected.append(edges.item(index))
+    return selected
+
+
+def _edge_collection(edges):
+    collection = adsk.core.ObjectCollection.create()
+    for edge in edges:
+        collection.add(edge)
+    return collection
+
+
+def _edge_refs(edges):
+    return [
+        {
+            "index": index,
+            "name": _safe_value(lambda edge=edge: edge.name),
+            "entityToken": _safe_value(lambda edge=edge: edge.entityToken),
+            "length": _safe_value(lambda edge=edge: edge.length),
+            "objectType": _safe_value(lambda edge=edge: edge.objectType),
+        }
+        for index, edge in enumerate(edges)
+    ]
+
+
 @register_tool("extrude_feature")
 def extrude_feature(sketch_name, distance, operation, name=None, profile_index=0, body_name=None, participant_body_names=None):
     """
@@ -135,3 +183,52 @@ def extrude_feature(sketch_name, distance, operation, name=None, profile_index=0
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error creating extrude feature: {e}\n{err}")
         return {"error": f"Failed to create extrude feature: {str(e)}"}
+
+
+@register_tool("fillet_feature")
+def fillet_feature(body_name, edge_indices, radius, name=None, tangent_chain=True):
+    """
+    Create a constant-radius fillet on selected edges of a named body.
+
+    Edge indices are required so callers make the target selection explicit.
+    Use inspect/selection tools first when edge identity is uncertain.
+    """
+    try:
+        if edge_indices is None or len(edge_indices) == 0:
+            return {"error": "edge_indices is required. Inspect the body or use selection before choosing edges."}
+        body = _find_body_by_name(body_name)
+        if not body:
+            return {"error": f"Body '{body_name}' not found."}
+
+        before = _design_state_snapshot(include_selections=False)
+        edges = _body_edges_by_indices(body, edge_indices)
+        edge_collection = _edge_collection(edges)
+        component = _safe_value(lambda: body.parentComponent) or get_active_design().rootComponent
+        fillets = component.features.filletFeatures
+        fillet_input = fillets.createInput()
+        radius_input = adsk.core.ValueInput.createByString(radius)
+        fillet_input.addConstantRadiusEdgeSet(edge_collection, radius_input, bool(tangent_chain))
+        fillet = fillets.add(fillet_input)
+        if name:
+            fillet.name = name
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        feature_name = _safe_value(lambda: fillet.name) or name
+        inspected = inspect_feature(feature_name).get("result") if feature_name else None
+        return {
+            "result": {
+                "featureName": feature_name,
+                "bodyName": body.name,
+                "edgeIndices": [int(index) for index in edge_indices],
+                "edges": _edge_refs(edges),
+                "radius": radius,
+                "tangentChain": bool(tangent_chain),
+                "feature": inspected,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating fillet feature: {e}\n{err}")
+        return {"error": f"Failed to create fillet feature: {str(e)}"}
