@@ -1050,6 +1050,7 @@ def run(context):
         self.assertIn("get_feature_dependencies", tool_names)
         self.assertIn("get_dependency_graph", tool_names)
         self.assertIn("assess_change_impact", tool_names)
+        self.assertIn("plan_parameterization", tool_names)
         self.assertIn("map_coordinates", tool_names)
         self.assertIn("create_sketch", tool_names)
         self.assertIn("draw_line", tool_names)
@@ -1094,6 +1095,96 @@ def run(context):
         self.assertTrue(result["restartRecommended"])
         self.assertEqual(result["runtime"]["discovery"]["payload"]["token"], "<redacted>")
         self.assertIn("token=<redacted>", result["runtime"]["discovery"]["payload"]["sse_url"])
+
+    def test_plan_parameterization_classifies_sketch_dimension_candidates(self):
+        class ParamCollection:
+            def __init__(self, params):
+                self.params = params
+                self.count = len(params)
+
+            def item(self, index):
+                return self.params[index]
+
+            def itemByName(self, name):
+                for param in self.params:
+                    if param.name == name:
+                        return param
+                return None
+
+            def __iter__(self):
+                return iter(self.params)
+
+        screen_width = types.SimpleNamespace(
+            name="screenWidth",
+            expression="100 mm",
+            value=10.0,
+            unit="mm",
+            comment="Public screen width",
+            objectType="UserParameter",
+            entityToken="user-token",
+            isFavorite=True,
+            role=None,
+        )
+        literal_param = types.SimpleNamespace(
+            name="d1",
+            expression="42 mm",
+            value=4.2,
+            unit="mm",
+            comment="",
+            objectType="ModelParameter",
+            entityToken="d1-token",
+        )
+        referenced_param = types.SimpleNamespace(
+            name="d2",
+            expression="screenWidth / 2",
+            value=5.0,
+            unit="mm",
+            comment="",
+            objectType="ModelParameter",
+            entityToken="d2-token",
+        )
+        sketch = types.SimpleNamespace(
+            name="ParamSketch",
+            isVisible=True,
+            isFullyConstrained=True,
+            boundingBox=None,
+            sketchDimensions=[
+                types.SimpleNamespace(name="LiteralDim", objectType="SketchLinearDimension", parameter=literal_param),
+                types.SimpleNamespace(name="BoundDim", objectType="SketchLinearDimension", parameter=referenced_param),
+            ],
+            geometricConstraints=[],
+            sketchPoints=[],
+            sketchCurves=types.SimpleNamespace(),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[],
+            sketches=[sketch],
+            occurrences=[],
+            allOccurrences=[],
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+            designType="parametric",
+            userParameters=ParamCollection([screen_width]),
+            allParameters=ParamCollection([literal_param, referenced_param]),
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+        )
+        _fake_app.activeDocument = types.SimpleNamespace(name="ParamDoc", isModified=False)
+        _fake_app.documents = [_fake_app.activeDocument]
+
+        res = self.tools.execute_tool("plan_parameterization", {"target_sketches": "ParamSketch"})
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["readOnly"])
+        self.assertEqual(result["summary"]["sketchesAnalyzed"], 1)
+        self.assertEqual(result["summary"]["safeExpressionCandidates"], 1)
+        self.assertEqual(result["summary"]["alreadyParameterized"], 1)
+        self.assertEqual(result["safeExpressionCandidates"][0]["parameterName"], "d1")
+        self.assertEqual(result["alreadyParameterized"][0]["parameter"]["name"], "d2")
+        self.assertEqual(result["riskLevel"], "low")
 
     def test_capture_design_state_returns_structural_snapshot(self):
         mock_param = types.SimpleNamespace(name="screenWidth", expression="100 mm", value=10.0, unit="mm")

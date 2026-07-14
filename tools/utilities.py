@@ -47,6 +47,7 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "get_feature_dependencies",
     "get_dependency_graph",
     "assess_change_impact",
+    "plan_parameterization",
     "preflight_export",
     "export_asset",
     "create_2d_drawing",

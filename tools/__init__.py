@@ -167,6 +167,29 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "plan_parameterization",
+            "description": "Read-only planner for converting existing sketches/features to user-parameter-driven expressions without intentionally changing geometry. Classifies existing dimensions and feature parameters into already-parameterized, safe expression candidates, inspection-required, and rebuild-candidate buckets.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_sketches": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional sketch name or list of sketch names to analyze. Omit to analyze all sketches."
+                    },
+                    "target_features": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional feature/timeline name or list of names to analyze. Omit to analyze all timeline features."
+                    }
+                }
+            }
+        },
+        {
             "name": "map_coordinates",
             "description": "Map a 3D point between a sketch's local coordinate system, root model space, and an optional target component/occurrence using Fusion transforms.",
             "inputSchema": {

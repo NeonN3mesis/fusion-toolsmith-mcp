@@ -141,6 +141,7 @@ try {
         "get_feature_dependencies",
         "get_dependency_graph",
         "assess_change_impact",
+        "plan_parameterization",
         "get_runtime_diagnostics",
         "map_coordinates"
     )) {

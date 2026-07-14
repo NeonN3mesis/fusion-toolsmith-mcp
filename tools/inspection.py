@@ -2110,6 +2110,285 @@ def assess_change_impact(target_features, change_type="edit"):
     }
 
 
+def _normalize_optional_names(value, arg_name):
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        names = [value]
+    elif isinstance(value, list):
+        names = value
+    else:
+        return None, f"{arg_name} must be a string, list of strings, or omitted."
+    clean_names = [name.strip() for name in names if isinstance(name, str) and name.strip()]
+    return clean_names, None
+
+
+def _parameterization_bucket(parameter):
+    if not parameter:
+        return "unknown", "No parameter metadata was available."
+    refs = parameter.get("userParameterReferences") or []
+    if refs:
+        return "alreadyParameterized", "Expression already references one or more user parameters."
+    expression = parameter.get("expression")
+    if isinstance(expression, str) and expression.strip():
+        return "safeExpressionCandidate", "Expression can usually be rebound to a user parameter at the same current value."
+    return "needsInspection", "Parameter has no readable expression."
+
+
+def _parameterization_parameter_entry(parameter, owner_kind, owner_name, extra=None):
+    bucket, reason = _parameterization_bucket(parameter)
+    entry = {
+        "ownerKind": owner_kind,
+        "ownerName": owner_name,
+        "bucket": bucket,
+        "reason": reason,
+        "parameter": parameter,
+    }
+    if extra:
+        entry.update(extra)
+    return entry
+
+
+def _count_projected_entities(sketch):
+    projected = []
+    for group_name, curves in (_sketch_curves_to_dict(sketch) or {}).items():
+        for curve in curves or []:
+            if curve.get("isReference") or curve.get("source"):
+                projected.append({
+                    "kind": "curve",
+                    "curveGroup": group_name,
+                    "curveType": curve.get("curveType"),
+                    "curveIndex": curve.get("index"),
+                    "sourceAvailable": bool(curve.get("source")),
+                    "source": curve.get("source"),
+                })
+    for i, point in enumerate(_collection_items(_safe_value(lambda: sketch.sketchPoints))):
+        point_info = _sketch_point_to_dict(point, i)
+        if point_info.get("isReference") or point_info.get("source"):
+            projected.append({
+                "kind": "point",
+                "pointIndex": point_info.get("index"),
+                "sourceAvailable": bool(point_info.get("source")),
+                "source": point_info.get("source"),
+            })
+    return projected
+
+
+@register_tool("plan_parameterization")
+def plan_parameterization(target_sketches=None, target_features=None):
+    sketch_filter, error = _normalize_optional_names(target_sketches, "target_sketches")
+    if error:
+        return {"error": error}
+    feature_filter, error = _normalize_optional_names(target_features, "target_features")
+    if error:
+        return {"error": error}
+
+    design = get_active_design()
+    snapshot = _design_state_snapshot(include_selections=False)
+    user_parameters = snapshot.get("parameters", {}).get("user", [])
+    timeline_items = snapshot.get("timeline", {}).get("items", [])
+    unhealthy_items = snapshot.get("timeline", {}).get("unhealthyItems", [])
+
+    sketch_reports = []
+    missing_sketches = set(sketch_filter or [])
+    parameter_entries = []
+    already_parameterized = []
+    safe_candidates = []
+    needs_inspection = []
+    rebuild_candidates = []
+    warnings = [
+        "Read-only planning report. Do not delete, suppress, rebuild, or edit geometry from this report without explicit user confirmation.",
+        "Expression rebinding can preserve current geometry only when the new expression evaluates to the same current value.",
+    ]
+
+    for context in _all_sketch_contexts(design):
+        sketch = context["sketch"]
+        sketch_name = _safe_value(lambda sketch=sketch: sketch.name)
+        if sketch_filter and sketch_name not in sketch_filter:
+            continue
+        missing_sketches.discard(sketch_name)
+
+        dimensions = [
+            _dimension_to_dict(dim, i)
+            for i, dim in enumerate(_collection_items(_safe_value(lambda sketch=sketch: sketch.sketchDimensions)))
+        ]
+        projected = _count_projected_entities(sketch)
+        sketch_report = {
+            "sketchName": sketch_name,
+            "componentName": context.get("componentName"),
+            "occurrenceName": context.get("occurrenceName"),
+            "isFullyConstrained": _safe_value(lambda sketch=sketch: sketch.isFullyConstrained),
+            "dimensionCount": len(dimensions),
+            "constraintCount": len(_collection_items(_safe_value(lambda sketch=sketch: sketch.geometricConstraints))),
+            "projectedGeometryCount": len(projected),
+            "projectedGeometry": projected,
+            "dimensions": [],
+            "recommendations": [],
+        }
+        if sketch_report["isFullyConstrained"] is False:
+            sketch_report["recommendations"].append("Sketch is not fully constrained; parameterize dimensions before changing constraints or curves.")
+            needs_inspection.append({
+                "kind": "sketch",
+                "name": sketch_name,
+                "reason": "Sketch is not fully constrained.",
+            })
+        if projected:
+            sketch_report["recommendations"].append("Projected geometry exists; preserve projection relationships instead of hardcoding source coordinates.")
+
+        for dim in dimensions:
+            parameter = dim.get("parameter")
+            entry = _parameterization_parameter_entry(
+                parameter,
+                "sketchDimension",
+                sketch_name,
+                {
+                    "dimensionIndex": dim.get("index"),
+                    "dimensionType": dim.get("objectType"),
+                    "parameterName": dim.get("parameterName"),
+                    "currentExpression": dim.get("expression"),
+                    "currentValue": dim.get("value"),
+                    "unit": dim.get("unit"),
+                },
+            )
+            sketch_report["dimensions"].append(entry)
+            parameter_entries.append(entry)
+            if entry["bucket"] == "alreadyParameterized":
+                already_parameterized.append(entry)
+            elif entry["bucket"] == "safeExpressionCandidate":
+                safe_candidates.append(entry)
+            else:
+                needs_inspection.append(entry)
+        sketch_reports.append(sketch_report)
+
+    feature_reports = []
+    missing_features = set(feature_filter or [])
+    for item in timeline_items:
+        feature_name = item.get("featureName") or item.get("name")
+        timeline_name = item.get("name")
+        if feature_filter and feature_name not in feature_filter and timeline_name not in feature_filter:
+            continue
+        missing_features.discard(feature_name)
+        missing_features.discard(timeline_name)
+
+        feature_params = get_feature_parameters(feature_name or timeline_name)
+        feature_inspection = inspect_feature(feature_name or timeline_name)
+        dependency_report = get_feature_dependencies(feature_name or timeline_name)
+        params = (feature_params.get("result") or {}).get("parameters") if "error" not in feature_params else []
+        inspected = feature_inspection.get("result") or {}
+        dependencies = dependency_report.get("result") or {}
+        downstream = dependencies.get("likelyDownstreamConsumers") or []
+
+        report = {
+            "timelineName": timeline_name,
+            "featureName": feature_name,
+            "timelineIndex": item.get("index"),
+            "objectType": item.get("objectType"),
+            "health": item.get("health"),
+            "featureType": inspected.get("featureType"),
+            "operation": inspected.get("operation"),
+            "parameterCount": len(params or []),
+            "downstreamConsumerCount": len(downstream),
+            "parameters": [],
+            "recommendations": [],
+        }
+        if item.get("health") not in ("Healthy", "0", "None"):
+            report["recommendations"].append("Feature is unhealthy; fix or inspect health before parameterizing it.")
+            needs_inspection.append({
+                "kind": "feature",
+                "name": feature_name or timeline_name,
+                "reason": "Feature is not healthy.",
+            })
+        if downstream:
+            report["recommendations"].append("Feature has likely downstream consumers; ask for confirmation before editing feature definitions.")
+        if "error" in feature_params:
+            report["parameterError"] = feature_params["error"]
+            needs_inspection.append({
+                "kind": "feature",
+                "name": feature_name or timeline_name,
+                "reason": feature_params["error"],
+            })
+        for parameter in params or []:
+            entry = _parameterization_parameter_entry(
+                parameter,
+                "featureParameter",
+                feature_name or timeline_name,
+                {
+                    "timelineName": timeline_name,
+                    "timelineIndex": item.get("index"),
+                    "featureType": inspected.get("featureType"),
+                    "operation": inspected.get("operation"),
+                    "downstreamConsumerCount": len(downstream),
+                },
+            )
+            report["parameters"].append(entry)
+            parameter_entries.append(entry)
+            if entry["bucket"] == "alreadyParameterized":
+                already_parameterized.append(entry)
+            elif entry["bucket"] == "safeExpressionCandidate":
+                safe_candidates.append(entry)
+            else:
+                needs_inspection.append(entry)
+        if not params and inspected.get("featureType") is None and item.get("objectType") != "SystemEvent":
+            rebuild_candidates.append({
+                "kind": "feature",
+                "name": feature_name or timeline_name,
+                "reason": "No parameter metadata was exposed for this feature type; a clean parametric rebuild may be required, but only with explicit approval.",
+                "objectType": item.get("objectType"),
+            })
+        feature_reports.append(report)
+
+    blocking_reasons = []
+    if missing_sketches:
+        blocking_reasons.append("One or more requested sketches were not found.")
+    if missing_features:
+        blocking_reasons.append("One or more requested features were not found.")
+    if unhealthy_items:
+        blocking_reasons.append("Timeline contains unhealthy items.")
+    risk_level = "high" if blocking_reasons else ("medium" if needs_inspection or rebuild_candidates else "low")
+
+    return {
+        "result": {
+            "bestEffort": True,
+            "readOnly": True,
+            "okToProceedWithParameterOnlyEdits": not blocking_reasons,
+            "riskLevel": risk_level,
+            "blockingReasons": blocking_reasons,
+            "warnings": warnings,
+            "targets": {
+                "sketches": sketch_filter,
+                "features": feature_filter,
+                "missingSketches": sorted(missing_sketches),
+                "missingFeatures": sorted(missing_features),
+            },
+            "summary": {
+                "userParameterCount": len(user_parameters),
+                "sketchesAnalyzed": len(sketch_reports),
+                "featuresAnalyzed": len(feature_reports),
+                "parameterEntries": len(parameter_entries),
+                "alreadyParameterized": len(already_parameterized),
+                "safeExpressionCandidates": len(safe_candidates),
+                "needsInspection": len(needs_inspection),
+                "rebuildCandidates": len(rebuild_candidates),
+                "unhealthyTimelineItems": len(unhealthy_items),
+            },
+            "recommendedWorkflow": [
+                "Capture design state before edits.",
+                "Create or reuse user parameters whose current expressions evaluate to the same current values.",
+                "Rebind safeExpressionCandidate expressions one at a time.",
+                "Run compare_design_state and validate_model after edits.",
+                "Stop for user approval before rebuilding features, changing constraints, or replacing projected geometry.",
+            ],
+            "sketches": sketch_reports,
+            "features": feature_reports,
+            "alreadyParameterized": already_parameterized,
+            "safeExpressionCandidates": safe_candidates,
+            "needsInspection": needs_inspection,
+            "rebuildCandidates": rebuild_candidates,
+            "unhealthyTimelineItems": unhealthy_items,
+        }
+    }
+
+
 @register_tool("get_sketch_dimensions")
 def get_sketch_dimensions(sketch_name):
     import traceback
