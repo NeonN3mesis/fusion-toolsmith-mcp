@@ -2039,6 +2039,77 @@ def get_dependency_graph():
         return {"error": f"Failed to get dependency graph: {str(e)}"}
 
 
+def _impact_risk_level(blocking_reasons, warnings, dependency_reports):
+    if blocking_reasons:
+        return "high"
+    if warnings:
+        return "medium"
+    for report in dependency_reports:
+        for input_ref in report.get("directInputs") or []:
+            if input_ref.get("confidence") == "unknown":
+                return "medium"
+    return "low"
+
+
+@register_tool("assess_change_impact")
+def assess_change_impact(target_features, change_type="edit"):
+    if isinstance(target_features, str):
+        target_features = [target_features]
+    if not isinstance(target_features, list) or not target_features:
+        return {"error": "target_features must be a feature name or non-empty list of feature names."}
+    clean_targets = [name.strip() for name in target_features if isinstance(name, str) and name.strip()]
+    if not clean_targets:
+        return {"error": "target_features must include at least one non-empty feature name."}
+
+    dependency_reports = []
+    downstream_consumers = []
+    blocking_reasons = []
+    warnings = []
+    missing_features = []
+
+    for feature_name in clean_targets:
+        deps = get_feature_dependencies(feature_name)
+        if "error" in deps:
+            missing_features.append(feature_name)
+            dependency_reports.append({"featureName": feature_name, "error": deps["error"]})
+            continue
+        report = deps.get("result") or {}
+        dependency_reports.append(report)
+        for consumer in report.get("likelyDownstreamConsumers") or []:
+            downstream_consumers.append({
+                "targetFeature": feature_name,
+                "consumer": consumer,
+            })
+        for input_ref in report.get("directInputs") or []:
+            if input_ref.get("confidence") == "unknown":
+                warnings.append(f"Feature '{feature_name}' has unresolved dependency input: {input_ref.get('kind')}.")
+
+    if missing_features:
+        blocking_reasons.append("One or more target features were not found.")
+    if downstream_consumers:
+        blocking_reasons.append("One or more target features have likely downstream consumers.")
+
+    risk_level = _impact_risk_level(blocking_reasons, warnings, dependency_reports)
+    return {
+        "result": {
+            "okToProceed": not blocking_reasons,
+            "riskLevel": risk_level,
+            "changeType": change_type or "edit",
+            "targetFeatures": clean_targets,
+            "blockingReasons": blocking_reasons,
+            "warnings": warnings,
+            "analysisNote": "Impact is best-effort; Fusion does not expose a complete authoritative parent-child graph through this MCP tool.",
+            "downstreamConsumers": downstream_consumers,
+            "dependencyReports": dependency_reports,
+            "recommendedNextStep": (
+                "Inspect downstream consumers and ask for explicit confirmation before changing target features."
+                if blocking_reasons
+                else "Proceed with normal preflight_model_change before modifying the model."
+            ),
+        }
+    }
+
+
 @register_tool("get_sketch_dimensions")
 def get_sketch_dimensions(sketch_name):
     import traceback

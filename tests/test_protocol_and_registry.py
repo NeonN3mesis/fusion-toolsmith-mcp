@@ -1049,6 +1049,7 @@ def run(context):
         self.assertIn("get_parameter_usage", tool_names)
         self.assertIn("get_feature_dependencies", tool_names)
         self.assertIn("get_dependency_graph", tool_names)
+        self.assertIn("assess_change_impact", tool_names)
         self.assertIn("map_coordinates", tool_names)
         self.assertIn("create_sketch", tool_names)
         self.assertIn("draw_line", tool_names)
@@ -2373,6 +2374,51 @@ def run(context):
         self.assertIn(("sketch:SketchA", "feature:0:ExtrudeA", "providesProfile"), relationships)
         self.assertIn(("feature:0:ExtrudeA", "feature:1:CutB", "likelyDownstreamConsumer"), relationships)
         self.assertIn(("userParameter:fixtureDepth", "parameter:d1", "referencedByExpression"), relationships)
+
+    def test_assess_change_impact_blocks_likely_downstream_consumers(self):
+        original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature
+        mock_body = types.SimpleNamespace(name="Body1")
+        target_extrude = types.SimpleNamespace(
+            name="ExtrudeA",
+            objectType="adsk::fusion::ExtrudeFeature",
+            bodies=types.SimpleNamespace(count=1, item=lambda idx: mock_body),
+            participantBodies=types.SimpleNamespace(count=0, item=lambda idx: None),
+            profiles=types.SimpleNamespace(count=0, item=lambda idx: None),
+        )
+        downstream_extrude = types.SimpleNamespace(
+            name="CutB",
+            objectType="adsk::fusion::ExtrudeFeature",
+            participantBodies=types.SimpleNamespace(count=1, item=lambda idx: mock_body),
+            bodies=types.SimpleNamespace(count=0, item=lambda idx: None),
+            profiles=types.SimpleNamespace(count=0, item=lambda idx: None),
+        )
+        items = [
+            types.SimpleNamespace(name="ExtrudeA", index=0, healthState=0, entity=target_extrude),
+            types.SimpleNamespace(name="CutB", index=1, healthState=0, entity=downstream_extrude),
+        ]
+        sys.modules["adsk.fusion"].ExtrudeFeature = types.SimpleNamespace(
+            cast=lambda value: value if value in (target_extrude, downstream_extrude) else None
+        )
+        try:
+            self.mock_design = types.SimpleNamespace(
+                timeline=types.SimpleNamespace(count=2, item=lambda idx: items[idx]),
+                rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+                userParameters=types.SimpleNamespace(itemByName=lambda name: None),
+            )
+            _fake_app.activeProduct = self.mock_design
+
+            res = self.tools.execute_tool("assess_change_impact", {
+                "target_features": "ExtrudeA",
+                "change_type": "delete",
+            })
+        finally:
+            sys.modules["adsk.fusion"].ExtrudeFeature = original_extrude
+
+        self.assertFalse(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["riskLevel"], "high")
+        self.assertIn("likely downstream consumers", res["result"]["blockingReasons"][0])
+        self.assertEqual(res["result"]["downstreamConsumers"][0]["consumer"]["timelineName"], "CutB")
+        self.assertIn("explicit confirmation", res["result"]["recommendedNextStep"])
 
     def test_get_feature_dependencies_keeps_unresolved_profiles(self):
         original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature

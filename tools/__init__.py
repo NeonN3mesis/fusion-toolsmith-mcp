@@ -145,6 +145,28 @@ def get_tool_schemas():
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
+            "name": "assess_change_impact",
+            "description": "Assess likely impact before editing, suppressing, deleting, or rebuilding timeline features. Summarizes direct inputs, downstream consumers, and a risk level without modifying the model.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_features": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Feature name or list of feature names to assess."
+                    },
+                    "change_type": {
+                        "type": "string",
+                        "default": "edit",
+                        "description": "Planned operation label, e.g. edit, suppress, delete, rebuild, parameterize."
+                    }
+                },
+                "required": ["target_features"]
+            }
+        },
+        {
             "name": "map_coordinates",
             "description": "Map a 3D point between a sketch's local coordinate system, root model space, and an optional target component/occurrence using Fusion transforms.",
             "inputSchema": {
