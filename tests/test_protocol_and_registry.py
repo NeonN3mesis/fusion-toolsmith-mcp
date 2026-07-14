@@ -2496,6 +2496,7 @@ def run(context):
     def test_delete_timeline_feature_blocks_downstream_consumers(self):
         parametric = importlib.import_module("tools.parametric")
         original_dependencies = parametric.get_feature_dependencies
+        original_impact = parametric.assess_change_impact
         deleted = []
         mock_item = types.SimpleNamespace(name="FeatureA", deleteMe=lambda: deleted.append(True))
         self.mock_design = types.SimpleNamespace(
@@ -2509,6 +2510,16 @@ def run(context):
                 "likelyDownstreamConsumers": [{"timelineName": "CutB", "reasons": ["usesResultBodyAsParticipant"]}],
             }
         }
+        parametric.assess_change_impact = lambda target_features, change_type="edit": {
+            "result": {
+                "okToProceed": False,
+                "riskLevel": "high",
+                "targetFeatures": [target_features],
+                "changeType": change_type,
+                "blockingReasons": ["One or more target features have likely downstream consumers."],
+                "downstreamConsumers": [{"targetFeature": target_features, "consumer": {"timelineName": "CutB"}}],
+            }
+        }
         try:
             res = self.tools.execute_tool("delete_timeline_feature", {
                 "name": "FeatureA",
@@ -2516,11 +2527,14 @@ def run(context):
             })
         finally:
             parametric.get_feature_dependencies = original_dependencies
+            parametric.assess_change_impact = original_impact
 
         self.assertIn("error", res)
         self.assertIn("downstream consumers", res["error"])
         self.assertEqual(deleted, [])
         self.assertEqual(res["dependencyReport"]["likelyDownstreamConsumers"][0]["timelineName"], "CutB")
+        self.assertEqual(res["impactReport"]["riskLevel"], "high")
+        self.assertEqual(res["impactReport"]["downstreamConsumers"][0]["consumer"]["timelineName"], "CutB")
 
     def test_delete_timeline_feature_allows_override_and_returns_state_comparison(self):
         parametric = importlib.import_module("tools.parametric")
@@ -2565,6 +2579,7 @@ def run(context):
     def test_suppress_timeline_feature_blocks_downstream_consumers(self):
         parametric = importlib.import_module("tools.parametric")
         original_dependencies = parametric.get_feature_dependencies
+        original_impact = parametric.assess_change_impact
         mock_item = types.SimpleNamespace(name="FeatureA", isSuppressed=False)
         self.mock_design = types.SimpleNamespace(
             timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
@@ -2577,6 +2592,16 @@ def run(context):
                 "likelyDownstreamConsumers": [{"timelineName": "CutB"}],
             }
         }
+        parametric.assess_change_impact = lambda target_features, change_type="edit": {
+            "result": {
+                "okToProceed": False,
+                "riskLevel": "high",
+                "targetFeatures": [target_features],
+                "changeType": change_type,
+                "blockingReasons": ["One or more target features have likely downstream consumers."],
+                "downstreamConsumers": [{"targetFeature": target_features, "consumer": {"timelineName": "CutB"}}],
+            }
+        }
         try:
             res = self.tools.execute_tool("suppress_timeline_feature", {
                 "name": "FeatureA",
@@ -2584,9 +2609,11 @@ def run(context):
             })
         finally:
             parametric.get_feature_dependencies = original_dependencies
+            parametric.assess_change_impact = original_impact
 
         self.assertIn("error", res)
         self.assertFalse(mock_item.isSuppressed)
+        self.assertEqual(res["impactReport"]["riskLevel"], "high")
 
     def test_suppress_timeline_feature_allows_override_and_returns_state_comparison(self):
         parametric = importlib.import_module("tools.parametric")

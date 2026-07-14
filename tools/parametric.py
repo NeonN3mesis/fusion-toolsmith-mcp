@@ -8,7 +8,7 @@ import math
 import os
 import traceback
 from . import register_tool
-from .inspection import _design_state_snapshot, compare_design_state, get_active_design, get_feature_dependencies
+from .inspection import _design_state_snapshot, assess_change_impact, compare_design_state, get_active_design, get_feature_dependencies
 
 def _operation(value):
     mapping = {
@@ -54,6 +54,13 @@ def _downstream_dependency_report(feature_name):
 
 def _has_downstream_consumers(dependency_report):
     return bool((dependency_report or {}).get("likelyDownstreamConsumers") or [])
+
+
+def _impact_report(feature_name, change_type):
+    impact = assess_change_impact(feature_name, change_type=change_type)
+    if "error" in impact:
+        return {"error": impact["error"], "okToProceed": False, "riskLevel": "unknown"}
+    return impact.get("result") or {}
 
 
 @register_tool("create_parametric_feature")
@@ -517,10 +524,12 @@ def suppress_timeline_feature(name=None, index=None, suppress=True, reason=None,
 
         feature_name = target_item.name
         dependency_report = _downstream_dependency_report(feature_name)
+        impact_report = _impact_report(feature_name, "suppress" if suppress else "unsuppress")
         if _has_downstream_consumers(dependency_report) and not allow_downstream_risk:
             return {
                 "error": "Suppressing this timeline feature may affect downstream consumers. Inspect dependencies or set allow_downstream_risk=true with a reason.",
                 "dependencyReport": dependency_report,
+                "impactReport": impact_report,
             }
 
         before = _design_state_snapshot(include_selections=False)
@@ -536,6 +545,7 @@ def suppress_timeline_feature(name=None, index=None, suppress=True, reason=None,
                 "reason": reason,
                 "allowedDownstreamRisk": bool(allow_downstream_risk),
                 "dependencyReport": dependency_report,
+                "impactReport": impact_report,
                 "stateComparison": comparison,
             }
         }
@@ -560,10 +570,12 @@ def delete_timeline_feature(name=None, index=None, reason=None, allow_downstream
             
         feature_name = target_item.name
         dependency_report = _downstream_dependency_report(feature_name)
+        impact_report = _impact_report(feature_name, "delete")
         if _has_downstream_consumers(dependency_report) and not allow_downstream_risk:
             return {
                 "error": "Deleting this timeline feature may affect downstream consumers. Inspect dependencies or set allow_downstream_risk=true with a reason.",
                 "dependencyReport": dependency_report,
+                "impactReport": impact_report,
             }
 
         before = _design_state_snapshot(include_selections=False)
@@ -577,6 +589,7 @@ def delete_timeline_feature(name=None, index=None, reason=None, allow_downstream
                 "reason": reason,
                 "allowedDownstreamRisk": bool(allow_downstream_risk),
                 "dependencyReport": dependency_report,
+                "impactReport": impact_report,
                 "stateComparison": comparison,
             }
         }

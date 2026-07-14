@@ -130,7 +130,19 @@ try {
     $toolsResponse = Invoke-McpRequest -Uri $mcpUri -SessionId $sessionId -Body $toolsBody -TimeoutSec $TimeoutSec
     $toolsJson = $toolsResponse.Content | ConvertFrom-Json
     $toolNames = @($toolsJson.result.tools | ForEach-Object { $_.name })
-    foreach ($requiredTool in @("run_fusion_script", "inspect_sketch", "inspect_feature", "map_coordinates", "get_feature_dependencies")) {
+    foreach ($requiredTool in @(
+        "run_fusion_script",
+        "inspect_sketch",
+        "inspect_feature",
+        "get_sketch_parameters",
+        "get_feature_parameters",
+        "get_parameter_usage",
+        "get_projected_geometry_sources",
+        "get_feature_dependencies",
+        "get_dependency_graph",
+        "assess_change_impact",
+        "map_coordinates"
+    )) {
         Assert-True -Condition ($toolNames -contains $requiredTool) -Message "Required tool '$requiredTool' was not advertised."
     }
 
