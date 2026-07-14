@@ -180,9 +180,40 @@ def get_runtime_diagnostics(required_tools=None):
 
 
 @register_tool("run_fusion_script")
-def run_fusion_script(script, allow_export=False, export_override_reason=None):
+def run_fusion_script(script, script_intent=None, mcp_tool_gap=None, allow_export=False, export_override_reason=None):
     if not isinstance(script, str) or not script.strip():
         return {"error": "Script must be a non-empty string."}
+    if not isinstance(script_intent, str) or not script_intent.strip():
+        return {
+            "error": (
+                "run_fusion_script is a fallback tool of last resort. Provide script_intent explaining the specific "
+                "operation, after using structured MCP tools for inspection/planning first."
+            ),
+            "preferredTools": [
+                "inspect_design",
+                "get_timeline",
+                "inspect_sketch",
+                "inspect_feature",
+                "plan_parameterization",
+                "preflight_model_change",
+                "create_sketch",
+                "draw_line",
+                "draw_rectangle",
+                "draw_circle",
+                "extrude_feature",
+                "fillet_feature",
+                "chamfer_feature",
+                "export_asset",
+            ],
+        }
+    if not isinstance(mcp_tool_gap, str) or not mcp_tool_gap.strip():
+        return {
+            "error": (
+                "mcp_tool_gap is required for run_fusion_script. State why the existing structured MCP tools cannot "
+                "safely accomplish this operation."
+            ),
+            "guidance": "If a structured tool can do the job, call that tool instead of raw scripting.",
+        }
     if _script_looks_like_export(script) and not allow_export:
         return {
             "error": (
@@ -220,7 +251,12 @@ def run_fusion_script(script, allow_export=False, export_override_reason=None):
         raise FusionScriptExecutionError(str(e), new_stdout.getvalue(), traceback.format_exc())
     finally:
         sys.stdout = old_stdout
-    return {"result": "Script executed", "output": new_stdout.getvalue()}
+    return {
+        "result": "Script executed",
+        "output": new_stdout.getvalue(),
+        "scriptIntent": script_intent.strip(),
+        "mcpToolGap": mcp_tool_gap.strip(),
+    }
 
 @register_tool("capture_view")
 def capture_view(view_name="iso"):

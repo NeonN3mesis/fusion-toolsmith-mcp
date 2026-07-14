@@ -250,6 +250,8 @@ def run(context):
 
         $fixtureResult = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 3 -Name "run_fusion_script" -Arguments @{
             script = $fixtureScript
+            script_intent = "Create a controlled inspection fixture document for FusionMCP smoke testing."
+            mcp_tool_gap = "The smoke fixture intentionally builds many relationships in one setup script so the inspection tools can be verified against a known design."
         } -TimeoutSec ([Math]::Max($TimeoutSec, 30))
         Write-Host "Fixture creation output:"
         Write-Host $fixtureResult.output
@@ -313,6 +315,8 @@ def run(context):
 '@
         $cleanupResult = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 9 -Name "run_fusion_script" -Arguments @{
             script = $cleanupScript
+            script_intent = "Close the temporary inspection fixture document after smoke testing."
+            mcp_tool_gap = "The fixture cleanup needs direct document close behavior; it is not a modeling operation."
         } -TimeoutSec $TimeoutSec
         Write-Host "Fixture cleanup output:"
         Write-Host $cleanupResult.output

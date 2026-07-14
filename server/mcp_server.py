@@ -82,6 +82,11 @@ PROMPTS = [
         "name": "export_readiness",
         "description": "Guide the agent to verify compute and timeline health before any STEP, STL, or drawing/PDF export.",
         "arguments": []
+    },
+    {
+        "name": "tool_first_workflow",
+        "description": "Guide the agent to use structured FusionMCP tools before falling back to raw scripts.",
+        "arguments": []
     }
 ]
 
@@ -640,6 +645,14 @@ def handle_prompt_get(req_id, prompt_name, prompt_args):
             "Do not use raw Fusion export APIs through run_fusion_script. If preflight reports compute, timeline, "
             "or feature health problems, stop and report the blockingReasons unless the user explicitly asks for "
             "a diagnostic export of known-broken geometry and provides an override reason."
+        )
+    elif prompt_name == "tool_first_workflow":
+        text = (
+            "Use structured FusionMCP tools first. Start with inspect_design/get_timeline and then choose specific "
+            "tools such as inspect_sketch, inspect_feature, plan_parameterization, map_coordinates, create_sketch, "
+            "draw_line, draw_rectangle, draw_circle, extrude_feature, fillet_feature, chamfer_feature, "
+            "preflight_model_change, validate_model, preflight_export, and export_asset. Only use run_fusion_script "
+            "when no structured tool can safely perform the operation; provide script_intent and mcp_tool_gap."
         )
     else:
         return make_jsonrpc_error(req_id, -32602, f"Unknown prompt: {prompt_name}")

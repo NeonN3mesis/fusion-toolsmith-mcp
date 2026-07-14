@@ -16,6 +16,7 @@ Follow this systematic workflow to interact with Autodesk Fusion 360 reliably an
 2. **Prefer Primitives**: Use `create_box`, `create_cylinder`, and `create_coil` instead of writing custom Python scripts whenever possible.
 3. **Name Everything**: Always assign descriptive names to sketches, bodies, and components immediately upon creation.
 4. **Destructive Timeline Changes**: Before suppressing or deleting timeline features or deleting sketch dimensions, inspect dependencies and provide a concrete reason. Do not override downstream-risk blocks unless the user explicitly accepts the risk.
+5. **Raw Script Escalation**: `run_fusion_script` is a last-resort escape hatch. Before using it, prove why structured MCP tools are insufficient by providing `script_intent` and `mcp_tool_gap`. If a task can be done with inspection, sketch, feature, parameter, validation, or export tools, use those tools instead.
 
 ---
 

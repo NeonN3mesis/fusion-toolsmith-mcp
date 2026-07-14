@@ -923,11 +923,19 @@ def get_tool_schemas():
         },
         {
             "name": "run_fusion_script",
-            "description": "⚠️ FALLBACK TOOL OF LAST RESORT. Do NOT use this tool if any high-level parametric, inspection, export, or constraint tools can accomplish the task. Raw scripts that call Fusion export APIs are blocked by default; use export_asset for safe preflight-gated exports.",
+            "description": "FALLBACK TOOL OF LAST RESORT. Do not use this tool when structured MCP tools can inspect, plan, sketch, constrain, feature, parameterize, validate, or export. Requires script_intent and mcp_tool_gap to explain why structured tools are insufficient. Raw scripts that call Fusion export APIs are blocked by default; use export_asset for safe preflight-gated exports.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "script": {"type": "string", "description": "The python script to execute"},
+                    "script_intent": {
+                        "type": "string",
+                        "description": "Required. Specific operation this fallback script performs. Use structured MCP inspection/planning tools first."
+                    },
+                    "mcp_tool_gap": {
+                        "type": "string",
+                        "description": "Required. Why existing structured MCP tools cannot safely accomplish this operation."
+                    },
                     "allow_export": {
                         "type": "boolean",
                         "default": False,
@@ -938,7 +946,7 @@ def get_tool_schemas():
                         "description": "Required when allow_export=true for scripts that use Fusion export APIs."
                     }
                 },
-                "required": ["script"]
+                "required": ["script", "script_intent", "mcp_tool_gap"]
             }
         }
     ]

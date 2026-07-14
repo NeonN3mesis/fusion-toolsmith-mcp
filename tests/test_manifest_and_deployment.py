@@ -74,6 +74,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "plan_parameterization",
             "get_runtime_diagnostics",
             "run_fusion_script",
+            "script_intent",
+            "mcp_tool_gap",
             "KeepFixtureDocument",
             "doc.close(False)",
         ]:

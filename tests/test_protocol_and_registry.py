@@ -235,6 +235,15 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("create_2d_drawing", text)
         self.assertIn("Do not use raw Fusion export APIs", text)
 
+    def test_tool_first_prompt_warns_against_script_shortcuts(self):
+        response = self.mcp_server.handle_prompt_get(24, "tool_first_workflow", {})
+        self.assertEqual(response["id"], 24)
+        text = response["result"]["messages"][0]["content"]["text"]
+        self.assertIn("Use structured FusionMCP tools first", text)
+        self.assertIn("plan_parameterization", text)
+        self.assertIn("script_intent", text)
+        self.assertIn("mcp_tool_gap", text)
+
     def test_create_parametric_feature_does_not_simulate_success(self):
         result = self.tools.execute_tool("create_parametric_feature", {"feature_type": "extrude", "parameters": {}})
         self.assertIn("error", result)
@@ -674,13 +683,26 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertTrue(os.path.exists(export_path))
         self.assertEqual(closed, [False])
 
+    def test_run_fusion_script_requires_fallback_justification(self):
+        script = """
+def run(context):
+    print('raw fallback')
+"""
+        res = self.tools.execute_tool("run_fusion_script", {"script": script})
+        self.assertIn("error", res)
+        self.assertIn("script_intent", res["error"])
+
     def test_run_fusion_script_blocks_raw_export_api_by_default(self):
         script = """
 def run(context):
     exportMgr = design.exportManager
     exportMgr.createSTEPExportOptions('C:/tmp/model.step', rootComp)
 """
-        res = self.tools.execute_tool("run_fusion_script", {"script": script})
+        res = self.tools.execute_tool("run_fusion_script", {
+            "script": script,
+            "script_intent": "Exercise raw export blocking.",
+            "mcp_tool_gap": "Unit test intentionally targets the fallback export guard.",
+        })
         self.assertIn("error", res)
         self.assertIn("Scripted Fusion exports are blocked", res["error"])
 
@@ -691,6 +713,8 @@ def run(context):
 """
         res = self.tools.execute_tool("run_fusion_script", {
             "script": script,
+            "script_intent": "Exercise raw export override validation.",
+            "mcp_tool_gap": "Unit test intentionally targets the fallback export guard.",
             "allow_export": True,
         })
         self.assertIn("error", res)
@@ -704,7 +728,11 @@ def run(context):
     drawing_doc = adsk.drawing.DrawingDocument.cast(app.activeDocument)
     drawing_doc.drawing.exportManager.createPDFExportOptions('C:/tmp/drawing.pdf')
 """
-        res = self.tools.execute_tool("run_fusion_script", {"script": script})
+        res = self.tools.execute_tool("run_fusion_script", {
+            "script": script,
+            "script_intent": "Exercise raw drawing export blocking.",
+            "mcp_tool_gap": "Unit test intentionally targets the fallback drawing export guard.",
+        })
         self.assertIn("error", res)
         self.assertIn("Scripted Fusion exports are blocked", res["error"])
 
@@ -717,6 +745,8 @@ def run(context):
 """
         res = self.tools.execute_tool("run_fusion_script", {
             "script": script,
+            "script_intent": "Exercise raw drawing export override validation.",
+            "mcp_tool_gap": "Unit test intentionally targets the fallback drawing export guard.",
             "allow_export": True,
         })
         self.assertIn("error", res)
@@ -731,6 +761,8 @@ def run(context):
 """
         res = self.tools.execute_tool("run_fusion_script", {
             "script": script,
+            "script_intent": "Diagnostic script that mentions an export marker without writing a file.",
+            "mcp_tool_gap": "Unit test intentionally verifies the export marker override path.",
             "allow_export": True,
             "export_override_reason": "Diagnostic script that does not write an export.",
         })
