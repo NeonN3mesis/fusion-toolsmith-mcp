@@ -9,12 +9,14 @@ import adsk.core, adsk.fusion
 from . import register_tool
 from .inspection import (
     _circle_to_dict,
+    _design_state_snapshot,
     _find_component_context_by_name,
     _find_sketch_by_name,
     _line_to_dict,
     _safe_value,
     _sketch_coordinate_system,
     _collection_items,
+    compare_design_state,
     get_active_design,
 )
 
@@ -42,7 +44,20 @@ def _resolve_plane(component, plane):
     raise ValueError(f"Construction plane '{plane}' not found in component '{component.name}'.")
 
 
-def _sketch_result(sketch, action, extra=None):
+def _capture_design_state():
+    return _safe_value(lambda: _design_state_snapshot(include_selections=False))
+
+
+def _compare_after_mutation(before):
+    if not before:
+        return None
+    after = _capture_design_state()
+    if not after:
+        return None
+    return _safe_value(lambda: compare_design_state(before, after).get("result"))
+
+
+def _sketch_result(sketch, action, extra=None, state_comparison=None):
     result = {
         "action": action,
         "sketchName": _safe_value(lambda: sketch.name),
@@ -51,6 +66,8 @@ def _sketch_result(sketch, action, extra=None):
     }
     if extra:
         result.update(extra)
+    if state_comparison is not None:
+        result["stateComparison"] = state_comparison
     return {"result": result}
 
 
@@ -134,9 +151,10 @@ def create_sketch(name, plane="xy", component="root"):
         target_component, _occurrence = _find_component_context_by_name(component)
         if not target_component:
             return {"error": f"Component or occurrence '{component}' not found."}
+        before = _capture_design_state()
         sketch = target_component.sketches.add(_resolve_plane(target_component, plane))
         sketch.name = name
-        return _sketch_result(sketch, "created")
+        return _sketch_result(sketch, "created", state_comparison=_compare_after_mutation(before))
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error creating sketch: {e}\n{err}")
@@ -149,11 +167,17 @@ def draw_line(sketch_name, start, end, name=None, construction=False):
         sketch = _find_sketch_by_name(sketch_name)
         if not sketch:
             return {"error": f"Sketch '{sketch_name}' not found."}
+        before = _capture_design_state()
         line = sketch.sketchCurves.sketchLines.addByTwoPoints(_point3d(start), _point3d(end))
         if name:
             _safe_value(lambda: setattr(line, "name", name))
         _safe_value(lambda: setattr(line, "isConstruction", bool(construction)))
-        return _sketch_result(sketch, "lineCreated", {"line": _line_to_dict(line, 0)})
+        return _sketch_result(
+            sketch,
+            "lineCreated",
+            {"line": _line_to_dict(line, 0)},
+            state_comparison=_compare_after_mutation(before),
+        )
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error drawing line: {e}\n{err}")
@@ -166,6 +190,7 @@ def draw_rectangle(sketch_name, corner1=None, corner2=None, center=None, width=N
         sketch = _find_sketch_by_name(sketch_name)
         if not sketch:
             return {"error": f"Sketch '{sketch_name}' not found."}
+        before = _capture_design_state()
         if corner1 is None or corner2 is None:
             if center is None or width is None or height is None:
                 return {"error": "Provide corner1/corner2 or center/width/height."}
@@ -183,7 +208,12 @@ def draw_rectangle(sketch_name, corner1=None, corner2=None, center=None, width=N
                 _safe_value(lambda line=line, index=index: setattr(line, "name", f"{name_prefix}_{index}"))
             _safe_value(lambda line=line: setattr(line, "isConstruction", bool(construction)))
             created.append(_line_to_dict(line, index))
-        return _sketch_result(sketch, "rectangleCreated", {"lines": created})
+        return _sketch_result(
+            sketch,
+            "rectangleCreated",
+            {"lines": created},
+            state_comparison=_compare_after_mutation(before),
+        )
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error drawing rectangle: {e}\n{err}")
@@ -198,11 +228,17 @@ def draw_circle(sketch_name, center, radius, name=None, construction=False):
             return {"error": f"Sketch '{sketch_name}' not found."}
         design = get_active_design()
         radius_value = design.unitsManager.evaluateExpression(str(radius), "cm") if isinstance(radius, str) else float(radius)
+        before = _capture_design_state()
         circle = sketch.sketchCurves.sketchCircles.addByCenterRadius(_point3d(center), radius_value)
         if name:
             _safe_value(lambda: setattr(circle, "name", name))
         _safe_value(lambda: setattr(circle, "isConstruction", bool(construction)))
-        return _sketch_result(sketch, "circleCreated", {"circle": _circle_to_dict(circle, 0)})
+        return _sketch_result(
+            sketch,
+            "circleCreated",
+            {"circle": _circle_to_dict(circle, 0)},
+            state_comparison=_compare_after_mutation(before),
+        )
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error drawing circle: {e}\n{err}")
@@ -216,12 +252,14 @@ def project_geometry(sketch_name, entity_name=None, entity_token=None, use_selec
         if not sketch:
             return {"error": f"Sketch '{sketch_name}' not found."}
         design = get_active_design()
+        before = _capture_design_state()
         entities = []
         if use_selection:
             selections = _safe_value(lambda: adsk.core.Application.get().userInterface.activeSelections)
-            indices = selection_indices if selection_indices is not None else list(range(_safe_value(lambda: selections.count, 0) or 0))
+            selection_count = _safe_value(lambda: selections.count, 0) or 0
+            indices = selection_indices if selection_indices is not None else list(range(selection_count))
             for index in indices:
-                if 0 <= index < selections.count:
+                if 0 <= index < selection_count:
                     entity = _safe_value(lambda index=index: selections.item(index).entity)
                     if entity:
                         entities.append(entity)
@@ -249,7 +287,7 @@ def project_geometry(sketch_name, entity_name=None, entity_token=None, use_selec
         return _sketch_result(sketch, "geometryProjected", {
             "projectedCount": projected_count,
             "projected": projected,
-        })
+        }, state_comparison=_compare_after_mutation(before))
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error projecting geometry: {e}\n{err}")

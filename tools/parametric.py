@@ -12,18 +12,41 @@ from .inspection import _design_state_snapshot, assess_change_impact, compare_de
 
 def _operation(value):
     mapping = {
+        "newbody": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
         "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
         "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
         "cut": adsk.fusion.FeatureOperations.CutFeatureOperation,
         "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
     }
-    return mapping.get((value or "new_body").lower(), adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    key = (value or "new_body").replace(" ", "").lower()
+    if key not in mapping:
+        raise ValueError("operation must be one of new_body, join, cut, or intersect.")
+    return mapping[key]
 
 
 def _require_reason(reason, operation):
     if not isinstance(reason, str) or not reason.strip():
         return {"error": f"reason is required before {operation}. State why this model change is intentional."}
     return None
+
+
+def _capture_design_state():
+    try:
+        return _design_state_snapshot(include_selections=False)
+    except Exception:
+        return None
+
+
+def _compare_after_mutation(before):
+    if not before:
+        return None
+    after = _capture_design_state()
+    if not after:
+        return None
+    try:
+        return compare_design_state(before, after).get("result")
+    except Exception:
+        return None
 
 
 def _find_timeline_item(timeline, name=None, index=None):
@@ -72,19 +95,27 @@ def create_parametric_feature(feature_type, parameters):
             "error": (
                 f"Unsupported parametric feature type '{feature_type}'. "
                 "Use create_box, create_cylinder, create_coil, create_sketch_offset, "
-                "or run_fusion_script for this operation."
+                "or another structured MCP tool. Use run_fusion_script only as an explicitly justified last resort."
             )
         }
     design = get_active_design()
     root = design.rootComponent
+    before = _capture_design_state()
     sketch = root.sketches.add(root.xYConstructionPlane)
     sketch.name = parameters.get("name", "AutoSketch")
-    return {"result": f"Created sketch {sketch.name}"}
+    return {
+        "result": {
+            "message": f"Created sketch {sketch.name}",
+            "sketchName": sketch.name,
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
 
 @register_tool("create_box")
 def create_box(name="Box", base_plane="xy", length="5 cm", width="5 cm", height="5 cm", x_offset="0 cm", z_offset="0 cm", operation="new_body"):
     design = get_active_design()
     root = design.rootComponent
+    before = _capture_design_state()
     
     # 1. Resolve base plane
     plane = root.xYConstructionPlane
@@ -127,12 +158,23 @@ def create_box(name="Box", base_plane="xy", length="5 cm", width="5 cm", height=
     if extrude.bodies.count > 0:
         extrude.bodies.item(0).name = name
         
-    return {"result": f"Successfully created parametric box '{name}' of height {height}"}
+    return {
+        "result": {
+            "message": f"Successfully created parametric box '{name}' of height {height}",
+            "featureName": extrude.name,
+            "sketchName": sketch.name,
+            "bodyName": name if extrude.bodies.count > 0 else None,
+            "operation": operation,
+            "height": height,
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
 
 @register_tool("create_cylinder")
 def create_cylinder(name="Cylinder", base_plane="xy", radius="2.5 cm", height="5 cm", x_offset="0 cm", z_offset="0 cm", operation="new_body"):
     design = get_active_design()
     root = design.rootComponent
+    before = _capture_design_state()
     
     plane = root.xYConstructionPlane
     if base_plane.lower() in ["xz", "xZConstructionPlane"]:
@@ -164,7 +206,18 @@ def create_cylinder(name="Cylinder", base_plane="xy", radius="2.5 cm", height="5
     if extrude.bodies.count > 0:
         extrude.bodies.item(0).name = name
         
-    return {"result": f"Successfully created parametric cylinder '{name}' of height {height}"}
+    return {
+        "result": {
+            "message": f"Successfully created parametric cylinder '{name}' of height {height}",
+            "featureName": extrude.name,
+            "sketchName": sketch.name,
+            "bodyName": name if extrude.bodies.count > 0 else None,
+            "operation": operation,
+            "height": height,
+            "radius": radius,
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
 
 
 # --- Coil Creation Implementation from AppData ---
@@ -305,6 +358,7 @@ def create_coil(
     try:
         design = get_active_design()
         root = design.rootComponent
+        before = _capture_design_state()
 
         base_plane, target_comp = _find_named_base_plane(root, base_plane_name)
         if not base_plane:
@@ -359,17 +413,20 @@ def create_coil(
             sketch.isLightBulbOn = False
 
         return {
-            "featureName": pipe.name,
-            "pathSketchName": sketch.name,
-            "componentName": target_comp.name,
-            "basePlane": getattr(base_plane, "name", "selected planar face"),
-            "centerPoint": center_point_name or "base plane origin",
-            "diameter": diameter,
-            "height": height,
-            "revolutions": revolutions,
-            "sectionSize": section_size,
-            "points": total_points,
-            "operation": operation
+            "result": {
+                "featureName": pipe.name,
+                "pathSketchName": sketch.name,
+                "componentName": target_comp.name,
+                "basePlane": getattr(base_plane, "name", "selected planar face"),
+                "centerPoint": center_point_name or "base plane origin",
+                "diameter": diameter,
+                "height": height,
+                "revolutions": revolutions,
+                "sectionSize": section_size,
+                "points": total_points,
+                "operation": operation,
+                "stateComparison": _compare_after_mutation(before),
+            }
         }
     except Exception as e:
         err = traceback.format_exc()
@@ -390,8 +447,17 @@ def modify_parameters(param_name, new_expression):
     if not param:
         return {"error": f"Parameter '{param_name}' not found."}
     old_expr = param.expression
+    before_state = _capture_design_state()
     param.expression = new_expression
-    return {"result": f"Successfully updated '{param_name}' from '{old_expr}' to '{new_expression}'"}
+    return {
+        "result": {
+            "message": f"Successfully updated '{param_name}' from '{old_expr}' to '{new_expression}'",
+            "parameterName": param_name,
+            "beforeExpression": old_expr,
+            "afterExpression": new_expression,
+            "stateComparison": _compare_after_mutation(before_state),
+        }
+    }
 
 def _param_to_dict(param):
     return {
@@ -424,8 +490,9 @@ def set_parameter(name, expression):
     if not param:
         return {"error": f"Parameter '{name}' not found."}
     before = _param_to_dict(param)
+    before_state = _capture_design_state()
     param.expression = expression
-    return {"result": {"before": before, "after": _param_to_dict(param)}}
+    return {"result": {"before": before, "after": _param_to_dict(param), "stateComparison": _compare_after_mutation(before_state)}}
 
 @register_tool("validate_model")
 def validate_model():
@@ -700,10 +767,19 @@ def convert_mesh_to_solid(mesh_body_name, operation="new_body"):
         
         op = _operation(operation)
         mesh_to_brep_input = mesh_to_brep_feats.createInput(target_mesh, op)
+        before = _capture_design_state()
         feat = mesh_to_brep_feats.add(mesh_to_brep_input)
         feat.name = f"{mesh_body_name}_Solid"
         
-        return {"result": f"Successfully converted mesh body '{mesh_body_name}' to solid body '{feat.name}'"}
+        return {
+            "result": {
+                "message": f"Successfully converted mesh body '{mesh_body_name}' to solid body '{feat.name}'",
+                "featureName": feat.name,
+                "meshBodyName": mesh_body_name,
+                "operation": operation,
+                "stateComparison": _compare_after_mutation(before),
+            }
+        }
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error converting mesh to BRep: {e}\n{err}")
@@ -741,9 +817,26 @@ def edit_sketch_dimension(sketch_name, parameter_name, expression):
         if not target_dim:
             return {"error": f"Dimension parameter '{parameter_name}' not found in sketch '{sketch_name}'."}
             
+        before_param = {
+            "name": target_dim.parameter.name if target_dim.parameter else None,
+            "expression": target_dim.parameter.expression if target_dim.parameter else None,
+            "value": getattr(target_dim.parameter, "value", None) if target_dim.parameter else None,
+        }
+        before_state = _capture_design_state()
         target_dim.parameter.expression = expression
         return {
-            "result": f"Updated dimension '{parameter_name}' expression to '{expression}'."
+            "result": {
+                "message": f"Updated dimension '{parameter_name}' expression to '{expression}'.",
+                "sketchName": sketch_name,
+                "parameterName": parameter_name,
+                "before": before_param,
+                "after": {
+                    "name": target_dim.parameter.name if target_dim.parameter else None,
+                    "expression": target_dim.parameter.expression if target_dim.parameter else None,
+                    "value": getattr(target_dim.parameter, "value", None) if target_dim.parameter else None,
+                },
+                "stateComparison": _compare_after_mutation(before_state),
+            }
         }
     except Exception as e:
         err = traceback.format_exc()
@@ -830,17 +923,15 @@ def add_sketch_constraint(sketch_name, constraint_type, use_selection=True, sele
                 if 0 <= idx < active_sels.count:
                     entities.append(active_sels.item(idx).entity)
         elif entity_indices is not None:
+            flat_entities = _sketch_constraint_entities(sketch)
             for idx in entity_indices:
-                if idx < sketch.sketchPoints.count:
-                    entities.append(sketch.sketchPoints.item(idx))
-                else:
-                    curve_idx = idx - sketch.sketchPoints.count
-                    if 0 <= curve_idx < sketch.sketchCurves.count:
-                        entities.append(sketch.sketchCurves.item(curve_idx))
+                if 0 <= int(idx) < len(flat_entities):
+                    entities.append(flat_entities[int(idx)]["entity"])
 
         if not entities:
             return {"error": "No valid sketch entities found for constraint."}
 
+        before = _capture_design_state()
         c_type = constraint_type.lower()
         if c_type == "midpoint":
             if len(entities) < 2:
@@ -881,7 +972,15 @@ def add_sketch_constraint(sketch_name, constraint_type, use_selection=True, sele
         else:
             return {"error": f"Unsupported constraint type: {constraint_type}"}
 
-        return {"result": f"Successfully created geometric constraint of type '{constraint_type}'."}
+        return {
+            "result": {
+                "message": f"Successfully created geometric constraint of type '{constraint_type}'.",
+                "sketchName": sketch_name,
+                "constraintType": constraint_type,
+                "entityCount": len(entities),
+                "stateComparison": _compare_after_mutation(before),
+            }
+        }
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error adding geometric constraint: {e}\n{err}")
@@ -900,12 +999,51 @@ def _find_body_by_name(name):
     return None
 
 
+def _sketch_constraint_entities(sketch):
+    entities = []
+    for i in range(getattr(getattr(sketch, "sketchPoints", None), "count", 0) or 0):
+        entities.append({
+            "kind": "point",
+            "index": len(entities),
+            "entity": sketch.sketchPoints.item(i),
+        })
+    curves = getattr(sketch, "sketchCurves", None)
+    added_curves = 0
+    for attr in (
+        "sketchLines",
+        "sketchCircles",
+        "sketchArcs",
+        "sketchEllipses",
+        "sketchFittedSplines",
+        "sketchFixedSplines",
+        "sketchConicCurves",
+    ):
+        collection = getattr(curves, attr, None)
+        for i in range(getattr(collection, "count", 0) or 0):
+            entities.append({
+                "kind": attr,
+                "index": len(entities),
+                "entity": collection.item(i),
+            })
+            added_curves += 1
+    if added_curves == 0 and hasattr(curves, "count") and hasattr(curves, "item"):
+        for i in range(curves.count):
+            entities.append({
+                "kind": "curve",
+                "index": len(entities),
+                "entity": curves.item(i),
+            })
+    return entities
+
+
 @register_tool("combine_bodies")
-def combine_bodies(target_body_name, tool_body_names, operation="join", keep_tool_bodies=False):
+def combine_bodies(target_body_name, tool_body_names, operation=None, keep_tool_bodies=False):
     import traceback
     try:
         design = get_active_design()
         root = design.rootComponent
+        if not isinstance(operation, str) or operation.lower() not in ("join", "cut", "intersect"):
+            return {"error": "operation must be explicitly set to join, cut, or intersect."}
         
         target_body = _find_body_by_name(target_body_name)
         if not target_body:
@@ -931,10 +1069,21 @@ def combine_bodies(target_body_name, tool_body_names, operation="join", keep_too
         combine_input.operation = op
         combine_input.isKeepToolBodies = keep_tool_bodies
         
+        before = _capture_design_state()
         combine_feat = combines.add(combine_input)
         combine_feat.name = f"Combine_{target_body.name}"
         
-        return {"result": f"Successfully executed Boolean Combine ({operation}) on target body '{target_body_name}'."}
+        return {
+            "result": {
+                "message": f"Successfully executed Boolean Combine ({operation}) on target body '{target_body_name}'.",
+                "featureName": combine_feat.name,
+                "targetBodyName": target_body_name,
+                "toolBodyNames": tool_body_names,
+                "operation": operation,
+                "keepToolBodies": bool(keep_tool_bodies),
+                "stateComparison": _compare_after_mutation(before),
+            }
+        }
     except Exception as e:
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error combining bodies: {e}\n{err}")
@@ -969,10 +1118,16 @@ def reorganize_body_to_component(body_name, target_component_name=None, new_comp
         else:
             return {"error": "Either target_component_name or new_component_name must be specified."}
             
+        before = _capture_design_state()
         body.moveToComponent(target_occurrence)
         
         return {
-            "result": f"Successfully moved body '{body_name}' to component '{target_occurrence.component.name}'."
+            "result": {
+                "message": f"Successfully moved body '{body_name}' to component '{target_occurrence.component.name}'.",
+                "bodyName": body_name,
+                "targetComponentName": target_occurrence.component.name,
+                "stateComparison": _compare_after_mutation(before),
+            }
         }
     except Exception as e:
         err = traceback.format_exc()

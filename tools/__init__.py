@@ -379,7 +379,7 @@ def get_tool_schemas():
 
         {
             "name": "create_parametric_feature",
-            "description": "Create a named sketch as a safe parametric starting point. Use specialized tools like create_box, create_cylinder, create_coil, create_sketch_offset, set_parameter, and modify_parameters for other operations.",
+            "description": "Create a named sketch as a safe parametric starting point and return design-state comparison. Use specialized tools like create_box, create_cylinder, create_coil, create_sketch_offset, set_parameter, and modify_parameters for other operations.",
             "inputSchema": {
                 "type": "object", 
                 "properties": {
@@ -391,7 +391,7 @@ def get_tool_schemas():
         },
         {
             "name": "create_box",
-            "description": "Create a parametric 3D box (rectangular prism) by sketching a rectangle on a plane and extruding it.",
+            "description": "Create a parametric 3D box (rectangular prism) by sketching a rectangle on a plane and extruding it, returning design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -409,7 +409,7 @@ def get_tool_schemas():
         },
         {
             "name": "create_cylinder",
-            "description": "Create a parametric 3D cylinder by sketching a circle on a plane and extruding it.",
+            "description": "Create a parametric 3D cylinder by sketching a circle on a plane and extruding it, returning design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -426,7 +426,7 @@ def get_tool_schemas():
         },
         {
             "name": "create_coil",
-            "description": "Create a coil-like helical pipe feature in Fusion 360.",
+            "description": "Create a coil-like helical pipe feature in Fusion 360 and return design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -834,7 +834,7 @@ def get_tool_schemas():
         },
         {
             "name": "edit_sketch_dimension",
-            "description": "Modify the value/expression of an existing parametric dimension in a sketch.",
+            "description": "Modify the value/expression of an existing parametric dimension in a sketch and return before/after parameter data plus design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -860,7 +860,7 @@ def get_tool_schemas():
         },
         {
             "name": "add_sketch_constraint",
-            "description": "Apply geometric constraints (such as midpoint, horizontal/vertical points, tangent, parallel) between sketch curves or points.",
+            "description": "Apply geometric constraints (such as midpoint, horizontal/vertical points, tangent, parallel) between sketch curves or points and return design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -887,7 +887,7 @@ def get_tool_schemas():
         },
         {
             "name": "combine_bodies",
-            "description": "Perform a Boolean Combine operation (Join, Cut, or Intersect) between a target body and one or more tool bodies.",
+            "description": "Perform an explicit Boolean Combine operation (Join, Cut, or Intersect) between a target body and one or more tool bodies, returning design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -900,17 +900,16 @@ def get_tool_schemas():
                     "operation": {
                         "type": "string",
                         "enum": ["join", "cut", "intersect"],
-                        "default": "join",
-                        "description": "The Boolean operation to perform."
+                        "description": "Required explicit Boolean operation. Do not guess."
                     },
                     "keep_tool_bodies": {"type": "boolean", "default": False, "description": "If true, tool bodies are preserved instead of being consumed/deleted."}
                 },
-                "required": ["target_body_name", "tool_body_names"]
+                "required": ["target_body_name", "tool_body_names", "operation"]
             }
         },
         {
             "name": "reorganize_body_to_component",
-            "description": "Move a solid body from its current component into a different sub-component, creating a new component if requested.",
+            "description": "Move a solid body from its current component into a different sub-component, creating a new component if requested, and return design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

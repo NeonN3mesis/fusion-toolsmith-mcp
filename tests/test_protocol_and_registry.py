@@ -249,6 +249,11 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("Unsupported", result["error"])
 
+    def test_parametric_operation_parser_rejects_invalid_operation(self):
+        parametric = importlib.import_module("tools.parametric")
+        with self.assertRaises(ValueError):
+            parametric._operation("jon")
+
     def test_csv_tools_reject_relative_paths_before_fusion_access(self):
         export_result = self.tools.execute_tool("export_parameters_csv", {"csv_path": "params.csv"})
         import_result = self.tools.execute_tool("import_parameters_csv", {"csv_path": "params.csv"})
@@ -2921,6 +2926,44 @@ def run(context):
         })
         self.assertIn("result", res)
         self.assertEqual(added, [("midpoint", "point1", "line1")])
+        self.assertIn("stateComparison", res["result"])
+
+    def test_add_sketch_constraint_uses_fusion_curve_collections_for_entity_indices(self):
+        added = []
+        mock_constraints = types.SimpleNamespace(
+            addCoincident=lambda e1, e2: added.append(("coincident", e1, e2))
+        )
+        mock_sketch = types.SimpleNamespace(
+            name="TestSketch",
+            sketchPoints=types.SimpleNamespace(count=1, item=lambda idx: "point1"),
+            sketchCurves=types.SimpleNamespace(
+                sketchLines=types.SimpleNamespace(count=1, item=lambda idx: "line1"),
+                sketchCircles=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchArcs=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchEllipses=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchFittedSplines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchFixedSplines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchConicCurves=types.SimpleNamespace(count=0, item=lambda idx: None),
+            ),
+            geometricConstraints=mock_constraints,
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                sketches=[mock_sketch],
+                allOccurrences=[]
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("add_sketch_constraint", {
+            "sketch_name": "TestSketch",
+            "constraint_type": "coincident",
+            "use_selection": False,
+            "entity_indices": [0, 1],
+        })
+
+        self.assertIn("result", res)
+        self.assertEqual(added, [("coincident", "point1", "line1")])
 
     def test_combine_bodies(self):
         added_combines = []
@@ -2953,6 +2996,30 @@ def run(context):
         self.assertIn("result", res)
         self.assertEqual(len(added_combines), 1)
         self.assertEqual(added_combines[0].target, mock_target)
+        self.assertIn("stateComparison", res["result"])
+
+    def test_combine_bodies_requires_explicit_schema_operation(self):
+        combine_schema = next(tool for tool in self.tools.get_tool_schemas() if tool["name"] == "combine_bodies")
+        self.assertIn("operation", combine_schema["inputSchema"]["required"])
+
+    def test_combine_bodies_rejects_missing_operation_at_runtime(self):
+        mock_target = types.SimpleNamespace(name="TargetBody")
+        mock_tool = types.SimpleNamespace(name="ToolBody")
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                bRepBodies=[mock_target, mock_tool],
+                allOccurrences=[],
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("combine_bodies", {
+            "target_body_name": "TargetBody",
+            "tool_body_names": ["ToolBody"],
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("operation must be explicitly set", res["error"])
 
     def test_reorganize_body_to_component(self):
         moved = []
