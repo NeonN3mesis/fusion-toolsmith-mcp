@@ -1826,6 +1826,219 @@ def get_feature_dependencies(feature_name):
         return {"error": f"Failed to get feature dependencies: {str(e)}"}
 
 
+def _graph_add_node(nodes, node_id, kind, label=None, **metadata):
+    if not node_id:
+        return
+    node = nodes.setdefault(node_id, {"id": node_id, "kind": kind, "label": label or node_id})
+    for key, value in metadata.items():
+        if value is not None:
+            node[key] = value
+
+
+def _graph_add_edge(edges, edge_keys, source, target, relationship, confidence="medium", **metadata):
+    if not source or not target:
+        return
+    key = (source, target, relationship)
+    if key in edge_keys:
+        return
+    edge_keys.add(key)
+    edge = {
+        "source": source,
+        "target": target,
+        "relationship": relationship,
+        "confidence": confidence,
+    }
+    for meta_key, value in metadata.items():
+        if value is not None:
+            edge[meta_key] = value
+    edges.append(edge)
+
+
+def _graph_feature_node_id(feature_ref):
+    index = feature_ref.get("timelineIndex")
+    name = feature_ref.get("timelineName") or feature_ref.get("featureName")
+    return f"feature:{index}:{name}" if index is not None else f"feature:{name}"
+
+
+@register_tool("get_dependency_graph")
+def get_dependency_graph():
+    import traceback
+    try:
+        design = get_active_design()
+        timeline = design.timeline
+        nodes = {}
+        edges = []
+        edge_keys = set()
+        warnings = [
+            "Fusion does not expose a complete authoritative parent-child graph through this MCP tool; this graph is inferred from visible API relationships."
+        ]
+        feature_nodes_by_timeline_name = {}
+        feature_nodes_by_feature_name = {}
+
+        for i in range(timeline.count):
+            item = timeline.item(i)
+            entity = _safe_value(lambda item=item: item.entity)
+            feature_ref = _feature_ref_to_dict(item, entity)
+            feature_node_id = _graph_feature_node_id(feature_ref)
+            _graph_add_node(
+                nodes,
+                feature_node_id,
+                "feature",
+                feature_ref.get("timelineName") or feature_ref.get("featureName"),
+                timelineIndex=feature_ref.get("timelineIndex"),
+                timelineName=feature_ref.get("timelineName"),
+                featureName=feature_ref.get("featureName"),
+                objectType=feature_ref.get("objectType"),
+                health=feature_ref.get("health"),
+            )
+            if feature_ref.get("timelineName"):
+                feature_nodes_by_timeline_name[feature_ref["timelineName"]] = feature_node_id
+            if feature_ref.get("featureName"):
+                feature_nodes_by_feature_name[feature_ref["featureName"]] = feature_node_id
+
+        for i in range(timeline.count):
+            item = timeline.item(i)
+            entity = _safe_value(lambda item=item: item.entity)
+            feature_name = _safe_value(lambda entity=entity: entity.name) or _safe_value(lambda item=item: item.name)
+            deps = get_feature_dependencies(feature_name)
+            if "error" in deps:
+                warnings.append(deps["error"])
+                continue
+            report = deps.get("result") or {}
+            feature_ref = report.get("feature") or {}
+            feature_node_id = _graph_feature_node_id(feature_ref)
+            for input_ref in report.get("directInputs") or []:
+                kind = input_ref.get("kind")
+                if kind == "featureParameter":
+                    parameter = input_ref.get("parameter") or {}
+                    param_name = parameter.get("name")
+                    param_node_id = f"parameter:{param_name}" if param_name else None
+                    _graph_add_node(
+                        nodes,
+                        param_node_id,
+                        "parameter",
+                        param_name,
+                        expression=parameter.get("expression"),
+                        role=parameter.get("role"),
+                        unit=parameter.get("unit"),
+                    )
+                    _graph_add_edge(
+                        edges,
+                        edge_keys,
+                        param_node_id,
+                        feature_node_id,
+                        "drivesFeatureParameter",
+                        input_ref.get("confidence") or "high",
+                        role=input_ref.get("role"),
+                    )
+                    for ref in parameter.get("userParameterReferences") or []:
+                        user_node_id = f"userParameter:{ref.get('name')}"
+                        _graph_add_node(
+                            nodes,
+                            user_node_id,
+                            "userParameter",
+                            ref.get("name"),
+                            expression=ref.get("expression"),
+                            unit=ref.get("unit"),
+                        )
+                        _graph_add_edge(
+                            edges,
+                            edge_keys,
+                            user_node_id,
+                            param_node_id,
+                            "referencedByExpression",
+                            "high",
+                        )
+                elif kind == "profileSketch":
+                    sketch_name = input_ref.get("sketchName")
+                    sketch_node_id = f"sketch:{sketch_name}" if sketch_name else None
+                    _graph_add_node(
+                        nodes,
+                        sketch_node_id,
+                        "sketch",
+                        sketch_name,
+                        componentName=input_ref.get("componentName"),
+                    )
+                    _graph_add_edge(
+                        edges,
+                        edge_keys,
+                        sketch_node_id,
+                        feature_node_id,
+                        "providesProfile",
+                        input_ref.get("confidence") or "high",
+                        profileIndex=input_ref.get("profileIndex"),
+                    )
+                elif kind == "projectedGeometry":
+                    source = input_ref.get("source") or {}
+                    token = source.get("entityToken") or source.get("tempId") or source.get("name")
+                    source_node_id = f"source:{token}" if token else None
+                    _graph_add_node(
+                        nodes,
+                        source_node_id,
+                        "projectedSource",
+                        source.get("name") or source.get("bodyName") or token,
+                        sourceKind=source.get("kind"),
+                        objectType=source.get("objectType"),
+                        bodyName=source.get("bodyName"),
+                        componentName=source.get("componentName"),
+                    )
+                    _graph_add_edge(
+                        edges,
+                        edge_keys,
+                        source_node_id,
+                        feature_node_id,
+                        "projectedIntoSketch",
+                        input_ref.get("confidence") or "medium",
+                        curveType=input_ref.get("curveType"),
+                        curveIndex=input_ref.get("curveIndex"),
+                    )
+                    owner = source.get("ownerFeature") or {}
+                    owner_node_id = (
+                        feature_nodes_by_timeline_name.get(owner.get("timelineName"))
+                        or feature_nodes_by_feature_name.get(owner.get("featureName"))
+                    )
+                    if owner_node_id:
+                        _graph_add_edge(
+                            edges,
+                            edge_keys,
+                            owner_node_id,
+                            source_node_id,
+                            "ownsProjectedSource",
+                            "medium",
+                            ownerRelationship=owner.get("relationship"),
+                        )
+            for consumer in report.get("likelyDownstreamConsumers") or []:
+                consumer_node_id = (
+                    feature_nodes_by_timeline_name.get(consumer.get("timelineName"))
+                    or feature_nodes_by_feature_name.get(consumer.get("featureName"))
+                    or _graph_feature_node_id(consumer)
+                )
+                _graph_add_edge(
+                    edges,
+                    edge_keys,
+                    feature_node_id,
+                    consumer_node_id,
+                    "likelyDownstreamConsumer",
+                    consumer.get("confidence") or "low",
+                    reasons=consumer.get("reasons"),
+                )
+
+        return {
+            "result": {
+                "bestEffort": True,
+                "nodeCount": len(nodes),
+                "edgeCount": len(edges),
+                "nodes": list(nodes.values()),
+                "edges": edges,
+                "warnings": warnings,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error getting dependency graph: {e}\n{err}")
+        return {"error": f"Failed to get dependency graph: {str(e)}"}
+
+
 @register_tool("get_sketch_dimensions")
 def get_sketch_dimensions(sketch_name):
     import traceback

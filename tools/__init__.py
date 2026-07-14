@@ -140,6 +140,11 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "get_dependency_graph",
+            "description": "Return a best-effort global dependency graph across timeline features, sketches, parameters, profile sketches, projected geometry, result bodies, and likely downstream consumers.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
             "name": "map_coordinates",
             "description": "Map a 3D point between a sketch's local coordinate system, root model space, and an optional target component/occurrence using Fusion transforms.",
             "inputSchema": {

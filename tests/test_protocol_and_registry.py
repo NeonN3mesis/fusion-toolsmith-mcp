@@ -1048,6 +1048,7 @@ def run(context):
         self.assertIn("get_feature_parameters", tool_names)
         self.assertIn("get_parameter_usage", tool_names)
         self.assertIn("get_feature_dependencies", tool_names)
+        self.assertIn("get_dependency_graph", tool_names)
         self.assertIn("map_coordinates", tool_names)
         self.assertIn("create_sketch", tool_names)
         self.assertIn("draw_line", tool_names)
@@ -2293,6 +2294,85 @@ def run(context):
         self.assertEqual(res["result"]["directInputs"][0]["sketchName"], "SketchA")
         self.assertEqual(res["result"]["likelyDownstreamConsumers"][0]["timelineName"], "CutB")
         self.assertIn("usesResultBodyAsParticipant", res["result"]["likelyDownstreamConsumers"][0]["reasons"])
+
+    def test_get_dependency_graph_links_profile_sketch_and_downstream_feature(self):
+        original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature
+        original_sketch = sys.modules["adsk.fusion"].Sketch
+        user_param = types.SimpleNamespace(name="fixtureDepth", expression="8 mm", value=0.8, unit="cm", comment="Depth")
+        distance_param = types.SimpleNamespace(
+            name="d1",
+            expression="fixtureDepth",
+            value=0.8,
+            unit="cm",
+            objectType="adsk::fusion::ModelParameter",
+        )
+        mock_body = types.SimpleNamespace(name="Body1")
+        mock_sketch = types.SimpleNamespace(
+            name="SketchA",
+            objectType="adsk::fusion::Sketch",
+            parentComponent=types.SimpleNamespace(name="Root"),
+        )
+        mock_profile = types.SimpleNamespace(
+            profileLoops=types.SimpleNamespace(
+                count=1,
+                item=lambda idx: types.SimpleNamespace(
+                    profileCurves=types.SimpleNamespace(
+                        count=1,
+                        item=lambda cidx: types.SimpleNamespace(
+                            sketchEntity=types.SimpleNamespace(parentSketch=mock_sketch)
+                        )
+                    )
+                )
+            )
+        )
+        target_extrude = types.SimpleNamespace(
+            name="ExtrudeA",
+            objectType="adsk::fusion::ExtrudeFeature",
+            extentOne=types.SimpleNamespace(distance=distance_param),
+            extentTwo=None,
+            taperAngle=None,
+            startExtent=types.SimpleNamespace(offset=None),
+            bodies=types.SimpleNamespace(count=1, item=lambda idx: mock_body),
+            participantBodies=types.SimpleNamespace(count=0, item=lambda idx: None),
+            profiles=types.SimpleNamespace(count=1, item=lambda idx: mock_profile),
+        )
+        downstream_extrude = types.SimpleNamespace(
+            name="CutB",
+            objectType="adsk::fusion::ExtrudeFeature",
+            extentOne=None,
+            extentTwo=None,
+            taperAngle=None,
+            startExtent=types.SimpleNamespace(offset=None),
+            participantBodies=types.SimpleNamespace(count=1, item=lambda idx: mock_body),
+            bodies=types.SimpleNamespace(count=0, item=lambda idx: None),
+            profiles=types.SimpleNamespace(count=0, item=lambda idx: None),
+        )
+        items = [
+            types.SimpleNamespace(name="ExtrudeA", index=0, healthState=0, entity=target_extrude),
+            types.SimpleNamespace(name="CutB", index=1, healthState=0, entity=downstream_extrude),
+        ]
+        sys.modules["adsk.fusion"].ExtrudeFeature = types.SimpleNamespace(
+            cast=lambda value: value if value in (target_extrude, downstream_extrude) else None
+        )
+        sys.modules["adsk.fusion"].Sketch = types.SimpleNamespace(cast=lambda value: value if value is mock_sketch else None)
+        try:
+            self.mock_design = types.SimpleNamespace(
+                timeline=types.SimpleNamespace(count=2, item=lambda idx: items[idx]),
+                rootComponent=types.SimpleNamespace(sketches=[mock_sketch], allOccurrences=[]),
+                userParameters=types.SimpleNamespace(itemByName=lambda name: user_param if name == "fixtureDepth" else None),
+            )
+            _fake_app.activeProduct = self.mock_design
+
+            res = self.tools.execute_tool("get_dependency_graph", {})
+        finally:
+            sys.modules["adsk.fusion"].ExtrudeFeature = original_extrude
+            sys.modules["adsk.fusion"].Sketch = original_sketch
+
+        self.assertTrue(res["result"]["bestEffort"])
+        relationships = {(edge["source"], edge["target"], edge["relationship"]) for edge in res["result"]["edges"]}
+        self.assertIn(("sketch:SketchA", "feature:0:ExtrudeA", "providesProfile"), relationships)
+        self.assertIn(("feature:0:ExtrudeA", "feature:1:CutB", "likelyDownstreamConsumer"), relationships)
+        self.assertIn(("userParameter:fixtureDepth", "parameter:d1", "referencedByExpression"), relationships)
 
     def test_get_feature_dependencies_keeps_unresolved_profiles(self):
         original_extrude = sys.modules["adsk.fusion"].ExtrudeFeature
