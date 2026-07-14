@@ -9,7 +9,7 @@ import os
 import sys
 import io
 import traceback
-from . import register_tool
+from . import register_resource, register_tool
 from .inspection import _design_state_snapshot, _health_to_string, _safe_value, compare_design_state, get_active_design, get_feature_dependencies
 
 class FusionScriptExecutionError(Exception):
@@ -49,10 +49,107 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "get_dependency_graph",
     "assess_change_impact",
     "plan_parameterization",
+    "recommend_mcp_workflow",
     "preflight_export",
     "export_asset",
     "create_2d_drawing",
 )
+
+_TOOL_FIRST_POLICY = {
+    "mandatoryFirstStep": "doctor",
+    "resource": "fusion://agent/tool-first-workflow",
+    "principles": [
+        "Use structured FusionMCP tools before raw scripts.",
+        "Inspect live model state before editing existing geometry.",
+        "Run preflight checks before model changes and exports.",
+        "Use run_fusion_script only when no structured tool can safely do the job.",
+    ],
+    "workflows": {
+        "inspect_or_review": {
+            "firstTools": ["doctor", "inspect_design", "get_assembly_tree"],
+            "preferredTools": [
+                "inspect_sketch",
+                "inspect_feature",
+                "get_feature_dependencies",
+                "get_dependency_graph",
+                "capture_view",
+                "validate_model",
+            ],
+        },
+        "parameterize_existing_model": {
+            "firstTools": ["doctor", "inspect_design", "plan_parameterization"],
+            "preferredTools": [
+                "inspect_sketch",
+                "inspect_feature",
+                "get_sketch_parameters",
+                "get_feature_parameters",
+                "get_parameter_usage",
+                "assess_change_impact",
+                "modify_parameters",
+                "edit_sketch_dimension",
+                "set_parameter",
+                "validate_model",
+            ],
+        },
+        "modify_geometry": {
+            "firstTools": ["doctor", "inspect_design", "preflight_model_change"],
+            "preferredTools": [
+                "query_selection",
+                "get_current_selection",
+                "inspect_sketch",
+                "inspect_feature",
+                "assess_change_impact",
+                "map_coordinates",
+                "create_sketch",
+                "draw_line",
+                "draw_rectangle",
+                "draw_circle",
+                "project_geometry",
+                "extrude_feature",
+                "fillet_feature",
+                "chamfer_feature",
+                "combine_bodies",
+                "validate_model",
+            ],
+        },
+        "export": {
+            "firstTools": ["doctor", "inspect_design", "preflight_export"],
+            "preferredTools": ["export_asset", "create_2d_drawing"],
+        },
+        "mcp_runtime_troubleshooting": {
+            "firstTools": ["doctor", "get_runtime_diagnostics"],
+            "preferredTools": ["inspect_design"],
+        },
+    },
+    "rawScriptPolicy": {
+        "tool": "run_fusion_script",
+        "status": "last_resort",
+        "requiredArguments": ["script_intent", "mcp_tool_gap"],
+        "exportPolicy": "Raw Fusion export APIs are blocked by default; use export_asset or create_2d_drawing.",
+    },
+}
+
+
+def _tool_first_policy():
+    return json.loads(json.dumps(_TOOL_FIRST_POLICY))
+
+
+def _classify_workflow(task, intent=None):
+    text = f"{task or ''} {intent or ''}".lower()
+    if any(word in text for word in ("export", "step", "stl", "pdf", "drawing", "print file")):
+        return "export"
+    if any(word in text for word in ("parameter", "parametric", "parameterize", "dimension", "expression")):
+        return "parameterize_existing_model"
+    if any(word in text for word in ("mcp", "server", "connection", "doctor", "runtime", "stale", "token", "taskmanager")):
+        return "mcp_runtime_troubleshooting"
+    if any(word in text for word in ("edit", "modify", "cut", "join", "extrude", "fillet", "chamfer", "sketch", "delete", "suppress", "rebuild", "move")):
+        return "modify_geometry"
+    return "inspect_or_review"
+
+
+@register_resource("fusion://agent/tool-first-workflow")
+def read_tool_first_workflow():
+    return _tool_first_policy()
 
 
 def _server_runtime_status():
@@ -324,6 +421,58 @@ def doctor(required_tools=None, require_active_design=True):
                     "units": _safe_value(lambda: design.unitsManager.defaultLengthUnits) if design else None,
                     "unhealthyTimelineItems": unhealthy_count,
                 },
+            },
+        }
+    }
+
+
+@register_tool("recommend_mcp_workflow")
+def recommend_mcp_workflow(task, intent=None, allow_raw_script=False):
+    """
+    Return the structured FusionMCP workflow an agent should use for a task.
+
+    This is deliberately read-only and policy-shaped: it gives agents a cheap
+    MCP-native planning step before they reach for run_fusion_script.
+    """
+    if not isinstance(task, str) or not task.strip():
+        return {"error": "task must be a non-empty string."}
+    if intent is not None and not isinstance(intent, str):
+        return {"error": "intent must be a string when provided."}
+
+    workflow_name = _classify_workflow(task, intent)
+    policy = _tool_first_policy()
+    workflow = policy["workflows"][workflow_name]
+    raw_policy = policy["rawScriptPolicy"]
+    first_tools = list(workflow["firstTools"])
+    preferred_tools = list(workflow["preferredTools"])
+
+    next_actions = [f"Call {tool}." for tool in first_tools]
+    if workflow_name == "export":
+        next_actions.append("Use export_asset for STEP/STL or create_2d_drawing for drawing PDFs only after preflight passes.")
+    elif workflow_name == "parameterize_existing_model":
+        next_actions.append("Use the plan output to edit existing dimensions/parameters without intentionally changing geometry.")
+    elif workflow_name == "modify_geometry":
+        next_actions.append("Use structured sketch/feature tools and validate_model after the change.")
+
+    return {
+        "result": {
+            "workflow": workflow_name,
+            "task": task.strip(),
+            "intent": intent.strip() if isinstance(intent, str) else None,
+            "requiredFirstTools": first_tools,
+            "preferredTools": preferred_tools,
+            "resource": policy["resource"],
+            "nextActions": next_actions,
+            "rawScript": {
+                "allowed": bool(allow_raw_script),
+                "status": raw_policy["status"],
+                "tool": raw_policy["tool"],
+                "requiredArguments": raw_policy["requiredArguments"],
+                "guidance": (
+                    "Raw scripting is still a last resort. If used, the response must explain why the listed "
+                    "structured tools cannot safely complete the operation."
+                ),
+                "exportPolicy": raw_policy["exportPolicy"],
             },
         }
     }

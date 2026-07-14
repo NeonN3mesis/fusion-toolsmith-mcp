@@ -138,7 +138,7 @@ try {
     $toolsEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
     $toolsResponse = $toolsEvent.data | ConvertFrom-Json
     $toolNames = @($toolsResponse.result.tools | ForEach-Object { $_.name })
-    if ($toolsResponse.id -ne 2 -or -not ($toolNames -contains "inspect_design")) {
+    if ($toolsResponse.id -ne 2 -or -not ($toolNames -contains "inspect_design") -or -not ($toolNames -contains "recommend_mcp_workflow")) {
         throw "tools/list did not return expected tools."
     }
 
@@ -176,6 +176,25 @@ try {
     $doctorResponse = $doctorEvent.data | ConvertFrom-Json
     if ($doctorResponse.id -ne 4 -or $doctorResponse.error -or $doctorResponse.result.isError) {
         throw "doctor tool call failed: $($doctorResponse | ConvertTo-Json -Compress -Depth 20)"
+    }
+
+    $workflowBody = @{
+        jsonrpc = "2.0"
+        id = 5
+        method = "tools/call"
+        params = @{
+            name = "recommend_mcp_workflow"
+            arguments = @{
+                task = "Export this model as STEP."
+            }
+        }
+    } | ConvertTo-Json -Depth 20 -Compress
+    Invoke-RestMethod -Uri $messagesUri -Method Post -Body $workflowBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
+
+    $workflowEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
+    $workflowResponse = $workflowEvent.data | ConvertFrom-Json
+    if ($workflowResponse.id -ne 5 -or $workflowResponse.error -or $workflowResponse.result.isError) {
+        throw "recommend_mcp_workflow tool call failed: $($workflowResponse | ConvertTo-Json -Compress -Depth 20)"
     }
 }
 finally {

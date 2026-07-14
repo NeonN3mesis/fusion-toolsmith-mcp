@@ -240,9 +240,37 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(response["id"], 24)
         text = response["result"]["messages"][0]["content"]["text"]
         self.assertIn("Use structured FusionMCP tools first", text)
+        self.assertIn("doctor", text)
+        self.assertIn("recommend_mcp_workflow", text)
+        self.assertIn("fusion://agent/tool-first-workflow", text)
         self.assertIn("plan_parameterization", text)
         self.assertIn("script_intent", text)
         self.assertIn("mcp_tool_gap", text)
+
+    def test_tool_first_resource_returns_agent_policy(self):
+        resource = self.tools.read_resource("fusion://agent/tool-first-workflow")
+        self.assertEqual(resource["mandatoryFirstStep"], "doctor")
+        self.assertIn("parameterize_existing_model", resource["workflows"])
+        self.assertIn("preflight_export", resource["workflows"]["export"]["firstTools"])
+        self.assertEqual(resource["rawScriptPolicy"]["tool"], "run_fusion_script")
+
+    def test_recommend_mcp_workflow_routes_export_away_from_scripts(self):
+        result = self.tools.execute_tool("recommend_mcp_workflow", {
+            "task": "Export this model as a STEP file."
+        })
+        self.assertEqual(result["result"]["workflow"], "export")
+        self.assertIn("doctor", result["result"]["requiredFirstTools"])
+        self.assertIn("preflight_export", result["result"]["requiredFirstTools"])
+        self.assertIn("export_asset", result["result"]["preferredTools"])
+        self.assertEqual(result["result"]["rawScript"]["status"], "last_resort")
+
+    def test_recommend_mcp_workflow_routes_parameterization_to_planner(self):
+        result = self.tools.execute_tool("recommend_mcp_workflow", {
+            "task": "Make this messy model fully parametric without changing geometry."
+        })
+        self.assertEqual(result["result"]["workflow"], "parameterize_existing_model")
+        self.assertIn("plan_parameterization", result["result"]["requiredFirstTools"])
+        self.assertIn("inspect_feature", result["result"]["preferredTools"])
 
     def test_create_parametric_feature_does_not_simulate_success(self):
         result = self.tools.execute_tool("create_parametric_feature", {"feature_type": "extrude", "parameters": {}})

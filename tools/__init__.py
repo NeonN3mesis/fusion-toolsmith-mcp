@@ -725,6 +725,29 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "recommend_mcp_workflow",
+            "description": "Return the structured FusionMCP workflow an agent should follow for a task before falling back to raw scripting. Use this when deciding whether to inspect, parameterize, modify geometry, troubleshoot runtime state, or export.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "Short description of the user task, e.g. parameterize this model, export STEP, add a cut, troubleshoot MCP."
+                    },
+                    "intent": {
+                        "type": "string",
+                        "description": "Optional more specific intent or planned operation."
+                    },
+                    "allow_raw_script": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Set true only when raw scripting is being considered after checking structured tools."
+                    }
+                },
+                "required": ["task"]
+            }
+        },
+        {
             "name": "preflight_model_change",
             "description": "Run a read-only risk check before a model-changing operation. Checks compute health, timeline health, unsaved document state, optional target feature dependencies, and returns okToProceed/riskLevel.",
             "inputSchema": {
@@ -989,6 +1012,12 @@ def get_resources_schemas():
             "uri": "fusion://design/summary",
             "name": "Design Summary",
             "description": "High-level summary of the active design including units, root component, and timeline health.",
+            "mimeType": "application/json"
+        },
+        {
+            "uri": "fusion://agent/tool-first-workflow",
+            "name": "Tool-First Agent Workflow",
+            "description": "Machine-readable policy for choosing structured FusionMCP tools before raw scripts.",
             "mimeType": "application/json"
         }
     ]

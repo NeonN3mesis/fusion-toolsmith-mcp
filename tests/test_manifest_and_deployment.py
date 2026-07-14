@@ -49,6 +49,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "tools/list",
             "inspect_design",
             "doctor",
+            "recommend_mcp_workflow",
             "Discovery file token was stale",
             "TaskManager is not running",
         ]:
@@ -76,6 +77,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "assess_change_impact",
             "plan_parameterization",
             "doctor",
+            "recommend_mcp_workflow",
             "get_runtime_diagnostics",
             "run_fusion_script",
             "script_intent",

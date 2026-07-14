@@ -162,6 +162,7 @@ try {
         "assess_change_impact",
         "plan_parameterization",
         "doctor",
+        "recommend_mcp_workflow",
         "get_runtime_diagnostics",
         "map_coordinates"
     )) {

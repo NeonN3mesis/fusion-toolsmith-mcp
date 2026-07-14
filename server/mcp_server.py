@@ -85,7 +85,7 @@ PROMPTS = [
     },
     {
         "name": "tool_first_workflow",
-        "description": "Guide the agent to use structured FusionMCP tools before falling back to raw scripts.",
+        "description": "Guide the agent to call doctor and use structured FusionMCP tools before falling back to raw scripts.",
         "arguments": []
     }
 ]
@@ -650,11 +650,13 @@ def handle_prompt_get(req_id, prompt_name, prompt_args):
         )
     elif prompt_name == "tool_first_workflow":
         text = (
-            "Use structured FusionMCP tools first. Start with inspect_design/get_timeline and then choose specific "
-            "tools such as inspect_sketch, inspect_feature, plan_parameterization, map_coordinates, create_sketch, "
-            "draw_line, draw_rectangle, draw_circle, extrude_feature, fillet_feature, chamfer_feature, "
-            "preflight_model_change, validate_model, preflight_export, and export_asset. Only use run_fusion_script "
-            "when no structured tool can safely perform the operation; provide script_intent and mcp_tool_gap."
+            "Use structured FusionMCP tools first. Start by calling doctor and, when task routing is unclear, "
+            "recommend_mcp_workflow or read fusion://agent/tool-first-workflow. Then inspect the model with "
+            "inspect_design/get_timeline and choose specific tools such as inspect_sketch, inspect_feature, "
+            "plan_parameterization, map_coordinates, create_sketch, draw_line, draw_rectangle, draw_circle, "
+            "extrude_feature, fillet_feature, chamfer_feature, preflight_model_change, validate_model, "
+            "preflight_export, and export_asset. Only use run_fusion_script when no structured tool can safely "
+            "perform the operation; provide script_intent and mcp_tool_gap."
         )
     else:
         return make_jsonrpc_error(req_id, -32602, f"Unknown prompt: {prompt_name}")
