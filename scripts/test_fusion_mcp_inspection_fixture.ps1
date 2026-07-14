@@ -116,8 +116,27 @@ $health = Invoke-RestMethod -Uri $healthUri -TimeoutSec $TimeoutSec
 if ($health.status -ne "ok" -or $health.server -ne "fusion-mcp") {
     throw "Unexpected health response: $($health | ConvertTo-Json -Compress)"
 }
+if ($health.PSObject.Properties.Name -contains "task_manager_running" -and -not $health.task_manager_running) {
+    throw "Fusion MCP server is responding, but TaskManager is not running. Stop/start the FusionMCP add-in from Utilities > Add-Ins."
+}
 
 $mcpUri = "{0}://{1}:{2}/sse" -f $baseUri.Scheme, $baseUri.Host, $baseUri.Port
+if ($health.sse_url) {
+    if ($health.sse_url -match '^https?://') {
+        $mcpUri = $health.sse_url
+    }
+    else {
+        $mcpUri = "{0}://{1}:{2}{3}" -f $baseUri.Scheme, $baseUri.Host, $baseUri.Port, $health.sse_url
+    }
+    if ($mcpUri -ne $discovery.sse_url) {
+        @{
+            sse_url = $mcpUri
+            port = $baseUri.Port
+            token = ([Uri]$mcpUri).Query -replace '^\?token=', ''
+        } | ConvertTo-Json -Compress | Set-Content -LiteralPath $DiscoveryPath -Encoding UTF8
+        Write-Warning "Discovery file token was stale; refreshed it from the live /health response."
+    }
+}
 $initBody = New-JsonRpcPayload -Id 1 -Method "initialize" -Params @{}
 $initResponse = Invoke-McpRequest -Uri $mcpUri -SessionId "" -Body $initBody -TimeoutSec $TimeoutSec
 $sessionId = $initResponse.Headers["Mcp-Session-Id"]

@@ -48,6 +48,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "initialize",
             "tools/list",
             "inspect_design",
+            "Discovery file token was stale",
+            "TaskManager is not running",
         ]:
             self.assertIn(text, script)
 
@@ -76,6 +78,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "run_fusion_script",
             "script_intent",
             "mcp_tool_gap",
+            "Discovery file token was stale",
+            "TaskManager is not running",
             "KeepFixtureDocument",
             "doc.close(False)",
         ]:

@@ -275,7 +275,9 @@ class MCPServerHandler(BaseHTTPRequestHandler):
                 "version": "1.0.0",
                 "transport": "sse",
                 "sse_url": f"/sse?token={auth_token}",
-                "active_sessions": active_sessions
+                "active_sessions": active_sessions,
+                "task_manager_running": TaskManager.is_running(),
+                "pending_tasks": TaskManager.get_pending_task_count(),
             })
             return
 

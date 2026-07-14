@@ -787,6 +787,8 @@ def run(context):
             thread.join(timeout=2)
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["server"], "fusion-mcp")
+        self.assertIn("task_manager_running", payload)
+        self.assertIn("pending_tasks", payload)
 
     def test_http_messages_initialize_enqueues_response(self):
         session_id = "http-init-session"

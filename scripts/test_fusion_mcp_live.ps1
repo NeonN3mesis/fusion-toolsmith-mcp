@@ -73,8 +73,29 @@ $health = Invoke-RestMethod -Uri $healthUri -TimeoutSec $TimeoutSec
 if ($health.status -ne "ok" -or $health.server -ne "fusion-mcp") {
     throw "Unexpected health response: $($health | ConvertTo-Json -Compress)"
 }
+if ($health.PSObject.Properties.Name -contains "task_manager_running" -and -not $health.task_manager_running) {
+    throw "Fusion MCP server is responding, but TaskManager is not running. Stop/start the FusionMCP add-in from Utilities > Add-Ins."
+}
 
-$request = [System.Net.HttpWebRequest]::Create($discovery.sse_url)
+$effectiveSseUrl = $discovery.sse_url
+if ($health.sse_url) {
+    if ($health.sse_url -match '^https?://') {
+        $effectiveSseUrl = $health.sse_url
+    }
+    else {
+        $effectiveSseUrl = "{0}://{1}:{2}{3}" -f $baseUri.Scheme, $baseUri.Host, $baseUri.Port, $health.sse_url
+    }
+    if ($effectiveSseUrl -ne $discovery.sse_url) {
+        @{
+            sse_url = $effectiveSseUrl
+            port = $baseUri.Port
+            token = ([Uri]$effectiveSseUrl).Query -replace '^\?token=', ''
+        } | ConvertTo-Json -Compress | Set-Content -LiteralPath $DiscoveryPath -Encoding UTF8
+        Write-Warning "Discovery file token was stale; refreshed it from the live /health response."
+    }
+}
+
+$request = [System.Net.HttpWebRequest]::Create($effectiveSseUrl)
 $request.Method = "GET"
 $request.Accept = "text/event-stream"
 $request.Timeout = $TimeoutSec * 1000
@@ -119,6 +140,23 @@ try {
     $toolNames = @($toolsResponse.result.tools | ForEach-Object { $_.name })
     if ($toolsResponse.id -ne 2 -or -not ($toolNames -contains "inspect_design")) {
         throw "tools/list did not return expected tools."
+    }
+
+    $inspectBody = @{
+        jsonrpc = "2.0"
+        id = 3
+        method = "tools/call"
+        params = @{
+            name = "inspect_design"
+            arguments = @{}
+        }
+    } | ConvertTo-Json -Depth 20 -Compress
+    Invoke-RestMethod -Uri $messagesUri -Method Post -Body $inspectBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
+
+    $inspectEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
+    $inspectResponse = $inspectEvent.data | ConvertFrom-Json
+    if ($inspectResponse.id -ne 3 -or $inspectResponse.error -or $inspectResponse.result.isError) {
+        throw "inspect_design tool call failed: $($inspectResponse | ConvertTo-Json -Compress -Depth 20)"
     }
 }
 finally {
