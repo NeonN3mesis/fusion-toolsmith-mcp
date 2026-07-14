@@ -855,8 +855,10 @@ def _entity_ref_to_dict(entity):
     vertex = adsk.fusion.BRepVertex.cast(entity)
     sketch_entity = adsk.fusion.SketchEntity.cast(entity)
     occurrence = adsk.fusion.Occurrence.cast(entity)
+    object_type = _safe_value(lambda: entity.objectType, "")
+    object_type_lower = object_type.lower() if isinstance(object_type, str) else ""
     data = {
-        "objectType": _safe_value(lambda: entity.objectType),
+        "objectType": object_type,
         "name": _safe_value(lambda: entity.name),
         "entityToken": _safe_value(lambda: entity.entityToken),
         "tempId": _safe_value(lambda: entity.tempId),
@@ -868,24 +870,75 @@ def _entity_ref_to_dict(entity):
             "bodyName": _safe_value(lambda: body.name),
             "componentName": _safe_value(lambda: body.parentComponent.name),
         })
+        owner = _body_owner_feature(body)
+        if owner:
+            data["ownerFeature"] = owner
     elif face:
         data.update({
             "kind": "BRepFace",
             "bodyName": _safe_value(lambda: face.body.name),
             "componentName": _safe_value(lambda: face.body.parentComponent.name),
         })
+        owner = _body_owner_feature(_safe_value(lambda: face.body))
+        if owner:
+            data["ownerFeature"] = owner
     elif edge:
         data.update({
             "kind": "BRepEdge",
             "bodyName": _safe_value(lambda: edge.body.name),
             "componentName": _safe_value(lambda: edge.body.parentComponent.name),
         })
+        owner = _body_owner_feature(_safe_value(lambda: edge.body))
+        if owner:
+            data["ownerFeature"] = owner
     elif vertex:
         data.update({
             "kind": "BRepVertex",
             "bodyName": _safe_value(lambda: vertex.body.name),
             "componentName": _safe_value(lambda: vertex.body.parentComponent.name),
         })
+        owner = _body_owner_feature(_safe_value(lambda: vertex.body))
+        if owner:
+            data["ownerFeature"] = owner
+    elif "brepbody" in object_type_lower:
+        data.update({
+            "kind": "BRepBody",
+            "bodyName": _safe_value(lambda: entity.name),
+            "componentName": _safe_value(lambda: entity.parentComponent.name),
+        })
+        owner = _body_owner_feature(entity)
+        if owner:
+            data["ownerFeature"] = owner
+    elif "brepface" in object_type_lower:
+        source_body = _safe_value(lambda: entity.body)
+        data.update({
+            "kind": "BRepFace",
+            "bodyName": _safe_value(lambda: source_body.name),
+            "componentName": _safe_value(lambda: source_body.parentComponent.name),
+        })
+        owner = _body_owner_feature(source_body)
+        if owner:
+            data["ownerFeature"] = owner
+    elif "brepedge" in object_type_lower:
+        source_body = _safe_value(lambda: entity.body)
+        data.update({
+            "kind": "BRepEdge",
+            "bodyName": _safe_value(lambda: source_body.name),
+            "componentName": _safe_value(lambda: source_body.parentComponent.name),
+        })
+        owner = _body_owner_feature(source_body)
+        if owner:
+            data["ownerFeature"] = owner
+    elif "brepvertex" in object_type_lower:
+        source_body = _safe_value(lambda: entity.body)
+        data.update({
+            "kind": "BRepVertex",
+            "bodyName": _safe_value(lambda: source_body.name),
+            "componentName": _safe_value(lambda: source_body.parentComponent.name),
+        })
+        owner = _body_owner_feature(source_body)
+        if owner:
+            data["ownerFeature"] = owner
     elif sketch_entity:
         data.update({
             "kind": "SketchEntity",
@@ -899,6 +952,30 @@ def _entity_ref_to_dict(entity):
             "componentName": _safe_value(lambda: occurrence.component.name),
         })
     return {k: v for k, v in data.items() if v is not None}
+
+
+def _body_owner_feature(body):
+    if not body:
+        return None
+    body_name = _safe_value(lambda: body.name)
+    design = _safe_value(get_active_design)
+    timeline = _safe_value(lambda: design.timeline) if design else None
+    if not timeline:
+        return None
+    for i in range(_safe_value(lambda: timeline.count, 0) or 0):
+        item = _safe_value(lambda i=i: timeline.item(i))
+        feature = _safe_value(lambda item=item: item.entity)
+        for attr, relationship in (("bodies", "resultBody"), ("participantBodies", "participantBody")):
+            for candidate in _collection_items(_safe_value(lambda attr=attr, feature=feature: getattr(feature, attr))):
+                if candidate is body or (body_name and _safe_value(lambda candidate=candidate: candidate.name) == body_name):
+                    return {
+                        "timelineName": _safe_value(lambda item=item: item.name),
+                        "timelineIndex": _safe_value(lambda item=item: item.index),
+                        "featureName": _safe_value(lambda feature=feature: feature.name),
+                        "objectType": _safe_value(lambda feature=feature: feature.objectType),
+                        "relationship": relationship,
+                    }
+    return None
 
 
 def _parameter_to_dict(param, role=None, owner=None):
@@ -1203,6 +1280,53 @@ def get_sketch_parameters(sketch_name):
             "dimensionCount": len(dimensions),
             "parameters": parameters,
             "dimensions": dimensions,
+        }
+    }
+
+
+@register_tool("get_projected_geometry_sources")
+def get_projected_geometry_sources(sketch_name):
+    inspected = inspect_sketch(sketch_name)
+    if "error" in inspected:
+        return inspected
+    result = inspected.get("result") or {}
+    projected = []
+    for group_name, curves in (result.get("curves") or {}).items():
+        for curve in curves or []:
+            source = curve.get("source")
+            if not source and not curve.get("isReference"):
+                continue
+            projected.append({
+                "kind": "curve",
+                "curveGroup": group_name,
+                "curveType": curve.get("curveType"),
+                "curveIndex": curve.get("index"),
+                "curveName": curve.get("name"),
+                "curveEntityToken": curve.get("entityToken"),
+                "isReference": curve.get("isReference"),
+                "isConstruction": curve.get("isConstruction"),
+                "sourceAvailable": bool(source),
+                "source": source,
+            })
+    for point in result.get("points") or []:
+        source = point.get("source")
+        if not source and not point.get("isReference"):
+            continue
+        projected.append({
+            "kind": "point",
+            "pointIndex": point.get("index"),
+            "pointName": point.get("name"),
+            "pointEntityToken": point.get("entityToken"),
+            "isReference": point.get("isReference"),
+            "sourceAvailable": bool(source),
+            "source": source,
+        })
+    return {
+        "result": {
+            "sketchName": result.get("name"),
+            "componentName": result.get("componentName"),
+            "projectedCount": len(projected),
+            "projected": projected,
         }
     }
 

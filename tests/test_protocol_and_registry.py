@@ -1042,6 +1042,7 @@ def run(context):
         self.assertIn("capture_design_state", tool_names)
         self.assertIn("compare_design_state", tool_names)
         self.assertIn("inspect_sketch", tool_names)
+        self.assertIn("get_projected_geometry_sources", tool_names)
         self.assertIn("inspect_feature", tool_names)
         self.assertIn("get_sketch_parameters", tool_names)
         self.assertIn("get_feature_parameters", tool_names)
@@ -1759,10 +1760,17 @@ def run(context):
         user_param = types.SimpleNamespace(name="fixtureWidth", expression="10 cm", value=10.0, unit="cm", comment="Width control")
         mock_param = types.SimpleNamespace(name="d1", expression="fixtureWidth", value=10.0, unit="cm")
         mock_dim = types.SimpleNamespace(name="LengthDim", parameter=mock_param, objectType="SketchLinearDimension")
+        source_body = types.SimpleNamespace(
+            name="SourceBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="body-token",
+            parentComponent=types.SimpleNamespace(name="Root"),
+        )
         source_edge = types.SimpleNamespace(
             name="SourceEdge",
             objectType="adsk::fusion::BRepEdge",
             entityToken="edge-token",
+            body=source_body,
         )
         mock_line = types.SimpleNamespace(
             name="Line1",
@@ -1809,6 +1817,18 @@ def run(context):
         self.mock_design = types.SimpleNamespace(
             rootComponent=types.SimpleNamespace(sketches=[mock_sketch], allOccurrences=[]),
             userParameters=types.SimpleNamespace(itemByName=lambda name: user_param if name == "fixtureWidth" else None),
+            timeline=types.SimpleNamespace(
+                count=1,
+                item=lambda idx: types.SimpleNamespace(
+                    name="SourceExtrude",
+                    index=3,
+                    entity=types.SimpleNamespace(
+                        name="SourceExtrude",
+                        objectType="adsk::fusion::ExtrudeFeature",
+                        bodies=types.SimpleNamespace(count=1, item=lambda bidx: source_body),
+                    ),
+                ),
+            ),
         )
         _fake_app.activeProduct = self.mock_design
 
@@ -1821,6 +1841,93 @@ def run(context):
         self.assertEqual(result["parameters"][0]["name"], "d1")
         self.assertEqual(result["parameters"][0]["userParameterReferences"][0]["name"], "fixtureWidth")
         self.assertEqual(result["curves"]["lines"][0]["source"]["entityToken"], "edge-token")
+        self.assertEqual(result["curves"]["lines"][0]["source"]["bodyName"], "SourceBody")
+        self.assertEqual(result["curves"]["lines"][0]["source"]["ownerFeature"]["featureName"], "SourceExtrude")
+
+    def test_get_projected_geometry_sources_returns_source_owner_feature(self):
+        point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        vector = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
+        source_body = types.SimpleNamespace(
+            name="SourceBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="body-token",
+            parentComponent=types.SimpleNamespace(name="Root"),
+        )
+        source_edge = types.SimpleNamespace(
+            name="SourceEdge",
+            objectType="adsk::fusion::BRepEdge",
+            entityToken="edge-token",
+            body=source_body,
+        )
+        mock_line = types.SimpleNamespace(
+            name="ProjectedLine",
+            objectType="adsk::fusion::SketchLine",
+            isConstruction=False,
+            isReference=True,
+            entityToken="line-token",
+            referencedEntity=source_edge,
+            startSketchPoint=types.SimpleNamespace(geometry=point(0, 0, 0)),
+            endSketchPoint=types.SimpleNamespace(geometry=point(1, 0, 0)),
+            geometry=types.SimpleNamespace(startPoint=point(0, 0, 0), endPoint=point(1, 0, 0)),
+            worldGeometry=types.SimpleNamespace(startPoint=point(10, 20, 30), endPoint=point(11, 20, 30)),
+            length=1.0,
+        )
+        mock_sketch = types.SimpleNamespace(
+            name="ProjectSketch",
+            objectType="adsk::fusion::Sketch",
+            parentComponent=types.SimpleNamespace(name="Root"),
+            isVisible=True,
+            isFullyConstrained=False,
+            referencePlane=types.SimpleNamespace(
+                name="XY",
+                objectType="adsk::fusion::ConstructionPlane",
+                geometry=types.SimpleNamespace(
+                    origin=point(0, 0, 0),
+                    uDirection=vector(1, 0, 0),
+                    vDirection=vector(0, 1, 0),
+                    normal=vector(0, 0, 1),
+                ),
+            ),
+            sketchPoints=types.SimpleNamespace(count=0, item=lambda idx: None),
+            sketchDimensions=types.SimpleNamespace(count=0, item=lambda idx: None),
+            geometricConstraints=types.SimpleNamespace(count=0, item=lambda idx: None),
+            sketchCurves=types.SimpleNamespace(
+                sketchLines=types.SimpleNamespace(count=1, item=lambda idx: mock_line),
+                sketchCircles=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchArcs=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchEllipses=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchFittedSplines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchFixedSplines=types.SimpleNamespace(count=0, item=lambda idx: None),
+                sketchConicCurves=types.SimpleNamespace(count=0, item=lambda idx: None),
+            ),
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(sketches=[mock_sketch], allOccurrences=[]),
+            userParameters=types.SimpleNamespace(itemByName=lambda name: None),
+            timeline=types.SimpleNamespace(
+                count=1,
+                item=lambda idx: types.SimpleNamespace(
+                    name="SourceExtrude",
+                    index=3,
+                    entity=types.SimpleNamespace(
+                        name="SourceExtrude",
+                        objectType="adsk::fusion::ExtrudeFeature",
+                        bodies=types.SimpleNamespace(count=1, item=lambda bidx: source_body),
+                    ),
+                ),
+            ),
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("get_projected_geometry_sources", {"sketch_name": "ProjectSketch"})
+
+        self.assertEqual(res["result"]["projectedCount"], 1)
+        projected = res["result"]["projected"][0]
+        self.assertEqual(projected["curveName"], "ProjectedLine")
+        self.assertTrue(projected["sourceAvailable"])
+        self.assertEqual(projected["source"]["kind"], "BRepEdge")
+        self.assertEqual(projected["source"]["bodyName"], "SourceBody")
+        self.assertEqual(projected["source"]["ownerFeature"]["timelineName"], "SourceExtrude")
 
     def test_get_sketch_parameters_returns_narrow_parameter_payload(self):
         point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)

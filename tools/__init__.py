@@ -74,6 +74,17 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "get_projected_geometry_sources",
+            "description": "Return projected/reference sketch curves and points with source entity, source body/component, and inferred owner feature metadata when Fusion exposes it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "Exact sketch name whose projected/reference geometry should be inspected."}
+                },
+                "required": ["sketch_name"]
+            }
+        },
+        {
             "name": "inspect_feature",
             "description": "Return structured timeline feature details including operation, extent definitions, health state, participant bodies, result bodies, feature model parameters, and referenced user parameters.",
             "inputSchema": {
