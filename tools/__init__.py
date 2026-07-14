@@ -665,6 +665,22 @@ def get_tool_schemas():
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
+            "name": "get_runtime_diagnostics",
+            "description": "Report live FusionMCP runtime diagnostics including tool schema/registry counts, missing required tools, loaded module paths, redacted discovery data, manifest opt-in state, and whether an add-in restart is recommended.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "required_tools": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional tool name or list of tool names expected to be live. Omit for the default critical FusionMCP tool set."
+                    }
+                }
+            }
+        },
+        {
             "name": "preflight_model_change",
             "description": "Run a read-only risk check before a model-changing operation. Checks compute health, timeline health, unsaved document state, optional target feature dependencies, and returns okToProceed/riskLevel.",
             "inputSchema": {

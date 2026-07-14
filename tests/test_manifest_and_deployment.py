@@ -71,6 +71,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "get_feature_dependencies",
             "get_dependency_graph",
             "assess_change_impact",
+            "get_runtime_diagnostics",
             "run_fusion_script",
             "KeepFixtureDocument",
             "doc.close(False)",

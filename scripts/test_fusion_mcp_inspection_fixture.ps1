@@ -141,6 +141,7 @@ try {
         "get_feature_dependencies",
         "get_dependency_graph",
         "assess_change_impact",
+        "get_runtime_diagnostics",
         "map_coordinates"
     )) {
         Assert-True -Condition ($toolNames -contains $requiredTool) -Message "Required tool '$requiredTool' was not advertised."

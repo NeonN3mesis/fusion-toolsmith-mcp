@@ -1062,6 +1062,38 @@ def run(context):
         self.assertIn("chamfer_feature", tool_names)
         self.assertIn("preflight_model_change", tool_names)
         self.assertIn("revert_active_document", tool_names)
+        self.assertIn("get_runtime_diagnostics", tool_names)
+
+    def test_get_runtime_diagnostics_reports_missing_required_tools_and_redacts_token(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_expanduser = utilities.os.path.expanduser
+        discovery_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(discovery_dir.cleanup)
+        discovery_path = os.path.join(discovery_dir.name, ".fusion_mcp.json")
+        with open(discovery_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "sse_url": "http://127.0.0.1:9100/sse?token=secret-token",
+                "port": 9100,
+                "token": "secret-token",
+            }, f)
+
+        utilities.os.path.expanduser = (
+            lambda path: discovery_dir.name if path == "~" else original_expanduser(path)
+        )
+        try:
+            res = self.tools.execute_tool("get_runtime_diagnostics", {
+                "required_tools": ["inspect_design", "missing_tool"],
+            })
+        finally:
+            utilities.os.path.expanduser = original_expanduser
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertIn("missing_tool", result["requiredTools"]["missingFromSchema"])
+        self.assertIn("missing_tool", result["requiredTools"]["missingFromRegistry"])
+        self.assertTrue(result["restartRecommended"])
+        self.assertEqual(result["runtime"]["discovery"]["payload"]["token"], "<redacted>")
+        self.assertIn("token=<redacted>", result["runtime"]["discovery"]["payload"]["sse_url"])
 
     def test_capture_design_state_returns_structural_snapshot(self):
         mock_param = types.SimpleNamespace(name="screenWidth", expression="100 mm", value=10.0, unit="mm")

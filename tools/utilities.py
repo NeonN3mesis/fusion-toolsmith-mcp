@@ -35,10 +35,147 @@ _SCRIPT_EXPORT_MARKERS = (
     "exportmanager.execute",
 )
 
+_DEFAULT_RUNTIME_REQUIRED_TOOLS = (
+    "run_fusion_script",
+    "inspect_design",
+    "inspect_sketch",
+    "inspect_feature",
+    "get_sketch_parameters",
+    "get_feature_parameters",
+    "get_parameter_usage",
+    "get_projected_geometry_sources",
+    "get_feature_dependencies",
+    "get_dependency_graph",
+    "assess_change_impact",
+    "preflight_export",
+    "export_asset",
+    "create_2d_drawing",
+)
+
 
 def _script_looks_like_export(script):
     normalized = script.lower()
     return any(marker in normalized for marker in _SCRIPT_EXPORT_MARKERS)
+
+
+def _redact_discovery_payload(payload):
+    if not isinstance(payload, dict):
+        return None
+    redacted = {}
+    for key, value in payload.items():
+        if key == "token":
+            redacted[key] = "<redacted>"
+        elif key == "sse_url" and isinstance(value, str):
+            redacted[key] = value.split("?token=", 1)[0] + "?token=<redacted>" if "?token=" in value else value
+        else:
+            redacted[key] = value
+    return redacted
+
+
+@register_tool("get_runtime_diagnostics")
+def get_runtime_diagnostics(required_tools=None):
+    if required_tools is None:
+        required_tools = list(_DEFAULT_RUNTIME_REQUIRED_TOOLS)
+    elif isinstance(required_tools, str):
+        required_tools = [required_tools]
+    elif not isinstance(required_tools, list):
+        return {"error": "required_tools must be a string, list of strings, or omitted."}
+    required_tools = [tool for tool in required_tools if isinstance(tool, str) and tool.strip()]
+
+    from . import get_tool_schemas, tools_registry
+
+    schema_names = sorted({schema.get("name") for schema in get_tool_schemas() if schema.get("name")})
+    registry_names = sorted(tools_registry.keys())
+    schema_set = set(schema_names)
+    registry_set = set(registry_names)
+    required_missing_from_schema = [tool for tool in required_tools if tool not in schema_set]
+    required_missing_from_registry = [tool for tool in required_tools if tool not in registry_set]
+    schema_not_registered = sorted(schema_set - registry_set)
+    registered_not_in_schema = sorted(registry_set - schema_set)
+
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    manifest_path = os.path.join(root_dir, "FusionMCP.manifest")
+    manifest = None
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        except Exception as e:
+            manifest = {"error": str(e)}
+
+    discovery_path = os.path.join(os.path.expanduser("~"), ".fusion_mcp.json")
+    discovery = {"path": discovery_path, "exists": os.path.exists(discovery_path)}
+    if discovery["exists"]:
+        try:
+            with open(discovery_path, "r", encoding="utf-8") as handle:
+                discovery["payload"] = _redact_discovery_payload(json.load(handle))
+        except Exception as e:
+            discovery["error"] = str(e)
+
+    module_names = [
+        __package__,
+        __name__,
+        f"{__package__}.inspection" if __package__ else None,
+        f"{__package__}.features" if __package__ else None,
+        f"{__package__}.parametric" if __package__ else None,
+        f"{__package__}.sketching" if __package__ else None,
+    ]
+    modules = []
+    for module_name in module_names:
+        module = sys.modules.get(module_name) if module_name else None
+        if module:
+            modules.append({
+                "name": module_name,
+                "file": _safe_value(lambda module=module: module.__file__),
+            })
+
+    restart_reasons = []
+    if required_missing_from_schema or required_missing_from_registry:
+        restart_reasons.append("One or more required tools are missing from the live schema or registry.")
+    if schema_not_registered:
+        restart_reasons.append("Some schema-advertised tools are not registered for execution.")
+    if registered_not_in_schema:
+        restart_reasons.append("Some registered tools are not advertised in the schema.")
+
+    app = adsk.core.Application.get()
+    active_doc = _safe_value(lambda: app.activeDocument)
+    return {
+        "result": {
+            "toolCounts": {
+                "schema": len(schema_names),
+                "registry": len(registry_names),
+            },
+            "requiredTools": {
+                "requested": required_tools,
+                "missingFromSchema": required_missing_from_schema,
+                "missingFromRegistry": required_missing_from_registry,
+            },
+            "registrySchemaMismatch": {
+                "schemaNotRegistered": schema_not_registered,
+                "registeredNotInSchema": registered_not_in_schema,
+            },
+            "runtime": {
+                "rootDir": root_dir,
+                "utilitiesFile": __file__,
+                "modules": modules,
+                "manifest": {
+                    "path": manifest_path,
+                    "exists": os.path.exists(manifest_path),
+                    "runOnStartup": manifest.get("runOnStartup") if isinstance(manifest, dict) else None,
+                    "name": manifest.get("name") if isinstance(manifest, dict) else None,
+                    "type": manifest.get("type") if isinstance(manifest, dict) else None,
+                    "error": manifest.get("error") if isinstance(manifest, dict) else None,
+                },
+                "discovery": discovery,
+                "activeDocument": {
+                    "name": _safe_value(lambda: active_doc.name),
+                    "isModified": _safe_value(lambda: active_doc.isModified),
+                } if active_doc else None,
+            },
+            "restartRecommended": bool(restart_reasons),
+            "restartReasons": restart_reasons,
+        }
+    }
 
 
 @register_tool("run_fusion_script")
