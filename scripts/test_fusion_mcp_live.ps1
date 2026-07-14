@@ -158,6 +158,25 @@ try {
     if ($inspectResponse.id -ne 3 -or $inspectResponse.error -or $inspectResponse.result.isError) {
         throw "inspect_design tool call failed: $($inspectResponse | ConvertTo-Json -Compress -Depth 20)"
     }
+
+    $doctorBody = @{
+        jsonrpc = "2.0"
+        id = 4
+        method = "tools/call"
+        params = @{
+            name = "doctor"
+            arguments = @{
+                require_active_design = $false
+            }
+        }
+    } | ConvertTo-Json -Depth 20 -Compress
+    Invoke-RestMethod -Uri $messagesUri -Method Post -Body $doctorBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
+
+    $doctorEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
+    $doctorResponse = $doctorEvent.data | ConvertFrom-Json
+    if ($doctorResponse.id -ne 4 -or $doctorResponse.error -or $doctorResponse.result.isError) {
+        throw "doctor tool call failed: $($doctorResponse | ConvertTo-Json -Compress -Depth 20)"
+    }
 }
 finally {
     $response.Close()

@@ -48,6 +48,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "initialize",
             "tools/list",
             "inspect_design",
+            "doctor",
             "Discovery file token was stale",
             "TaskManager is not running",
         ]:
@@ -74,6 +75,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "get_dependency_graph",
             "assess_change_impact",
             "plan_parameterization",
+            "doctor",
             "get_runtime_diagnostics",
             "run_fusion_script",
             "script_intent",

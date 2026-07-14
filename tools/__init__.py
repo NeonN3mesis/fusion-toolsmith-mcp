@@ -704,6 +704,27 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "doctor",
+            "description": "Run a read-only FusionMCP readiness check and return a clear ok/warning/error verdict for runtime health, TaskManager state, discovery token freshness, schema/registry alignment, active design availability, and timeline health.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "required_tools": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional tool name or list of critical tools expected to be live. Omit for the default FusionMCP readiness set."
+                    },
+                    "require_active_design": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "If true, missing active Fusion design is a blocking readiness problem."
+                    }
+                }
+            }
+        },
+        {
             "name": "preflight_model_change",
             "description": "Run a read-only risk check before a model-changing operation. Checks compute health, timeline health, unsaved document state, optional target feature dependencies, and returns okToProceed/riskLevel.",
             "inputSchema": {

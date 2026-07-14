@@ -36,6 +36,7 @@ _SCRIPT_EXPORT_MARKERS = (
 )
 
 _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
+    "doctor",
     "run_fusion_script",
     "inspect_design",
     "inspect_sketch",
@@ -52,6 +53,41 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "export_asset",
     "create_2d_drawing",
 )
+
+
+def _server_runtime_status():
+    try:
+        try:
+            from ..server import mcp_server
+            from ..server.task_manager import TaskManager
+        except Exception:
+            import server.mcp_server as mcp_server
+            from server.task_manager import TaskManager
+        return {
+            "available": True,
+            "authToken": _safe_value(lambda: mcp_server.auth_token),
+            "defaultPort": _safe_value(lambda: mcp_server.DEFAULT_PORT),
+            "serverRunning": _safe_value(lambda: mcp_server.server_instance is not None, False),
+            "taskManagerRunning": _safe_value(lambda: TaskManager.is_running(), False),
+            "pendingTasks": _safe_value(lambda: TaskManager.get_pending_task_count()),
+        }
+    except Exception as e:
+        return {
+            "available": False,
+            "error": str(e),
+        }
+
+
+def _read_discovery_payload():
+    discovery_path = os.path.join(os.path.expanduser("~"), ".fusion_mcp.json")
+    discovery = {"path": discovery_path, "exists": os.path.exists(discovery_path)}
+    if discovery["exists"]:
+        try:
+            with open(discovery_path, "r", encoding="utf-8") as handle:
+                discovery["payload"] = json.load(handle)
+        except Exception as e:
+            discovery["error"] = str(e)
+    return discovery
 
 
 def _script_looks_like_export(script):
@@ -104,14 +140,9 @@ def get_runtime_diagnostics(required_tools=None):
         except Exception as e:
             manifest = {"error": str(e)}
 
-    discovery_path = os.path.join(os.path.expanduser("~"), ".fusion_mcp.json")
-    discovery = {"path": discovery_path, "exists": os.path.exists(discovery_path)}
-    if discovery["exists"]:
-        try:
-            with open(discovery_path, "r", encoding="utf-8") as handle:
-                discovery["payload"] = _redact_discovery_payload(json.load(handle))
-        except Exception as e:
-            discovery["error"] = str(e)
+    discovery = _read_discovery_payload()
+    if "payload" in discovery:
+        discovery["payload"] = _redact_discovery_payload(discovery.get("payload"))
 
     module_names = [
         __package__,
@@ -175,6 +206,125 @@ def get_runtime_diagnostics(required_tools=None):
             },
             "restartRecommended": bool(restart_reasons),
             "restartReasons": restart_reasons,
+        }
+}
+
+
+@register_tool("doctor")
+def doctor(required_tools=None, require_active_design=True):
+    """
+    Return a single read-only readiness report for FusionMCP.
+
+    This is intentionally broader than get_runtime_diagnostics: it turns raw
+    runtime facts into a verdict, blocking reasons, and concrete next actions.
+    """
+    if required_tools is None:
+        required_tools = list(_DEFAULT_RUNTIME_REQUIRED_TOOLS)
+    elif isinstance(required_tools, str):
+        required_tools = [required_tools]
+    elif not isinstance(required_tools, list):
+        return {"error": "required_tools must be a string, list of strings, or omitted."}
+    required_tools = [tool for tool in required_tools if isinstance(tool, str) and tool.strip()]
+
+    diagnostics = get_runtime_diagnostics(required_tools=required_tools)
+    if "error" in diagnostics:
+        return diagnostics
+    runtime_report = diagnostics.get("result") or {}
+    server_status = _server_runtime_status()
+    discovery = _read_discovery_payload()
+    discovery_payload = discovery.get("payload") if isinstance(discovery.get("payload"), dict) else {}
+    auth_token = server_status.get("authToken")
+    discovery_token = discovery_payload.get("token")
+    token_matches = bool(auth_token and discovery_token and auth_token == discovery_token)
+
+    app = _safe_value(lambda: adsk.core.Application.get())
+    active_doc = _safe_value(lambda: app.activeDocument) if app else None
+    design = _safe_value(get_active_design)
+    snapshot = _safe_value(lambda: _design_state_snapshot(include_selections=False)) if design else None
+    unhealthy_count = _safe_value(lambda: snapshot["counts"]["unhealthyTimelineItems"], 0) if snapshot else None
+
+    blocking_reasons = []
+    warnings = []
+    actions = []
+
+    if runtime_report.get("requiredTools", {}).get("missingFromSchema"):
+        blocking_reasons.append("One or more required tools are missing from the advertised schema.")
+        actions.append("Restart/reload the FusionMCP add-in after reinstalling the current code.")
+    if runtime_report.get("requiredTools", {}).get("missingFromRegistry"):
+        blocking_reasons.append("One or more required tools are missing from the execution registry.")
+        actions.append("Restart/reload the FusionMCP add-in and rerun doctor.")
+    mismatch = runtime_report.get("registrySchemaMismatch") or {}
+    if mismatch.get("schemaNotRegistered") or mismatch.get("registeredNotInSchema"):
+        blocking_reasons.append("Tool schema and execution registry are out of sync.")
+        actions.append("Run the unit suite and restart/reload the FusionMCP add-in.")
+
+    if not server_status.get("available"):
+        warnings.append("Server runtime status could not be inspected from this tool context.")
+    else:
+        if not server_status.get("serverRunning"):
+            warnings.append("Server instance is not marked as running in-process.")
+        if not server_status.get("taskManagerRunning"):
+            blocking_reasons.append("TaskManager is not running; tools/call cannot execute Fusion API work.")
+            actions.append("Stop/start the FusionMCP add-in from Utilities > Add-Ins.")
+        if server_status.get("pendingTasks"):
+            warnings.append(f"TaskManager has {server_status.get('pendingTasks')} pending task(s).")
+
+    if not discovery.get("exists"):
+        blocking_reasons.append("Discovery file is missing.")
+        actions.append("Stop/start the FusionMCP add-in so it writes a fresh .fusion_mcp.json.")
+    elif discovery.get("error"):
+        blocking_reasons.append("Discovery file could not be read.")
+        actions.append("Delete the stale discovery file and stop/start the FusionMCP add-in.")
+    elif not token_matches:
+        blocking_reasons.append("Discovery token does not match the live server token.")
+        actions.append("Refresh discovery from /health or stop/start the FusionMCP add-in.")
+
+    if require_active_design and not design:
+        blocking_reasons.append("No active Fusion design is available.")
+        actions.append("Open or activate a Fusion design document before running model tools.")
+    elif not require_active_design and not design:
+        warnings.append("No active Fusion design is available.")
+
+    if unhealthy_count:
+        warnings.append(f"Active design has {unhealthy_count} unhealthy timeline item(s).")
+        actions.append("Run preflight_model_change or inspect timeline health before mutating/exporting.")
+
+    status = "error" if blocking_reasons else ("warning" if warnings else "ok")
+    if not actions and status == "ok":
+        actions.append("FusionMCP is ready for structured tool use.")
+
+    redacted_discovery = dict(discovery)
+    if "payload" in redacted_discovery:
+        redacted_discovery["payload"] = _redact_discovery_payload(redacted_discovery.get("payload"))
+    redacted_server_status = dict(server_status)
+    if redacted_server_status.get("authToken"):
+        redacted_server_status["authToken"] = "<redacted>"
+
+    return {
+        "result": {
+            "status": status,
+            "ok": status == "ok",
+            "toolExecutionReady": not blocking_reasons and bool(server_status.get("taskManagerRunning")),
+            "blockingReasons": blocking_reasons,
+            "warnings": warnings,
+            "recommendedActions": actions,
+            "checks": {
+                "requiredTools": runtime_report.get("requiredTools"),
+                "registrySchemaMismatch": runtime_report.get("registrySchemaMismatch"),
+                "toolCounts": runtime_report.get("toolCounts"),
+                "server": redacted_server_status,
+                "discovery": redacted_discovery,
+                "discoveryTokenMatchesLive": token_matches,
+                "activeDocument": {
+                    "name": _safe_value(lambda: active_doc.name),
+                    "isModified": _safe_value(lambda: active_doc.isModified),
+                } if active_doc else None,
+                "activeDesign": {
+                    "available": bool(design),
+                    "units": _safe_value(lambda: design.unitsManager.defaultLengthUnits) if design else None,
+                    "unhealthyTimelineItems": unhealthy_count,
+                },
+            },
         }
     }
 

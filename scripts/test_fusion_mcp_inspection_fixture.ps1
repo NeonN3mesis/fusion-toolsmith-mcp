@@ -161,6 +161,7 @@ try {
         "get_dependency_graph",
         "assess_change_impact",
         "plan_parameterization",
+        "doctor",
         "get_runtime_diagnostics",
         "map_coordinates"
     )) {

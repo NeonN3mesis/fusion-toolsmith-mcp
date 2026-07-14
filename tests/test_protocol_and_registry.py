@@ -1103,6 +1103,7 @@ def run(context):
         self.assertIn("preflight_model_change", tool_names)
         self.assertIn("revert_active_document", tool_names)
         self.assertIn("get_runtime_diagnostics", tool_names)
+        self.assertIn("doctor", tool_names)
 
     def test_get_runtime_diagnostics_reports_missing_required_tools_and_redacts_token(self):
         utilities = importlib.import_module("tools.utilities")
@@ -1134,6 +1135,48 @@ def run(context):
         self.assertTrue(result["restartRecommended"])
         self.assertEqual(result["runtime"]["discovery"]["payload"]["token"], "<redacted>")
         self.assertIn("token=<redacted>", result["runtime"]["discovery"]["payload"]["sse_url"])
+
+    def test_doctor_reports_stale_discovery_and_task_manager_blockers(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_expanduser = utilities.os.path.expanduser
+        original_server_status = utilities._server_runtime_status
+        discovery_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(discovery_dir.cleanup)
+        discovery_path = os.path.join(discovery_dir.name, ".fusion_mcp.json")
+        with open(discovery_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "sse_url": "http://127.0.0.1:9100/sse?token=stale-token",
+                "port": 9100,
+                "token": "stale-token",
+            }, f)
+
+        utilities.os.path.expanduser = (
+            lambda path: discovery_dir.name if path == "~" else original_expanduser(path)
+        )
+        utilities._server_runtime_status = lambda: {
+            "available": True,
+            "authToken": "live-token",
+            "defaultPort": 9100,
+            "serverRunning": True,
+            "taskManagerRunning": False,
+            "pendingTasks": 0,
+        }
+        try:
+            res = self.tools.execute_tool("doctor", {
+                "required_tools": ["inspect_design"],
+                "require_active_design": False,
+            })
+        finally:
+            utilities.os.path.expanduser = original_expanduser
+            utilities._server_runtime_status = original_server_status
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertEqual(result["status"], "error")
+        self.assertFalse(result["toolExecutionReady"])
+        self.assertIn("TaskManager is not running", " ".join(result["blockingReasons"]))
+        self.assertIn("Discovery token does not match", " ".join(result["blockingReasons"]))
+        self.assertEqual(result["checks"]["discovery"]["payload"]["token"], "<redacted>")
 
     def test_plan_parameterization_classifies_sketch_dimension_candidates(self):
         class ParamCollection:
