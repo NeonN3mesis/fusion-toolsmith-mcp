@@ -120,8 +120,12 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
   - Guardrails catch design-type changes, newly unhealthy timeline items, and broad component/body/sketch removals.
 
 - Server capability/adoption metadata
-  - `fusion://agent/server-capabilities` summarizes supported transports, discovery keys, safety gates, profiles, prompts, and capability counts.
+  - `fusion://agent/server-capabilities` summarizes supported transports, discovery keys, initialize instructions, safety gates, profiles, prompts, and capability counts.
   - `/health` advertises both legacy SSE and Streamable HTTP compatibility while keeping credentials out of the health payload.
+
+- Initialize-time agent instructions
+  - MCP initialize responses now include concise Toolsmith instructions: call `doctor`, inspect first, use structured tools, preflight edits/exports, validate after changes, and reserve `run_fusion_script` for justified gaps.
+  - This gives clients a standard protocol-level guidance surface before they inspect prompts or resources.
 
 - MCP tool risk annotations
   - Every advertised tool includes MCP `annotations` hints for read-only, destructive, idempotent, and open-world behavior.

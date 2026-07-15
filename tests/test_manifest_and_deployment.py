@@ -227,6 +227,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "dangerous",
             "bearer_sse_url",
             "streamable_http_url",
+            "initialize instructions",
             "tool annotation",
             "fusion://agent/server-capabilities",
             "fusion://runtime/change-journal",
@@ -362,6 +363,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "inspect_printability",
             "capture_demo_sequence",
             "fusion://agent/server-capabilities",
+            "Initialize-time agent instructions",
             "MCP tool risk annotations",
         ]:
             self.assertIn(text, roadmap)

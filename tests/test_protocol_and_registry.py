@@ -608,6 +608,8 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         resource = self.tools.read_resource("fusion://agent/server-capabilities")
         self.assertEqual(resource["schemaVersion"], 1)
         self.assertEqual(resource["server"]["name"], "fusion-mcp")
+        self.assertIn("doctor", resource["server"]["instructions"])
+        self.assertIn("run_fusion_script only as a last resort", resource["server"]["instructions"])
         transport_names = {transport["name"] for transport in resource["transports"]}
         self.assertIn("streamable_http", transport_names)
         self.assertIn("http_sse", transport_names)
@@ -1621,6 +1623,8 @@ def run(context):
             self.mcp_server.sessions.pop(session_id, None)
         self.assertEqual(message["id"], 1)
         self.assertEqual(message["result"]["serverInfo"]["name"], "fusion-mcp")
+        self.assertIn("doctor", message["result"]["instructions"])
+        self.assertIn("run_fusion_script only as a last resort", message["result"]["instructions"])
 
     def test_sse_rejects_extra_active_clients(self):
         session_id = "existing-sse-session"
@@ -1659,6 +1663,8 @@ def run(context):
             self.assertEqual(response.status, 200)
             self.assertTrue(session_id)
             self.assertEqual(body["result"]["serverInfo"]["name"], "fusion-mcp")
+            self.assertIn("doctor", body["result"]["instructions"])
+            self.assertIn("fusion://agent/tool-first-workflow", body["result"]["instructions"])
         finally:
             server.shutdown()
             server.server_close()

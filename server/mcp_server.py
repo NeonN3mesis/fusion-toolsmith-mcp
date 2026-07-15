@@ -38,6 +38,14 @@ server_stop_event = threading.Event()
 ANTIGRAVITY_SERVER_NAME = "autodesk-fusion-mcp"
 MAX_JOURNAL_ARGUMENT_TEXT = 300
 MAX_JOURNAL_ENTRIES_READ = 200
+SERVER_INSTRUCTIONS = (
+    "Fusion Toolsmith MCP is a safety-first Autodesk Fusion 360 server. "
+    "Start with doctor, then inspect_design and fusion://agent/tool-first-workflow before editing. "
+    "Prefer structured inspection, sketch, feature, parameter, validation, presentation, and export tools. "
+    "Use run_fusion_script only as a last resort with script_intent and mcp_tool_gap. "
+    "Run preflight_model_change before risky model edits, preflight_export before exports, and validate_model after changes. "
+    "Treat tools marked destructive or dangerous as requiring explicit user intent."
+)
 
 # Thread-safe structures for SSE
 sessions_lock = threading.Lock()
@@ -285,6 +293,20 @@ def make_jsonrpc_error(req_id, code, message):
         }
     }
 
+def make_initialize_result():
+    return {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {
+            "tools": {},
+            "resourceTemplates": {},
+            "resources": {"subscribe": True, "listChanged": False},
+            "prompts": {},
+            "logging": {}
+        },
+        "serverInfo": {"name": "fusion-mcp", "version": "1.0.0"},
+        "instructions": SERVER_INSTRUCTIONS,
+    }
+
 def import_tools_module():
     try:
         from .. import tools as tools_module
@@ -390,17 +412,7 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {},
-                        "resourceTemplates": {},
-                        "resources": {"subscribe": True, "listChanged": False},
-                        "prompts": {},
-                        "logging": {}
-                    },
-                    "serverInfo": {"name": "fusion-mcp", "version": "1.0.0"}
-                }
+                "result": make_initialize_result()
             }
         if method == "logging/setLevel":
             return {"jsonrpc": "2.0", "id": req_id, "result": {}}
@@ -697,17 +709,7 @@ class MCPServerHandler(BaseHTTPRequestHandler):
                     response = {
                         "jsonrpc": "2.0",
                         "id": req_id,
-                        "result": {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": {
-                                "tools": {},
-                                "resourceTemplates": {},
-                                "resources": {"subscribe": True, "listChanged": False},
-                                "prompts": {},
-                                "logging": {}
-                            },
-                            "serverInfo": {"name": "fusion-mcp", "version": "1.0.0"}
-                        }
+                        "result": make_initialize_result()
                     }
                     respond(response)
                     return

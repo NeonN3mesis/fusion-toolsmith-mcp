@@ -184,6 +184,7 @@ def read_server_capabilities():
             "version": "1.0.0",
             "runsInside": "Autodesk Fusion 360 add-in",
             "port": getattr(mcp_server, "DEFAULT_PORT", 9100),
+            "instructions": getattr(mcp_server, "SERVER_INSTRUCTIONS", ""),
         },
         "transports": [
             {

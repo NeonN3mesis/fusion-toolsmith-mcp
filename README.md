@@ -27,7 +27,7 @@ See [docs/tooling-roadmap.md](docs/tooling-roadmap.md) for the general CAD tooli
 - Safer model mutation: explicit operations, preflight checks, downstream-consumer warnings, before/after design-state comparisons, and validation tools.
 - Export safety: preflight-gated STEP/STL/PDF workflows.
 - Local runtime hardening: fixed port, bearer-token support, token-free `/health`, session TTL cleanup, single active SSE client, and automatic Antigravity config sync.
-- Machine-readable adoption metadata: MCP tool annotations, `fusion://agent/server-capabilities`, `fusion://agent/tool-profiles`, and `fusion://agent/tool-first-workflow`.
+- Machine-readable adoption metadata: initialize instructions, MCP tool annotations, `fusion://agent/server-capabilities`, `fusion://agent/tool-profiles`, and `fusion://agent/tool-first-workflow`.
 
 ## Runtime Shape
 
@@ -153,7 +153,7 @@ Server adoption metadata is available as JSON:
 fusion://agent/server-capabilities
 ```
 
-That resource summarizes supported transports, discovery keys, safety gates, tool annotation coverage, profiles, prompts, and capability counts so clients can route without scraping README text.
+That resource summarizes supported transports, discovery keys, initialize instructions, safety gates, tool annotation coverage, profiles, prompts, and capability counts so clients can route without scraping README text.
 
 Use these mental profiles when exposing tools to agents or documenting workflows:
 
@@ -171,7 +171,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 
 | Area | What Toolsmith exposes |
 | --- | --- |
-| Runtime safety | `doctor`, runtime diagnostics, fixed-port health, Streamable HTTP/SSE metadata, bearer auth, MCP read-only/destructive/idempotent annotations, change journal, structured-tool routing |
+| Runtime safety | `doctor`, initialize instructions, runtime diagnostics, fixed-port health, Streamable HTTP/SSE metadata, bearer auth, MCP read-only/destructive/idempotent annotations, change journal, structured-tool routing |
 | Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference/joint reports, physical-property reports, material/appearance reports, mesh-aware `inspect_printability` warnings |
 | Safe modeling | typed sketching, guarded sketch constraint creation/deletion, extrudes, revolves, lofts, sweeps, token-targeted fillets/chamfers/shells, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry, rigid point-to-point joints |
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |
