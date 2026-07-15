@@ -21,6 +21,8 @@ Use Toolsmith when you want an agent to behave like a careful CAD assistant, not
 
 See [docs/tooling-roadmap.md](docs/tooling-roadmap.md) for the general CAD tooling backlog.
 
+See [docs/external-fusion-mcp-sweep.md](docs/external-fusion-mcp-sweep.md) for the public Fusion MCP comparison notes that informed Toolsmith's adoption layer.
+
 ## What It Is Good At
 
 - Inspecting existing designs before editing: sketches, features, parameters, projected geometry, selections, dependency reports, and coordinate mapping.

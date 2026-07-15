@@ -237,6 +237,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "search_local_fusion_docs",
             "examples/prompts.md",
             "docs/tooling-roadmap.md",
+            "docs/external-fusion-mcp-sweep.md",
             "GitHub Actions",
             "LICENSE",
             "runOnStartup",
@@ -417,6 +418,21 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "Offline MCP schema export",
         ]:
             self.assertIn(text, roadmap)
+
+    def test_external_fusion_mcp_sweep_documents_adopted_patterns(self):
+        with open(os.path.join(ROOT, "docs", "external-fusion-mcp-sweep.md"), "r", encoding="utf-8") as f:
+            sweep = f.read()
+        for text in [
+            "frankhommers/autodesk-fusion-mcp",
+            "faust-machines/fusion360-mcp-server",
+            "ndoo/fusion360-mcp-bridge",
+            "JustusBraitinger/FusionMCP",
+            "Streamable HTTP",
+            "fusion-mcp dump-schemas",
+            "run_fusion_script",
+            "project-specific tools",
+        ]:
+            self.assertIn(text, sweep)
 
 
 if __name__ == "__main__":
