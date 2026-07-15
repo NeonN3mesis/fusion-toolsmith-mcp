@@ -12,6 +12,8 @@ import os
 import secrets
 import traceback
 import socket
+import time
+from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -31,7 +33,11 @@ auth_token = secrets.token_urlsafe(32)
 MAX_REQUEST_BYTES = 1024 * 1024
 DEFAULT_PORT = 9100
 MAX_SSE_SESSIONS = 1
+HTTP_SESSION_TTL_SECONDS = 60 * 60
 server_stop_event = threading.Event()
+ANTIGRAVITY_SERVER_NAME = "autodesk-fusion-mcp"
+MAX_JOURNAL_ARGUMENT_TEXT = 300
+MAX_JOURNAL_ENTRIES_READ = 200
 
 # Thread-safe structures for SSE
 sessions_lock = threading.Lock()
@@ -39,10 +45,49 @@ sessions = {}  # session_id -> queue.Queue
 subscriptions_lock = threading.Lock()
 subscriptions = {} # session_id -> set of URIs
 http_sessions_lock = threading.Lock()
-http_sessions = set()
+http_sessions = {}
 
 def discovery_file_path():
     return os.path.join(os.path.expanduser("~"), ".fusion_mcp.json")
+
+def runtime_dir_path():
+    return os.path.join(os.path.expanduser("~"), ".fusion_mcp")
+
+def journal_file_path():
+    return os.path.join(runtime_dir_path(), "journal.jsonl")
+
+def antigravity_config_path():
+    return os.path.join(os.path.expanduser("~"), ".gemini", "config", "mcp_config.json")
+
+def sync_antigravity_mcp_config(sse_url, server_name=ANTIGRAVITY_SERVER_NAME):
+    path = antigravity_config_path()
+    if not os.path.exists(path):
+        return {"status": "skipped", "reason": "config_missing", "path": path}
+
+    with open(path, "r", encoding="utf-8-sig") as f:
+        config = json.load(f)
+    if not isinstance(config, dict):
+        return {"status": "skipped", "reason": "config_not_object", "path": path}
+
+    mcp_servers = config.setdefault("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        return {"status": "skipped", "reason": "mcpServers_not_object", "path": path}
+
+    server_config = mcp_servers.setdefault(server_name, {})
+    if not isinstance(server_config, dict):
+        return {"status": "skipped", "reason": "server_config_not_object", "path": path}
+
+    if server_config.get("serverUrl") == sse_url and server_config.get("disabled") is False:
+        return {"status": "unchanged", "path": path}
+
+    server_config["serverUrl"] = sse_url
+    server_config["disabled"] = False
+    temp_path = f"{path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    os.replace(temp_path, path)
+    return {"status": "updated", "path": path}
 
 def remove_discovery_file(expected_token=None):
     path = discovery_file_path()
@@ -62,6 +107,98 @@ def remove_discovery_file(expected_token=None):
             log_message(f"Discovery file ownership check failed: {e}")
             return
     os.remove(path)
+
+def prune_http_sessions(now=None):
+    now = time.time() if now is None else now
+    expired = []
+    with http_sessions_lock:
+        for session_id, last_seen in list(http_sessions.items()):
+            if now - last_seen > HTTP_SESSION_TTL_SECONDS:
+                expired.append(session_id)
+                http_sessions.pop(session_id, None)
+    return expired
+
+def create_http_session(now=None):
+    session_id = uuid.uuid4().hex
+    with http_sessions_lock:
+        http_sessions[session_id] = time.time() if now is None else now
+    return session_id
+
+def touch_http_session(session_id, now=None):
+    prune_http_sessions(now=now)
+    if not session_id:
+        return False
+    with http_sessions_lock:
+        if session_id not in http_sessions:
+            return False
+        http_sessions[session_id] = time.time() if now is None else now
+        return True
+
+def remove_http_session(session_id):
+    with http_sessions_lock:
+        http_sessions.pop(session_id, None)
+
+def _redact_journal_value(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if key_text in ("token", "authorization", "authorization_header", "password", "secret"):
+                redacted[key] = "<redacted>"
+            elif key_text == "script" and isinstance(item, str):
+                redacted[key] = f"<script redacted: {len(item)} chars>"
+            else:
+                redacted[key] = _redact_journal_value(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_journal_value(item) for item in value[:50]]
+    if isinstance(value, str) and len(value) > MAX_JOURNAL_ARGUMENT_TEXT:
+        return value[:MAX_JOURNAL_ARGUMENT_TEXT] + f"...<truncated {len(value) - MAX_JOURNAL_ARGUMENT_TEXT} chars>"
+    return value
+
+def _result_changed_design(res):
+    if not isinstance(res, dict):
+        return False
+    result = res.get("result") if isinstance(res.get("result"), dict) else res
+    comparison = result.get("stateComparison") if isinstance(result, dict) else None
+    if isinstance(comparison, dict):
+        return bool(comparison.get("hasChanges") or comparison.get("diff", {}).get("countChanges"))
+    return False
+
+def append_change_journal(entry):
+    os.makedirs(runtime_dir_path(), exist_ok=True)
+    entry = dict(entry)
+    entry.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    with open(journal_file_path(), "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, sort_keys=True) + "\n")
+
+def read_change_journal(limit=MAX_JOURNAL_ENTRIES_READ):
+    path = journal_file_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        limit = MAX_JOURNAL_ENTRIES_READ
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()[-limit:]
+    entries = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            entries.append({"error": "invalid journal line", "raw": line[:MAX_JOURNAL_ARGUMENT_TEXT]})
+    return entries
+
+def clear_change_journal():
+    path = journal_file_path()
+    if os.path.exists(path):
+        os.remove(path)
+        return True
+    return False
 
 PROMPTS = [
     {
@@ -140,8 +277,21 @@ class MCPServerHandler(BaseHTTPRequestHandler):
         values = self._query_params().get(name)
         return values[0] if values else ""
 
+    def _bearer_token(self):
+        header = self.headers.get("Authorization") or ""
+        parts = header.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            return parts[1].strip()
+        return ""
+
+    def _provided_token(self):
+        return self._bearer_token() or self._query_value("token")
+
     def _is_authorized(self):
-        return secrets.compare_digest(self._query_value("token"), auth_token)
+        return secrets.compare_digest(self._provided_token(), auth_token)
+
+    def _using_query_token(self):
+        return bool(self._query_value("token"))
 
     def _session_exists(self, session_id):
         with sessions_lock:
@@ -267,15 +417,19 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             return
         parsed = self._parsed_url()
         if parsed.path in ('/', '/health'):
+            prune_http_sessions()
             with sessions_lock:
                 active_sessions = len(sessions)
+            with http_sessions_lock:
+                active_http_sessions = len(http_sessions)
             self._send_json({
                 "status": "ok",
                 "server": "fusion-mcp",
                 "version": "1.0.0",
                 "transport": "sse",
-                "sse_url": f"/sse?token={auth_token}",
+                "discovery": discovery_file_path(),
                 "active_sessions": active_sessions,
+                "active_http_sessions": active_http_sessions,
                 "task_manager_running": TaskManager.is_running(),
                 "pending_tasks": TaskManager.get_pending_task_count(),
             })
@@ -305,8 +459,12 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             with sessions_lock:
                 sessions[session_id] = q
             
-            # Send endpoint event
-            endpoint_msg = f"event: endpoint\ndata: /messages?session_id={session_id}&token={auth_token}\n\n"
+            # Send endpoint event. Keep token-in-query only for legacy clients
+            # that authenticated this SSE stream that way.
+            endpoint_path = f"/messages?session_id={session_id}"
+            if self._using_query_token():
+                endpoint_path += f"&token={auth_token}"
+            endpoint_msg = f"event: endpoint\ndata: {endpoint_path}\n\n"
             self.wfile.write(endpoint_msg.encode('utf-8'))
             self.wfile.flush()
             
@@ -363,8 +521,7 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_empty(400)
             return
 
-        with http_sessions_lock:
-            http_sessions.discard(session_id)
+        remove_http_session(session_id)
         self._send_empty(200)
 
     def do_POST(self):
@@ -401,14 +558,11 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             method = request_data.get("method") if isinstance(request_data, dict) else None
             session_id = self.headers.get("Mcp-Session-Id") or self.headers.get("mcp-session-id")
 
+            prune_http_sessions()
             if method == "initialize" and not session_id:
-                session_id = uuid.uuid4().hex
-                with http_sessions_lock:
-                    http_sessions.add(session_id)
+                session_id = create_http_session()
             else:
-                with http_sessions_lock:
-                    session_found = session_id in http_sessions if session_id else False
-                if not session_found:
+                if not touch_http_session(session_id):
                     self._send_json(make_jsonrpc_error(
                         request_data.get("id") if isinstance(request_data, dict) else None,
                         -32001,
@@ -695,7 +849,9 @@ def execute_mcp_request_main_thread(session_id, req_id, method, params):
                     return
                 
                 tools_module = import_tools_module()
+                started = time.time()
                 res = tools_module.execute_tool(tool, arguments)
+                duration_ms = int((time.time() - started) * 1000)
                 
                 if isinstance(res, dict) and "error" in res:
                     result_payload = {
@@ -707,7 +863,20 @@ def execute_mcp_request_main_thread(session_id, req_id, method, params):
                         "content": [{"type": "text", "text": json.dumps(res, indent=2) if not isinstance(res, str) else res}],
                         "isError": False
                     }
-                
+                try:
+                    append_change_journal({
+                        "kind": "tools/call",
+                        "requestId": req_id,
+                        "sessionId": session_id,
+                        "tool": tool,
+                        "arguments": _redact_journal_value(arguments),
+                        "isError": result_payload["isError"],
+                        "durationMs": duration_ms,
+                        "changedDesign": _result_changed_design(res),
+                    })
+                except Exception as journal_error:
+                    log_message(f"Failed to append change journal: {journal_error}")
+                 
             elif method == "resources/read":
                 uri = params.get("uri")
                 if not isinstance(uri, str):
@@ -820,17 +989,27 @@ def start_server():
         server_instance = ThreadedHTTPServer(('::', port), MCPServerHandler)
         log_message(f"Starting Server on port {port}")
         
-        # Write discovery file
+        # Write discovery file and keep Antigravity pointed at this live token.
         discovery_path = discovery_file_path()
+        sse_url = f"http://127.0.0.1:{port}/sse?token={auth_token}"
+        bearer_sse_url = f"http://127.0.0.1:{port}/sse"
         try:
             with open(discovery_path, "w", encoding="utf-8") as f:
                 json.dump({
-                    "sse_url": f"http://127.0.0.1:{port}/sse?token={auth_token}",
+                    "sse_url": sse_url,
+                    "bearer_sse_url": bearer_sse_url,
+                    "authorization_header": f"Bearer {auth_token}",
                     "port": port,
                     "token": auth_token
                 }, f)
         except Exception as e:
             log_message(f"Failed to write discovery file: {e}")
+        try:
+            sync_result = sync_antigravity_mcp_config(sse_url)
+            if sync_result.get("status") == "updated":
+                log_message("Updated Antigravity Fusion MCP serverUrl from live discovery.")
+        except Exception as e:
+            log_message(f"Failed to sync Antigravity MCP config: {e}")
             
         server_instance.serve_forever()
     except Exception as e:

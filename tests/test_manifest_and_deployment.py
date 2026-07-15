@@ -1,6 +1,10 @@
 import json
 import os
+import subprocess
+import sys
+import tempfile
 import unittest
+import zipfile
 
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -25,6 +29,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "server",
             "tools",
             "mcp_primitives",
+            "tool_profiles.json",
             "__pycache__",
             "LegacyAddInName",
             "runOnStartup",
@@ -50,7 +55,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "inspect_design",
             "doctor",
             "recommend_mcp_workflow",
-            "Discovery file token was stale",
+            "bearer_sse_url",
+            "Authorization",
             "TaskManager is not running",
         ]:
             self.assertIn(text, script)
@@ -82,7 +88,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "run_fusion_script",
             "script_intent",
             "mcp_tool_gap",
-            "Discovery file token was stale",
+            "bearer_sse_url",
+            "Authorization",
             "TaskManager is not running",
             "KeepFixtureDocument",
             "doc.close(False)",
@@ -102,6 +109,98 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             ".bak-",
         ]:
             self.assertIn(text, script)
+
+    def test_pyproject_exposes_management_cli(self):
+        with open(os.path.join(ROOT, "pyproject.toml"), "r", encoding="utf-8") as f:
+            pyproject = f.read()
+        for text in [
+            "fusion-toolsmith-mcp",
+            "Fusion Toolsmith MCP",
+            "README.md",
+            "fusion-mcp = \"fusion_mcp_cli.cli:main\"",
+            "fusion_mcp_cli",
+        ]:
+            self.assertIn(text, pyproject)
+
+    def test_readme_documents_install_verify_and_profiles(self):
+        with open(os.path.join(ROOT, "README.md"), "r", encoding="utf-8") as f:
+            readme = f.read()
+        for text in [
+            "fusion-mcp install-addin",
+            "fusion-mcp package-addin",
+            "fusion-mcp test-live",
+            "fusion-mcp print-client-config",
+            "Tool Profiles",
+            "dangerous",
+            "bearer_sse_url",
+            "fusion://runtime/change-journal",
+            "get_change_journal",
+            "fusion://docs/fusion-api",
+            "search_local_fusion_docs",
+            "examples/prompts.md",
+            "GitHub Actions",
+            "LICENSE",
+            "runOnStartup",
+        ]:
+            self.assertIn(text, readme)
+
+    def test_cli_help_loads_without_fusion(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "fusion_mcp_cli", "--help"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("install-addin", completed.stdout)
+        self.assertIn("package-addin", completed.stdout)
+        self.assertIn("sync-config", completed.stdout)
+        self.assertIn("doctor", completed.stdout)
+        self.assertIn("list-profiles", completed.stdout)
+
+    def test_cli_package_addin_builds_clean_zip_payload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = os.path.join(temp_dir, "FusionMCP-addin.zip")
+            completed = subprocess.run(
+                [sys.executable, "-m", "fusion_mcp_cli", "package-addin", "--output", output],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue(os.path.isfile(output))
+            with zipfile.ZipFile(output, "r") as archive:
+                names = set(archive.namelist())
+        for name in [
+            "FusionMCP/FusionMCP.py",
+            "FusionMCP/FusionMCP.manifest",
+            "FusionMCP/server/mcp_server.py",
+            "FusionMCP/tools/__init__.py",
+            "FusionMCP/mcp_primitives/__init__.py",
+            "FusionMCP/tool_profiles.json",
+        ]:
+            self.assertIn(name, names)
+        self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
+
+    def test_cli_list_profiles_outputs_shared_profile_file(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "fusion_mcp_cli", "list-profiles"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertIn("profiles", payload)
+        self.assertIn("inspection", payload["profiles"])
+        self.assertIn("dangerous", payload["profiles"])
+        self.assertIn("docs", payload["profiles"])
 
 
 if __name__ == "__main__":

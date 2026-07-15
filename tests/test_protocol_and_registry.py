@@ -148,9 +148,13 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.tools = importlib.import_module("tools")
         self.mcp_server.app = _fake_app
         self.task_manager.app = _fake_app
+        self.mcp_server.sessions.clear()
+        self.mcp_server.http_sessions.clear()
+        self.mcp_server.subscriptions.clear()
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.mcp_server.discovery_file_path = lambda: os.path.join(self.temp_dir.name, ".fusion_mcp.json")
+        self.mcp_server.runtime_dir_path = lambda: self.temp_dir.name
 
     def test_addin_entrypoint_imports_with_fallback(self):
         addin = importlib.import_module("FusionMCP")
@@ -183,6 +187,115 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         finally:
             self.mcp_server.is_port_available = original_is_port_available
             self.mcp_server.server_stop_event.clear()
+
+    def test_antigravity_config_sync_updates_stale_server_url(self):
+        config_path = os.path.join(self.temp_dir.name, "mcp_config.json")
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "mcpServers": {
+                    "autodesk-fusion-mcp": {
+                        "serverUrl": "http://127.0.0.1:9100/sse?token=stale-token",
+                        "disabled": True,
+                    },
+                    "other-server": {
+                        "serverUrl": "http://127.0.0.1:9999/sse?token=leave-alone",
+                    },
+                }
+            }, f)
+
+        original_config_path = self.mcp_server.antigravity_config_path
+        self.mcp_server.antigravity_config_path = lambda: config_path
+        try:
+            result = self.mcp_server.sync_antigravity_mcp_config(
+                "http://127.0.0.1:9100/sse?token=live-token"
+            )
+        finally:
+            self.mcp_server.antigravity_config_path = original_config_path
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        fusion_config = config["mcpServers"]["autodesk-fusion-mcp"]
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(fusion_config["serverUrl"], "http://127.0.0.1:9100/sse?token=live-token")
+        self.assertFalse(fusion_config["disabled"])
+        self.assertEqual(
+            config["mcpServers"]["other-server"]["serverUrl"],
+            "http://127.0.0.1:9999/sse?token=leave-alone",
+        )
+
+    def test_antigravity_config_sync_skips_missing_config(self):
+        missing_path = os.path.join(self.temp_dir.name, "missing.json")
+        original_config_path = self.mcp_server.antigravity_config_path
+        self.mcp_server.antigravity_config_path = lambda: missing_path
+        try:
+            result = self.mcp_server.sync_antigravity_mcp_config(
+                "http://127.0.0.1:9100/sse?token=live-token"
+            )
+        finally:
+            self.mcp_server.antigravity_config_path = original_config_path
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "config_missing")
+
+    def test_antigravity_config_sync_accepts_utf8_bom_config(self):
+        config_path = os.path.join(self.temp_dir.name, "mcp_config_bom.json")
+        with open(config_path, "w", encoding="utf-8-sig") as f:
+            json.dump({
+                "mcpServers": {
+                    "autodesk-fusion-mcp": {
+                        "serverUrl": "http://127.0.0.1:9100/sse?token=stale-token",
+                        "disabled": False,
+                    }
+                }
+            }, f)
+
+        original_config_path = self.mcp_server.antigravity_config_path
+        self.mcp_server.antigravity_config_path = lambda: config_path
+        try:
+            result = self.mcp_server.sync_antigravity_mcp_config(
+                "http://127.0.0.1:9100/sse?token=live-token"
+            )
+        finally:
+            self.mcp_server.antigravity_config_path = original_config_path
+
+        self.assertEqual(result["status"], "updated")
+        with open(config_path, "r", encoding="utf-8-sig") as f:
+            config = json.load(f)
+        self.assertEqual(
+            config["mcpServers"]["autodesk-fusion-mcp"]["serverUrl"],
+            "http://127.0.0.1:9100/sse?token=live-token",
+        )
+
+    def test_change_journal_redacts_sensitive_and_long_arguments(self):
+        redacted = self.mcp_server._redact_journal_value({
+            "token": "secret",
+            "authorization_header": "Bearer secret",
+            "script": "print('x')",
+            "note": "x" * 400,
+        })
+
+        self.assertEqual(redacted["token"], "<redacted>")
+        self.assertEqual(redacted["authorization_header"], "<redacted>")
+        self.assertIn("<script redacted:", redacted["script"])
+        self.assertIn("<truncated", redacted["note"])
+
+    def test_change_journal_append_read_and_clear(self):
+        self.mcp_server.append_change_journal({
+            "kind": "tools/call",
+            "tool": "doctor",
+            "arguments": {},
+            "isError": False,
+            "durationMs": 5,
+            "changedDesign": False,
+        })
+
+        entries = self.mcp_server.read_change_journal()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["tool"], "doctor")
+        self.assertFalse(entries[0]["isError"])
+
+        self.assertTrue(self.mcp_server.clear_change_journal())
+        self.assertEqual(self.mcp_server.read_change_journal(), [])
 
     def test_task_manager_wrappers_post_and_execute(self):
         self.assertTrue(self.task_manager.start_task_manager())
@@ -253,6 +366,57 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("parameterize_existing_model", resource["workflows"])
         self.assertIn("preflight_export", resource["workflows"]["export"]["firstTools"])
         self.assertEqual(resource["rawScriptPolicy"]["tool"], "run_fusion_script")
+
+    def test_tool_profiles_resource_groups_registered_tools(self):
+        resource = self.tools.read_resource("fusion://agent/tool-profiles")
+        self.assertEqual(resource["schemaVersion"], 1)
+        self.assertIn("core", resource["profiles"])
+        self.assertIn("dangerous", resource["profiles"])
+        self.assertIn("docs", resource["profiles"])
+        self.assertIn("doctor", resource["profiles"]["core"]["tools"])
+        self.assertIn("get_change_journal", resource["profiles"]["core"]["tools"])
+        self.assertIn("search_local_fusion_docs", resource["profiles"]["docs"]["tools"])
+        self.assertIn("run_fusion_script", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
+        for profile in resource["profiles"].values():
+            self.assertEqual(profile["missingFromSchema"], [])
+            self.assertEqual(profile["missingFromRegistry"], [])
+
+    def test_change_journal_tools_and_resource(self):
+        self.mcp_server.append_change_journal({
+            "kind": "tools/call",
+            "tool": "inspect_design",
+            "arguments": {},
+            "isError": False,
+            "durationMs": 12,
+            "changedDesign": False,
+        })
+
+        tool_result = self.tools.execute_tool("get_change_journal", {"limit": 10})
+        self.assertIn("result", tool_result)
+        self.assertEqual(tool_result["result"]["entries"][0]["tool"], "inspect_design")
+
+        resource_result = self.tools.read_resource("fusion://runtime/change-journal")
+        self.assertIn("result", resource_result)
+        self.assertEqual(resource_result["result"]["entries"][0]["tool"], "inspect_design")
+
+        clear_error = self.tools.execute_tool("clear_change_journal", {})
+        self.assertIn("error", clear_error)
+        clear_result = self.tools.execute_tool("clear_change_journal", {"reason": "unit test cleanup"})
+        self.assertTrue(clear_result["result"]["cleared"])
+        self.assertEqual(self.tools.execute_tool("get_change_journal", {})["result"]["entries"], [])
+
+    def test_local_fusion_docs_resource_and_search_tool(self):
+        resource = self.tools.read_resource("fusion://docs/fusion-api")
+        self.assertIn("result", resource)
+        self.assertIn("help_context.json", resource["result"]["sources"])
+        self.assertTrue(any(entry["id"] == "api:sketch" for entry in resource["result"]["entries"]))
+
+        result = self.tools.execute_tool("search_local_fusion_docs", {"query": "construction plane", "limit": 5})
+        self.assertIn("result", result)
+        self.assertLessEqual(len(result["result"]["entries"]), 5)
+        joined = " ".join(entry["title"] + " " + entry["text"] for entry in result["result"]["entries"]).lower()
+        self.assertIn("construction", joined)
 
     def test_recommend_mcp_workflow_routes_export_away_from_scripts(self):
         result = self.tools.execute_tool("recommend_mcp_workflow", {
@@ -817,6 +981,42 @@ def run(context):
         self.assertEqual(payload["server"], "fusion-mcp")
         self.assertIn("task_manager_running", payload)
         self.assertIn("pending_tasks", payload)
+        self.assertIn("discovery", payload)
+        self.assertIn("active_http_sessions", payload)
+        self.assertNotIn("sse_url", payload)
+        self.assertNotIn("token", json.dumps(payload))
+
+    def test_streamable_http_sessions_prune_expired_entries(self):
+        self.mcp_server.http_sessions.clear()
+        now = 1000.0
+        self.mcp_server.http_sessions["fresh"] = now
+        self.mcp_server.http_sessions["expired"] = now - self.mcp_server.HTTP_SESSION_TTL_SECONDS - 1
+
+        expired = self.mcp_server.prune_http_sessions(now=now)
+
+        self.assertEqual(expired, ["expired"])
+        self.assertIn("fresh", self.mcp_server.http_sessions)
+        self.assertNotIn("expired", self.mcp_server.http_sessions)
+
+    def test_streamable_http_touch_refreshes_existing_session(self):
+        self.mcp_server.http_sessions.clear()
+        self.mcp_server.http_sessions["session-a"] = 1000.0
+
+        self.assertTrue(self.mcp_server.touch_http_session("session-a", now=1200.0))
+
+        self.assertEqual(self.mcp_server.http_sessions["session-a"], 1200.0)
+
+    def test_streamable_http_touch_rejects_expired_session(self):
+        self.mcp_server.http_sessions.clear()
+        self.mcp_server.http_sessions["session-a"] = 1000.0
+
+        self.assertFalse(
+            self.mcp_server.touch_http_session(
+                "session-a",
+                now=1000.0 + self.mcp_server.HTTP_SESSION_TTL_SECONDS + 1,
+            )
+        )
+        self.assertNotIn("session-a", self.mcp_server.http_sessions)
 
     def test_http_messages_initialize_enqueues_response(self):
         session_id = "http-init-session"
@@ -928,6 +1128,56 @@ def run(context):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_sse_allows_bearer_auth_without_tokenized_endpoint(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/sse",
+                headers={"Authorization": f"Bearer {self.mcp_server.auth_token}"},
+            )
+            with urllib.request.urlopen(request, timeout=2) as response:
+                first_line = response.readline().decode("utf-8").strip()
+                second_line = response.readline().decode("utf-8").strip()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(first_line, "event: endpoint")
+            self.assertIn("/messages?session_id=", second_line)
+            self.assertNotIn("&token=", second_line)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_http_messages_accepts_bearer_auth(self):
+        session_id = "http-bearer-session"
+        self.mcp_server.sessions[session_id] = queue.Queue()
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
+            url = f"http://127.0.0.1:{server.server_port}/messages?session_id={session_id}"
+            request = urllib.request.Request(
+                url,
+                data=payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=2) as response:
+                self.assertEqual(response.status, 202)
+            message = json.loads(self.mcp_server.sessions[session_id].get(timeout=1))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.mcp_server.sessions.pop(session_id, None)
+        self.assertEqual(message["id"], 1)
+        self.assertEqual(message["result"]["serverInfo"]["name"], "fusion-mcp")
 
     def test_sse_rejects_extra_active_clients(self):
         session_id = "existing-sse-session"
@@ -1132,6 +1382,8 @@ def run(context):
         self.assertIn("revert_active_document", tool_names)
         self.assertIn("get_runtime_diagnostics", tool_names)
         self.assertIn("doctor", tool_names)
+        self.assertIn("get_change_journal", tool_names)
+        self.assertIn("clear_change_journal", tool_names)
 
     def test_get_runtime_diagnostics_reports_missing_required_tools_and_redacts_token(self):
         utilities = importlib.import_module("tools.utilities")

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fusion-toolsmith-mcp"
+version = "1.0.0"
+description = "Local management helpers for the Fusion Toolsmith MCP Autodesk Fusion 360 add-in."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "Scott" }
+]
+license = { text = "MIT" }
+
+[project.scripts]
+fusion-mcp = "fusion_mcp_cli.cli:main"
+
+[tool.setuptools]
+packages = ["fusion_mcp_cli"]

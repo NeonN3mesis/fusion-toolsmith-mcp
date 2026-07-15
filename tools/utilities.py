@@ -50,6 +50,9 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "assess_change_impact",
     "plan_parameterization",
     "recommend_mcp_workflow",
+    "get_change_journal",
+    "clear_change_journal",
+    "search_local_fusion_docs",
     "preflight_export",
     "export_asset",
     "create_2d_drawing",
@@ -134,6 +137,117 @@ def _tool_first_policy():
     return json.loads(json.dumps(_TOOL_FIRST_POLICY))
 
 
+def _mcp_server_module():
+    try:
+        from ..server import mcp_server
+    except Exception:
+        import server.mcp_server as mcp_server
+    return mcp_server
+
+
+def _workspace_file_path(name):
+    return os.path.join(os.path.dirname(os.path.dirname(__file__)), name)
+
+
+def _load_help_context():
+    path = _workspace_file_path("help_context.json")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_best_practices_text():
+    path = _workspace_file_path("best_practices.md")
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _fusion_docs_url(class_name):
+    clean_name = "".join(c for c in str(class_name or "") if c.isalnum()).lower()
+    return f"https://help.autodesk.com/view/fusion360/ENU/?contextId=adsk_fusion_api_{clean_name}" if clean_name else None
+
+
+def _common_api_topics():
+    return {
+        "extrudefeature": "Creates, modifies, or deletes an extrusion feature. Inherits from Feature.",
+        "sketch": "Represents a sketch in a component. Contains sketch curves, points, dimensions, and constraints.",
+        "brepbody": "Represents a solid or sheet body in a component.",
+        "brepface": "Represents a face of a BRepBody.",
+        "brepedge": "Represents an edge of a BRepBody.",
+        "occurrence": "Represents a component instance in an assembly.",
+        "constructionplane": "Represents a construction plane used as a sketch or feature reference.",
+        "userparameter": "Represents a user-defined parameter with expressions and unit conversions.",
+    }
+
+
+def _docs_search_index():
+    entries = []
+    try:
+        help_context = _load_help_context()
+        for key, text in help_context.items():
+            entries.append({
+                "id": f"help:{key}",
+                "title": key,
+                "source": "help_context.json",
+                "text": str(text),
+            })
+    except Exception as e:
+        entries.append({"id": "error:help_context", "title": "help_context error", "source": "help_context.json", "text": str(e)})
+
+    try:
+        best_practices = _load_best_practices_text()
+        section_title = "Best Practices"
+        section_lines = []
+        section_index = 0
+        for line in best_practices.splitlines():
+            if line.startswith("#"):
+                if section_lines:
+                    entries.append({
+                        "id": f"best_practices:{section_index}",
+                        "title": section_title,
+                        "source": "best_practices.md",
+                        "text": "\n".join(section_lines).strip(),
+                    })
+                    section_index += 1
+                    section_lines = []
+                section_title = line.lstrip("#").strip() or "Best Practices"
+            else:
+                section_lines.append(line)
+        if section_lines:
+            entries.append({
+                "id": f"best_practices:{section_index}",
+                "title": section_title,
+                "source": "best_practices.md",
+                "text": "\n".join(section_lines).strip(),
+            })
+    except Exception as e:
+        entries.append({"id": "error:best_practices", "title": "best_practices error", "source": "best_practices.md", "text": str(e)})
+
+    for key, summary in _common_api_topics().items():
+        entries.append({
+            "id": f"api:{key}",
+            "title": key,
+            "source": "offline_api_index",
+            "text": summary,
+            "url": _fusion_docs_url(key),
+        })
+    return entries
+
+
+def _search_docs(query=None, limit=10):
+    entries = _docs_search_index()
+    if not query:
+        return entries[:limit]
+    terms = [term for term in str(query).lower().split() if term]
+    scored = []
+    for entry in entries:
+        haystack = f"{entry.get('title', '')} {entry.get('text', '')}".lower()
+        score = sum(haystack.count(term) for term in terms)
+        if score:
+            scored.append((score, entry))
+    scored.sort(key=lambda item: (-item[0], item[1].get("id", "")))
+    return [entry for _score, entry in scored[:limit]]
+
+
 def _classify_workflow(task, intent=None):
     text = f"{task or ''} {intent or ''}".lower()
     if any(word in text for word in ("export", "step", "stl", "pdf", "drawing", "print file")):
@@ -150,6 +264,27 @@ def _classify_workflow(task, intent=None):
 @register_resource("fusion://agent/tool-first-workflow")
 def read_tool_first_workflow():
     return _tool_first_policy()
+
+
+@register_resource("fusion://runtime/change-journal")
+def read_change_journal_resource():
+    mcp_server = _mcp_server_module()
+    return {
+        "result": {
+            "path": mcp_server.journal_file_path(),
+            "entries": mcp_server.read_change_journal(),
+        }
+    }
+
+
+@register_resource("fusion://docs/fusion-api")
+def read_fusion_api_docs_index():
+    return {
+        "result": {
+            "sources": ["help_context.json", "best_practices.md", "offline_api_index"],
+            "entries": _docs_search_index(),
+        }
+    }
 
 
 def _server_runtime_status():
@@ -422,6 +557,46 @@ def doctor(required_tools=None, require_active_design=True):
                     "unhealthyTimelineItems": unhealthy_count,
                 },
             },
+        }
+    }
+
+
+@register_tool("get_change_journal")
+def get_change_journal(limit=200):
+    mcp_server = _mcp_server_module()
+    return {
+        "result": {
+            "path": mcp_server.journal_file_path(),
+            "entries": mcp_server.read_change_journal(limit=limit),
+        }
+    }
+
+
+@register_tool("clear_change_journal")
+def clear_change_journal(reason=None):
+    if not isinstance(reason, str) or not reason.strip():
+        return {"error": "reason is required before clearing the change journal."}
+    mcp_server = _mcp_server_module()
+    removed = mcp_server.clear_change_journal()
+    return {
+        "result": {
+            "cleared": bool(removed),
+            "path": mcp_server.journal_file_path(),
+            "reason": reason.strip(),
+        }
+    }
+
+
+@register_tool("search_local_fusion_docs")
+def search_local_fusion_docs(query=None, limit=10):
+    try:
+        limit = max(1, min(int(limit), 25))
+    except (TypeError, ValueError):
+        limit = 10
+    return {
+        "result": {
+            "query": query,
+            "entries": _search_docs(query=query, limit=limit),
         }
     }
 
@@ -804,9 +979,7 @@ def export_asset(format, export_path, allow_unhealthy_export=False, require_comp
 @register_tool("get_fusion_api_help")
 def get_fusion_api_help(topic=None):
     try:
-        help_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "help_context.json")
-        with open(help_path, "r", encoding="utf-8") as f:
-            help_dict = json.load(f)
+        help_dict = _load_help_context()
         if topic and topic in help_dict:
             return json.dumps({topic: help_dict[topic]}, indent=2)
         return json.dumps(help_dict, indent=2)
@@ -1034,20 +1207,8 @@ def get_mcp_workflow_guide():
 @register_tool("search_fusion_api_documentation")
 def search_fusion_api_documentation(class_name):
     clean_name = "".join(c for c in class_name if c.isalnum()).lower()
-    url = f"https://help.autodesk.com/view/fusion360/ENU/?contextId=adsk_fusion_api_{clean_name}"
-    
-    common_classes = {
-        "extrudefeature": "Creates, modifies, or deletes an extrusion feature. Inherits from Feature.",
-        "sketch": "Represents a sketch in a component. Contains sketch curves, points, dimensions, and constraints.",
-        "brepbody": "Represents a solid or sheet body in a component.",
-        "brepface": "Represents a face of a BRepBody.",
-        "brepedge": "Represents an edge of a BRepBody.",
-        "occurrence": "Represents a component instance in an assembly.",
-        "constructionplane": "Represents a construction plane used as a sketch or feature reference.",
-        "userparameter": "Represents a user-defined parameter with expressions and unit conversions."
-    }
-    
-    summary = common_classes.get(clean_name, "Class not in common offline index.")
+    url = _fusion_docs_url(clean_name)
+    summary = _common_api_topics().get(clean_name, "Class not in common offline index.")
     
     text = f"📖 **Autodesk Fusion 360 API Reference**\n\n"
     text += f"**Class**: `{class_name}`\n"

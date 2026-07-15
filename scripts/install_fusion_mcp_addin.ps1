@@ -14,7 +14,8 @@ $requiredFiles = @(
     "FusionMCP.manifest",
     "best_practices.md",
     "workflow_guide.md",
-    "help_context.json"
+    "help_context.json",
+    "tool_profiles.json"
 )
 $requiredDirs = @(
     "server",

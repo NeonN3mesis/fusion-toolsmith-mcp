@@ -78,21 +78,10 @@ if ($health.PSObject.Properties.Name -contains "task_manager_running" -and -not 
 }
 
 $effectiveSseUrl = $discovery.sse_url
-if ($health.sse_url) {
-    if ($health.sse_url -match '^https?://') {
-        $effectiveSseUrl = $health.sse_url
-    }
-    else {
-        $effectiveSseUrl = "{0}://{1}:{2}{3}" -f $baseUri.Scheme, $baseUri.Host, $baseUri.Port, $health.sse_url
-    }
-    if ($effectiveSseUrl -ne $discovery.sse_url) {
-        @{
-            sse_url = $effectiveSseUrl
-            port = $baseUri.Port
-            token = ([Uri]$effectiveSseUrl).Query -replace '^\?token=', ''
-        } | ConvertTo-Json -Compress | Set-Content -LiteralPath $DiscoveryPath -Encoding UTF8
-        Write-Warning "Discovery file token was stale; refreshed it from the live /health response."
-    }
+$authHeaders = @{}
+if ($discovery.bearer_sse_url -and $discovery.authorization_header) {
+    $effectiveSseUrl = $discovery.bearer_sse_url
+    $authHeaders["Authorization"] = $discovery.authorization_header
 }
 
 $request = [System.Net.HttpWebRequest]::Create($effectiveSseUrl)
@@ -100,6 +89,9 @@ $request.Method = "GET"
 $request.Accept = "text/event-stream"
 $request.Timeout = $TimeoutSec * 1000
 $request.ReadWriteTimeout = $TimeoutSec * 1000
+if ($authHeaders.ContainsKey("Authorization")) {
+    $request.Headers["Authorization"] = $authHeaders["Authorization"]
+}
 
 $response = $request.GetResponse()
 try {
@@ -116,7 +108,7 @@ try {
         method = "initialize"
         params = @{}
     } | ConvertTo-Json -Compress
-    Invoke-RestMethod -Uri $messagesUri -Method Post -Body $initializeBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
+    Invoke-RestMethod -Uri $messagesUri -Method Post -Headers $authHeaders -Body $initializeBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
 
     $initializeEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
     if ($initializeEvent.event -ne "message") {
@@ -133,7 +125,7 @@ try {
         method = "tools/list"
         params = @{}
     } | ConvertTo-Json -Compress
-    Invoke-RestMethod -Uri $messagesUri -Method Post -Body $toolsBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
+    Invoke-RestMethod -Uri $messagesUri -Method Post -Headers $authHeaders -Body $toolsBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
 
     $toolsEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
     $toolsResponse = $toolsEvent.data | ConvertFrom-Json
@@ -151,7 +143,7 @@ try {
             arguments = @{}
         }
     } | ConvertTo-Json -Depth 20 -Compress
-    Invoke-RestMethod -Uri $messagesUri -Method Post -Body $inspectBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
+    Invoke-RestMethod -Uri $messagesUri -Method Post -Headers $authHeaders -Body $inspectBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
 
     $inspectEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
     $inspectResponse = $inspectEvent.data | ConvertFrom-Json
@@ -170,7 +162,7 @@ try {
             }
         }
     } | ConvertTo-Json -Depth 20 -Compress
-    Invoke-RestMethod -Uri $messagesUri -Method Post -Body $doctorBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
+    Invoke-RestMethod -Uri $messagesUri -Method Post -Headers $authHeaders -Body $doctorBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
 
     $doctorEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
     $doctorResponse = $doctorEvent.data | ConvertFrom-Json
@@ -189,7 +181,7 @@ try {
             }
         }
     } | ConvertTo-Json -Depth 20 -Compress
-    Invoke-RestMethod -Uri $messagesUri -Method Post -Body $workflowBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
+    Invoke-RestMethod -Uri $messagesUri -Method Post -Headers $authHeaders -Body $workflowBody -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
 
     $workflowEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
     $workflowResponse = $workflowEvent.data | ConvertFrom-Json

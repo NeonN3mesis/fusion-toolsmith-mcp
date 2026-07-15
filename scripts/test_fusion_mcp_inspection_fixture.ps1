@@ -28,10 +28,16 @@ function Invoke-McpRequest {
         [string]$Uri,
         [string]$SessionId,
         [string]$Body,
-        [int]$TimeoutSec
+        [int]$TimeoutSec,
+        [hashtable]$ExtraHeaders
     )
 
     $headers = @{}
+    if ($ExtraHeaders) {
+        foreach ($key in $ExtraHeaders.Keys) {
+            $headers[$key] = $ExtraHeaders[$key]
+        }
+    }
     if ($SessionId) {
         $headers["Mcp-Session-Id"] = $SessionId
     }
@@ -70,7 +76,8 @@ function Invoke-McpTool {
         [int]$Id,
         [string]$Name,
         [hashtable]$Arguments,
-        [int]$TimeoutSec
+        [int]$TimeoutSec,
+        [hashtable]$ExtraHeaders
     )
 
     if ($null -eq $Arguments) {
@@ -81,7 +88,7 @@ function Invoke-McpTool {
         name = $Name
         arguments = $Arguments
     }
-    $response = Invoke-McpRequest -Uri $Uri -SessionId $SessionId -Body $body -TimeoutSec $TimeoutSec
+    $response = Invoke-McpRequest -Uri $Uri -SessionId $SessionId -Body $body -TimeoutSec $TimeoutSec -ExtraHeaders $ExtraHeaders
     $json = $response.Content | ConvertFrom-Json
     return Convert-ToolText -ToolResponse $json
 }
@@ -121,24 +128,13 @@ if ($health.PSObject.Properties.Name -contains "task_manager_running" -and -not 
 }
 
 $mcpUri = "{0}://{1}:{2}/sse" -f $baseUri.Scheme, $baseUri.Host, $baseUri.Port
-if ($health.sse_url) {
-    if ($health.sse_url -match '^https?://') {
-        $mcpUri = $health.sse_url
-    }
-    else {
-        $mcpUri = "{0}://{1}:{2}{3}" -f $baseUri.Scheme, $baseUri.Host, $baseUri.Port, $health.sse_url
-    }
-    if ($mcpUri -ne $discovery.sse_url) {
-        @{
-            sse_url = $mcpUri
-            port = $baseUri.Port
-            token = ([Uri]$mcpUri).Query -replace '^\?token=', ''
-        } | ConvertTo-Json -Compress | Set-Content -LiteralPath $DiscoveryPath -Encoding UTF8
-        Write-Warning "Discovery file token was stale; refreshed it from the live /health response."
-    }
+$authHeaders = @{}
+if ($discovery.bearer_sse_url -and $discovery.authorization_header) {
+    $mcpUri = $discovery.bearer_sse_url
+    $authHeaders["Authorization"] = $discovery.authorization_header
 }
 $initBody = New-JsonRpcPayload -Id 1 -Method "initialize" -Params @{}
-$initResponse = Invoke-McpRequest -Uri $mcpUri -SessionId "" -Body $initBody -TimeoutSec $TimeoutSec
+$initResponse = Invoke-McpRequest -Uri $mcpUri -SessionId "" -Body $initBody -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
 $sessionId = $initResponse.Headers["Mcp-Session-Id"]
 if (-not $sessionId) {
     throw "Streamable HTTP initialize did not return Mcp-Session-Id."
@@ -146,7 +142,7 @@ if (-not $sessionId) {
 
 try {
     $toolsBody = New-JsonRpcPayload -Id 2 -Method "tools/list" -Params @{}
-    $toolsResponse = Invoke-McpRequest -Uri $mcpUri -SessionId $sessionId -Body $toolsBody -TimeoutSec $TimeoutSec
+    $toolsResponse = Invoke-McpRequest -Uri $mcpUri -SessionId $sessionId -Body $toolsBody -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
     $toolsJson = $toolsResponse.Content | ConvertFrom-Json
     $toolNames = @($toolsJson.result.tools | ForEach-Object { $_.name })
     foreach ($requiredTool in @(
@@ -273,28 +269,28 @@ def run(context):
             script = $fixtureScript
             script_intent = "Create a controlled inspection fixture document for FusionMCP smoke testing."
             mcp_tool_gap = "The smoke fixture intentionally builds many relationships in one setup script so the inspection tools can be verified against a known design."
-        } -TimeoutSec ([Math]::Max($TimeoutSec, 30))
+        } -TimeoutSec ([Math]::Max($TimeoutSec, 30)) -ExtraHeaders $authHeaders
         Write-Host "Fixture creation output:"
         Write-Host $fixtureResult.output
     }
 
     $baseSketch = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 4 -Name "inspect_sketch" -Arguments @{
         sketch_name = "Fixture_BaseSketch"
-    } -TimeoutSec $TimeoutSec
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
     Assert-True -Condition ($baseSketch.result.name -eq "Fixture_BaseSketch") -Message "inspect_sketch did not return Fixture_BaseSketch."
     Assert-True -Condition (@($baseSketch.result.parameters).Count -ge 1) -Message "Fixture_BaseSketch did not expose dimension parameters."
     Assert-True -Condition (@($baseSketch.result.curves.lines).Count -ge 4) -Message "Fixture_BaseSketch did not expose rectangle lines."
 
     $baseExtrude = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 5 -Name "inspect_feature" -Arguments @{
         feature_name = "Fixture_BaseExtrude"
-    } -TimeoutSec $TimeoutSec
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
     Assert-True -Condition ($baseExtrude.result.featureType -eq "ExtrudeFeature") -Message "inspect_feature did not identify Fixture_BaseExtrude as an ExtrudeFeature."
     Assert-True -Condition (@($baseExtrude.result.parameters).Count -ge 1) -Message "Fixture_BaseExtrude did not expose feature parameters."
     Assert-True -Condition (@($baseExtrude.result.resultBodies) -contains "Fixture_BaseBody") -Message "Fixture_BaseExtrude did not expose Fixture_BaseBody."
 
     $projectSketch = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 6 -Name "inspect_sketch" -Arguments @{
         sketch_name = "Fixture_ProjectSketch"
-    } -TimeoutSec $TimeoutSec
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
     $projectCurves = @()
     foreach ($group in @("lines", "circles", "arcs", "ellipses", "fittedSplines", "fixedSplines", "conics")) {
         $projectCurves += @($projectSketch.result.curves.$group)
@@ -313,14 +309,14 @@ def run(context):
         point = @(1, 2, 0)
         from_sketch = "Fixture_BaseSketch"
         to_component = "Fixture_TargetComponent"
-    } -TimeoutSec $TimeoutSec
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
     Assert-True -Condition ($null -ne $mapped.result.sketchToModel) -Message "map_coordinates did not return sketchToModel."
     Assert-True -Condition ($null -ne $mapped.result.sketchToTargetComponent) -Message "map_coordinates did not return sketchToTargetComponent."
     Assert-True -Condition ($mapped.result.componentName -eq "Fixture_TargetComponent") -Message "map_coordinates did not resolve Fixture_TargetComponent."
 
     $dependencies = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 8 -Name "get_feature_dependencies" -Arguments @{
         feature_name = "Fixture_BaseExtrude"
-    } -TimeoutSec $TimeoutSec
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
     Assert-True -Condition ($dependencies.result.bestEffort -eq $true) -Message "get_feature_dependencies did not identify bestEffort output."
     Assert-True -Condition (@($dependencies.result.directInputs).Count -ge 1) -Message "get_feature_dependencies did not report direct inputs."
 
@@ -338,7 +334,7 @@ def run(context):
             script = $cleanupScript
             script_intent = "Close the temporary inspection fixture document after smoke testing."
             mcp_tool_gap = "The fixture cleanup needs direct document close behavior; it is not a modeling operation."
-        } -TimeoutSec $TimeoutSec
+        } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
         Write-Host "Fixture cleanup output:"
         Write-Host $cleanupResult.output
     }
@@ -353,7 +349,7 @@ finally {
             Invoke-WebRequest `
                 -Uri $mcpUri `
                 -Method Delete `
-                -Headers @{ "Mcp-Session-Id" = $sessionId } `
+                -Headers ($authHeaders + @{ "Mcp-Session-Id" = $sessionId }) `
                 -TimeoutSec $TimeoutSec `
                 -UseBasicParsing | Out-Null
         }

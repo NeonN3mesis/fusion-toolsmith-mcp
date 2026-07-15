@@ -2,7 +2,10 @@
 Tools and Resources Registry Package
 """
 
+import json
+import os
 import re
+import traceback
 
 tools_registry = {}
 resources_registry = {}
@@ -18,6 +21,19 @@ def register_resource(pattern):
         resources_registry[pattern] = func
         return func
     return decorator
+
+@register_resource("fusion://agent/tool-profiles")
+def read_tool_profiles():
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tool_profiles.json")
+    with open(path, "r", encoding="utf-8") as f:
+        profiles = json.load(f)
+    advertised = {schema.get("name") for schema in get_tool_schemas() if schema.get("name")}
+    registered = set(tools_registry.keys())
+    for profile in profiles.get("profiles", {}).values():
+        tools = profile.get("tools") or []
+        profile["missingFromSchema"] = [name for name in tools if name not in advertised]
+        profile["missingFromRegistry"] = [name for name in tools if name not in registered]
+    return profiles
 
 def get_tool_schemas():
     return [
@@ -725,6 +741,34 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "get_change_journal",
+            "description": "Read recent local FusionMCP tool-call journal entries from ~/.fusion_mcp/journal.jsonl. Entries redact tokens, authorization headers, and raw scripts.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "default": 200,
+                        "description": "Maximum number of recent entries to return, capped at 1000."
+                    }
+                }
+            }
+        },
+        {
+            "name": "clear_change_journal",
+            "description": "Clear the local FusionMCP tool-call journal. Requires a reason because this removes audit history.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Required reason for clearing the journal."
+                    }
+                },
+                "required": ["reason"]
+            }
+        },
+        {
             "name": "recommend_mcp_workflow",
             "description": "Return the structured FusionMCP workflow an agent should follow for a task before falling back to raw scripting. Use this when deciding whether to inspect, parameterize, modify geometry, troubleshoot runtime state, or export.",
             "inputSchema": {
@@ -815,6 +859,17 @@ def get_tool_schemas():
                 "type": "object", 
                 "properties": {
                     "topic": {"type": "string"}
+                }
+            }
+        },
+        {
+            "name": "search_local_fusion_docs",
+            "description": "Search FusionMCP's local Fusion API and best-practices documentation index. Use before raw scripts or unfamiliar Fusion API classes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search terms such as ConstructionPlane, units, or timeline safety."},
+                    "limit": {"type": "integer", "default": 10}
                 }
             }
         },
@@ -1019,6 +1074,24 @@ def get_resources_schemas():
             "name": "Tool-First Agent Workflow",
             "description": "Machine-readable policy for choosing structured FusionMCP tools before raw scripts.",
             "mimeType": "application/json"
+        },
+        {
+            "uri": "fusion://agent/tool-profiles",
+            "name": "Tool Profiles",
+            "description": "Machine-readable FusionMCP tool groups for client exposure and agent routing.",
+            "mimeType": "application/json"
+        },
+        {
+            "uri": "fusion://runtime/change-journal",
+            "name": "Change Journal",
+            "description": "Recent local JSONL journal entries for FusionMCP tool calls.",
+            "mimeType": "application/json"
+        },
+        {
+            "uri": "fusion://docs/fusion-api",
+            "name": "Fusion API Local Docs",
+            "description": "Local Fusion API and best-practices documentation index for script planning.",
+            "mimeType": "application/json"
         }
     ]
 
@@ -1032,6 +1105,18 @@ def get_resource_templates():
         }
     ]
 
+def log_tool_exception(context, exc):
+    message = f"{context}: {exc}\n{traceback.format_exc()}"
+    try:
+        import adsk.core
+        app = adsk.core.Application.get()
+        if app:
+            app.log(message)
+            return
+    except Exception:
+        pass
+    print(message)
+
 def execute_tool(name, arguments):
     if name not in tools_registry:
         return {"error": f"Tool '{name}' not found."}
@@ -1042,6 +1127,7 @@ def execute_tool(name, arguments):
     try:
         return tools_registry[name](**arguments)
     except Exception as e:
+        log_tool_exception(f"Tool '{name}' failed", e)
         return {"error": str(e)}
 
 def read_resource(uri):
@@ -1050,6 +1136,7 @@ def read_resource(uri):
         try:
             return resources_registry[uri]()
         except Exception as e:
+            log_tool_exception(f"Resource '{uri}' failed", e)
             return {"error": str(e)}
             
     # Try wildcard/template match for uri paths like fusion://design/tree/{depth}
@@ -1065,6 +1152,7 @@ def read_resource(uri):
                     args = match.groups()
                     return handler(*args)
                 except Exception as e:
+                    log_tool_exception(f"Resource '{uri}' failed", e)
                     return {"error": str(e)}
                     
     return {"error": f"Resource '{uri}' not found."}

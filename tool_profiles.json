@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "core": {
+      "description": "Runtime readiness and workflow guidance tools that should be safe to expose broadly.",
+      "tools": [
+        "doctor",
+        "get_runtime_diagnostics",
+        "get_change_journal",
+        "recommend_mcp_workflow",
+        "get_best_practices"
+      ]
+    },
+    "inspection": {
+      "description": "Read-heavy model inspection tools for understanding existing designs before editing.",
+      "tools": [
+        "inspect_design",
+        "capture_design_state",
+        "compare_design_state",
+        "inspect_sketch",
+        "inspect_feature",
+        "get_projected_geometry_sources",
+        "get_feature_dependencies",
+        "get_dependency_graph",
+        "query_selection",
+        "get_current_selection",
+        "map_coordinates"
+      ]
+    },
+    "modeling": {
+      "description": "Structured geometry creation and modification tools. Use after inspection and preflight.",
+      "tools": [
+        "create_sketch",
+        "draw_line",
+        "draw_rectangle",
+        "draw_circle",
+        "project_geometry",
+        "extrude_feature",
+        "fillet_feature",
+        "chamfer_feature",
+        "combine_bodies",
+        "create_box",
+        "create_cylinder",
+        "create_coil"
+      ]
+    },
+    "parameters": {
+      "description": "Parameter and dimension analysis/editing tools.",
+      "tools": [
+        "get_parameter",
+        "set_parameter",
+        "modify_parameters",
+        "plan_parameterization",
+        "get_parameter_usage",
+        "get_sketch_parameters",
+        "get_feature_parameters",
+        "get_sketch_dimensions",
+        "edit_sketch_dimension"
+      ]
+    },
+    "export": {
+      "description": "Preflight-gated export and drawing tools.",
+      "tools": [
+        "preflight_export",
+        "export_asset",
+        "create_2d_drawing"
+      ]
+    },
+    "docs": {
+      "description": "Local Fusion API, workflow, and best-practices lookup tools.",
+      "tools": [
+        "search_local_fusion_docs",
+        "get_fusion_api_help",
+        "search_fusion_api_documentation",
+        "get_mcp_workflow_guide",
+        "get_best_practices"
+      ]
+    },
+    "dangerous": {
+      "description": "Powerful or destructive tools. Expose only with explicit approval and after structured tools are insufficient.",
+      "tools": [
+        "run_fusion_script",
+        "clear_change_journal",
+        "delete_sketch_dimension",
+        "delete_timeline_feature",
+        "suppress_timeline_feature",
+        "undo_last_action",
+        "revert_active_document",
+        "set_active_document"
+      ]
+    }
+  }
+}
