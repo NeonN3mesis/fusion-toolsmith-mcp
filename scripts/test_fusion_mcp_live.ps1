@@ -237,7 +237,15 @@ try {
 finally {
     if ($messagesUri) {
         try {
-            Invoke-WebRequest -Uri $messagesUri -Method Delete -Headers $authHeaders -TimeoutSec $TimeoutSec | Out-Null
+            $deleteRequest = [System.Net.HttpWebRequest]::Create($messagesUri)
+            $deleteRequest.Method = "DELETE"
+            $deleteRequest.Timeout = $TimeoutSec * 1000
+            $deleteRequest.ReadWriteTimeout = $TimeoutSec * 1000
+            if ($authHeaders.ContainsKey("Authorization")) {
+                $deleteRequest.Headers["Authorization"] = $authHeaders["Authorization"]
+            }
+            $deleteResponse = $deleteRequest.GetResponse()
+            $deleteResponse.Close()
         }
         catch {
             Write-Warning "Failed to explicitly close MCP SSE session: $($_.Exception.Message)"
