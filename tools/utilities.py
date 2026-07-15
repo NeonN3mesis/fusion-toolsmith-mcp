@@ -1364,13 +1364,74 @@ def prompt_user(message):
     return {"result": "Message shown to user."}
 
 @register_tool("undo_last_action")
-def undo_last_action():
+def undo_last_action(allow_risky=False, reason=None):
     try:
+        if allow_risky and not reason:
+            return {"error": "reason is required when allow_risky=true."}
         app = adsk.core.Application.get()
+        before = _safe_value(lambda: _design_state_snapshot(include_selections=False))
         app.executeTextCommand(u'NuIUndo')
-        return {"result": "Undid last action"}
+        after = _safe_value(lambda: _design_state_snapshot(include_selections=False))
+        comparison = compare_design_state(before, after).get("result") if before and after else None
+        guard_reasons = _undo_guard_reasons(before, after, comparison)
+        if guard_reasons and not allow_risky:
+            redo_error = None
+            try:
+                app.executeTextCommand(u'NuIRedo')
+            except Exception as redo_exc:
+                redo_error = str(redo_exc)
+            restored = _safe_value(lambda: _design_state_snapshot(include_selections=False))
+            return {
+                "error": "Undo was automatically redone because guardrails detected risky model state changes.",
+                "guardReasons": guard_reasons,
+                "redoAttempted": True,
+                "redoError": redo_error,
+                "stateComparison": comparison,
+                "restoredStateComparison": compare_design_state(before, restored).get("result") if before and restored else None,
+            }
+        return {
+            "result": {
+                "message": "Undid last action",
+                "guardReasons": guard_reasons,
+                "allowRisky": bool(allow_risky),
+                "reason": reason,
+                "stateComparison": comparison,
+            }
+        }
     except Exception as e:
         return {"error": f"Failed to undo: {e}"}
+
+
+def _undo_guard_reasons(before, after, comparison):
+    reasons = []
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return ["Unable to capture before/after design state for guarded undo."]
+    before_design = before.get("design") or {}
+    after_design = after.get("design") or {}
+    if before_design.get("designType") != after_design.get("designType"):
+        reasons.append("Undo changed the design type.")
+
+    before_counts = before.get("counts") or {}
+    after_counts = after.get("counts") or {}
+    before_unhealthy = before_counts.get("unhealthyTimelineItems") or 0
+    after_unhealthy = after_counts.get("unhealthyTimelineItems") or 0
+    if after_unhealthy > before_unhealthy:
+        reasons.append("Undo increased unhealthy timeline items.")
+
+    for key in ("components", "bodies", "sketches"):
+        before_count = before_counts.get(key)
+        after_count = after_counts.get(key)
+        if isinstance(before_count, int) and isinstance(after_count, int) and after_count < before_count:
+            reasons.append(f"Undo removed {before_count - after_count} {key}.")
+
+    if isinstance(comparison, dict):
+        diff = comparison.get("diff") or {}
+        removed = diff.get("removed") or {}
+        for key in ("components", "bodies", "sketches"):
+            removed_items = removed.get(key) if isinstance(removed, dict) else None
+            if removed_items:
+                reasons.append(f"Undo removed named {key}: {', '.join(str(item) for item in removed_items[:5])}.")
+    return reasons
 
 @register_tool("list_documents")
 def list_documents():

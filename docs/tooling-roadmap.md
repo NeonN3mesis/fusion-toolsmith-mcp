@@ -20,9 +20,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
   - Dedicated physical properties, section analysis, and interference checks.
   - Prefer read-only reporting first; mutating analysis entities should be separate tools with explicit names and cleanup behavior.
 
-- Safer undo workflow
-  - Add an undo guard that captures design state before/after undo and auto-redoes if undo would switch design type, remove broad structures, or create timeline health issues.
-
 - Mock/simulation mode
   - Provide a deterministic no-Fusion mode for client integration tests, docs screenshots, and CI smoke coverage.
 
@@ -117,3 +114,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - First-class MCP prompts
   - Adds workflow prompts for tool-first routing, export readiness, threaded fasteners, sheet-metal enclosure planning, printability review, and physical-property review.
   - Prompt text routes agents toward structured tools and explicitly calls out unsupported CAD-domain gaps instead of encouraging invented raw-script behavior.
+
+- Safer undo workflow
+  - `undo_last_action` captures design state before/after undo and automatically redoes risky undo results unless explicitly overridden with a reason.
+  - Guardrails catch design-type changes, newly unhealthy timeline items, and broad component/body/sketch removals.

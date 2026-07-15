@@ -787,6 +787,77 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(export_result, {"error": "CSV path must be absolute."})
         self.assertEqual(import_result, {"error": "CSV path must be absolute."})
 
+    def test_undo_last_action_returns_state_comparison_when_safe(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        original_execute = getattr(_fake_app, "executeTextCommand", None)
+        commands = []
+        snapshots = iter([
+            {"design": {"designType": "parametric"}, "counts": {"bodies": 1, "components": 1, "sketches": 1, "unhealthyTimelineItems": 0}},
+            {"design": {"designType": "parametric"}, "counts": {"bodies": 1, "components": 1, "sketches": 1, "unhealthyTimelineItems": 0}},
+        ])
+        utilities._design_state_snapshot = lambda include_selections=False: next(snapshots)
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "diff": {"removed": {}, "countChanges": {}}}
+        }
+        _fake_app.executeTextCommand = lambda command: commands.append(command)
+        try:
+            res = self.tools.execute_tool("undo_last_action", {})
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+            if original_execute is None:
+                delattr(_fake_app, "executeTextCommand")
+            else:
+                _fake_app.executeTextCommand = original_execute
+
+        self.assertIn("result", res)
+        self.assertEqual(commands, ["NuIUndo"])
+        self.assertEqual(res["result"]["guardReasons"], [])
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_undo_last_action_auto_redoes_risky_undo(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        original_execute = getattr(_fake_app, "executeTextCommand", None)
+        commands = []
+        snapshots = iter([
+            {"design": {"designType": "parametric"}, "counts": {"bodies": 2, "components": 1, "sketches": 1, "unhealthyTimelineItems": 0}},
+            {"design": {"designType": "direct"}, "counts": {"bodies": 1, "components": 1, "sketches": 1, "unhealthyTimelineItems": 1}},
+            {"design": {"designType": "parametric"}, "counts": {"bodies": 2, "components": 1, "sketches": 1, "unhealthyTimelineItems": 0}},
+        ])
+        utilities._design_state_snapshot = lambda include_selections=False: next(snapshots)
+        utilities.compare_design_state = lambda before, after: {
+            "result": {
+                "hasChanges": True,
+                "riskLevel": "high",
+                "diff": {"removed": {"bodies": ["BodyA"]}, "countChanges": {"bodies": -1}},
+            }
+        }
+        _fake_app.executeTextCommand = lambda command: commands.append(command)
+        try:
+            res = self.tools.execute_tool("undo_last_action", {})
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+            if original_execute is None:
+                delattr(_fake_app, "executeTextCommand")
+            else:
+                _fake_app.executeTextCommand = original_execute
+
+        self.assertIn("error", res)
+        self.assertEqual(commands, ["NuIUndo", "NuIRedo"])
+        self.assertTrue(res["redoAttempted"])
+        self.assertIn("Undo changed the design type.", res["guardReasons"])
+        self.assertIn("Undo increased unhealthy timeline items.", res["guardReasons"])
+
+    def test_undo_last_action_requires_reason_for_risky_override(self):
+        res = self.tools.execute_tool("undo_last_action", {"allow_risky": True})
+        self.assertIn("error", res)
+        self.assertIn("reason is required", res["error"])
+
     def test_preflight_model_change_healthy_returns_low_risk(self):
         utilities = importlib.import_module("tools.utilities")
         original_snapshot = utilities._design_state_snapshot

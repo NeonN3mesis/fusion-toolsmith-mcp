@@ -166,7 +166,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |
 | Export and presentation | preflighted STL/STEP/PDF export, screenshots, staged visibility, still-frame demo sequences |
 | MCP prompts | workflow prompts for tool-first routing, export readiness, threaded fasteners, sheet-metal planning, printability review, and physical-property review |
-| Dangerous tools | raw scripts, undo/revert, timeline deletion/suppression, and document activation are isolated from normal workflows |
+| Dangerous tools | raw scripts, guarded undo/revert, timeline deletion/suppression, and document activation are isolated from normal workflows |
 
 ## Development
 

@@ -1473,8 +1473,14 @@ def get_tool_schemas():
         },
         {
             "name": "undo_last_action",
-            "description": "Automatically undo the last CAD operation in the Fusion timeline. Use this if your previous script broke the model.",
-            "inputSchema": {"type": "object", "properties": {}}
+            "description": "Undo the last CAD operation with guardrails. Captures design state before/after and automatically redoes the undo if it changes design type, removes broad model structures, or increases unhealthy timeline items unless allow_risky is explicitly set with a reason.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "allow_risky": {"type": "boolean", "default": False, "description": "Allow a guarded undo even when risky state changes are detected. Requires reason."},
+                    "reason": {"type": "string", "description": "Required when allow_risky=true. Explain why the risky undo is intentional."}
+                }
+            }
         },
         {
             "name": "get_assembly_tree",
