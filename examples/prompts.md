@@ -27,6 +27,10 @@ Run a heuristic FDM printability inspection on the visible bodies. Report thin w
 ```
 
 ```text
+Run inspect_printability with mesh analysis enabled. Treat mesh warnings as review candidates only, and call out which risks still require slicer preview verification.
+```
+
+```text
 Inspect this selected feature and map its dependencies before proposing any changes.
 ```
 

@@ -1850,6 +1850,58 @@ def run(context):
         self.assertIn("tiny_edge_features", codes)
         self.assertIn("small_hole_or_pin_candidate", codes)
         self.assertIn("risky_overhang_or_lip_candidate", codes)
+        self.assertEqual(result["bodies"][0]["meshAnalysis"]["status"], "unavailable")
+
+    def test_inspect_printability_reports_mesh_analysis_when_available(self):
+        mesh = types.SimpleNamespace(
+            nodeCoordinates=[
+                types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                types.SimpleNamespace(x=0.0, y=0.01, z=0.0),
+                types.SimpleNamespace(x=0.01, y=0.0, z=0.0),
+            ],
+            triangleNodeIndices=[0, 1, 2],
+        )
+        body = types.SimpleNamespace(
+            name="MeshRiskBody",
+            isVisible=True,
+            isSolid=True,
+            entityToken="mesh-risk-token",
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0, y=0, z=0),
+                maxPoint=types.SimpleNamespace(x=10.0, y=10.0, z=10.0),
+            ),
+            physicalProperties=types.SimpleNamespace(volume=100.0, area=600.0),
+            edges=[],
+            faces=[],
+            triangleMesh=mesh,
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[body],
+            sketches=[],
+            occurrences=[],
+            allOccurrences=[],
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("inspect_printability", {
+            "minimum_feature_size": "0.5 mm",
+            "overhang_angle_degrees": 45,
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        analysis = result["bodies"][0]["meshAnalysis"]
+        self.assertEqual(analysis["status"], "analyzed")
+        self.assertEqual(analysis["triangleCount"], 1)
+        self.assertEqual(analysis["nodeCount"], 3)
+        self.assertLess(analysis["minimumTriangleEdgeMm"], 0.5)
+        codes = {warning["code"] for warning in result["warnings"]}
+        self.assertIn("mesh_tiny_triangle_edges", codes)
+        self.assertIn("mesh_overhang_triangles", codes)
 
     def test_capture_demo_sequence_writes_frames_and_restores_visibility(self):
         class FakeViewport:

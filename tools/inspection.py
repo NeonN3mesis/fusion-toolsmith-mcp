@@ -364,7 +364,178 @@ def _face_warnings(body, body_name, min_hole_mm, overhang_angle_degrees, build_a
     return warnings
 
 
-def _printability_body_report(body, component_name, thresholds, max_items):
+def _point_mm(point):
+    if not point:
+        return None
+    return (
+        _safe_value(lambda: point.x, 0.0) * 10.0,
+        _safe_value(lambda: point.y, 0.0) * 10.0,
+        _safe_value(lambda: point.z, 0.0) * 10.0,
+    )
+
+
+def _distance_mm(a, b):
+    if not a or not b:
+        return None
+    return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
+
+
+def _triangle_area_mm2(a, b, c):
+    if not a or not b or not c:
+        return None
+    ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+    cross = (
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    )
+    return 0.5 * math.sqrt(sum(value * value for value in cross))
+
+
+def _triangle_normal(a, b, c):
+    if not a or not b or not c:
+        return None
+    ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+    return _unit((
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ))
+
+
+def _triangle_mesh(body, quality):
+    direct = _safe_value(lambda: body.triangleMesh)
+    if direct:
+        return direct
+    direct = _safe_value(lambda: body.mesh)
+    if direct:
+        return direct
+    manager = _safe_value(lambda: body.meshManager)
+    calculator = _safe_value(lambda: manager.createMeshCalculator()) if manager else None
+    if not calculator:
+        return None
+    for setter in ("setQuality", "quality"):
+        try:
+            if setter == "setQuality":
+                calculator.setQuality(quality)
+            else:
+                setattr(calculator, "quality", quality)
+        except Exception:
+            pass
+    return _safe_value(lambda: calculator.calculate())
+
+
+def _mesh_points(mesh):
+    for attr in ("nodeCoordinates", "coordinates", "vertices", "nodes"):
+        points = _collection_items(_safe_value(lambda attr=attr: getattr(mesh, attr)))
+        if points:
+            return [_point_mm(point) for point in points]
+    return []
+
+
+def _mesh_indices(mesh):
+    for attr in ("triangleNodeIndices", "nodeIndices", "indices", "triangles"):
+        values = _collection_items(_safe_value(lambda attr=attr: getattr(mesh, attr)))
+        if values:
+            flattened = []
+            for value in values:
+                if isinstance(value, (list, tuple)):
+                    flattened.extend(int(item) for item in value)
+                else:
+                    flattened.append(int(value))
+            return flattened
+    return []
+
+
+def _mesh_printability_analysis(body, body_name, thresholds, max_items, mesh_quality):
+    mesh = _triangle_mesh(body, mesh_quality)
+    if not mesh:
+        return {
+            "status": "unavailable",
+            "reason": "Fusion did not expose triangle mesh data for this body in the current runtime.",
+        }, []
+
+    points = _mesh_points(mesh)
+    indices = _mesh_indices(mesh)
+    if not points or len(indices) < 3:
+        return {
+            "status": "unavailable",
+            "reason": "Triangle mesh was available but did not expose node coordinates and triangle indices.",
+        }, []
+
+    axis = _axis_vector(thresholds["buildAxis"])
+    overhang_cutoff = 180.0 - float(thresholds["overhangAngleDegrees"])
+    min_edge_mm = None
+    max_edge_mm = None
+    tiny_edges = []
+    overhangs = []
+    triangle_count = 0
+    total_area = 0.0
+
+    for i in range(0, len(indices) - 2, 3):
+        try:
+            a = points[indices[i]]
+            b = points[indices[i + 1]]
+            c = points[indices[i + 2]]
+        except Exception:
+            continue
+        triangle_count += 1
+        lengths = [_distance_mm(a, b), _distance_mm(b, c), _distance_mm(c, a)]
+        lengths = [length for length in lengths if length is not None]
+        if lengths:
+            tri_min = min(lengths)
+            tri_max = max(lengths)
+            min_edge_mm = tri_min if min_edge_mm is None else min(min_edge_mm, tri_min)
+            max_edge_mm = tri_max if max_edge_mm is None else max(max_edge_mm, tri_max)
+            if tri_min < thresholds["minimumFeatureSizeMm"] and len(tiny_edges) < max_items:
+                tiny_edges.append({"triangleIndex": triangle_count - 1, "minimumEdgeMm": round(tri_min, 4)})
+        area = _triangle_area_mm2(a, b, c)
+        if area is not None:
+            total_area += area
+        normal = _triangle_normal(a, b, c)
+        angle = _angle_degrees_between(normal, axis)
+        if angle is not None and angle >= overhang_cutoff and len(overhangs) < max_items:
+            overhangs.append({
+                "triangleIndex": triangle_count - 1,
+                "angleFromBuildAxisDegrees": round(angle, 2),
+                "areaMm2": round(area, 4) if area is not None else None,
+            })
+
+    warnings = []
+    if tiny_edges:
+        warnings.append(_warning(
+            "mesh_tiny_triangle_edges",
+            "medium",
+            body_name,
+            "Triangle mesh contains edges below the configured minimum feature size.",
+            {"minimumFeatureMm": thresholds["minimumFeatureSizeMm"], "triangles": tiny_edges},
+            "Inspect slicer preview for slivers, disappearing details, or over-tessellated geometry.",
+        ))
+    if overhangs:
+        warnings.append(_warning(
+            "mesh_overhang_triangles",
+            "medium",
+            body_name,
+            "Triangle mesh contains downward-facing facets beyond the configured overhang angle.",
+            {"overhangAngleDegrees": thresholds["overhangAngleDegrees"], "buildAxis": thresholds["buildAxis"], "triangles": overhangs},
+            "Confirm support and bridge behavior in the slicer preview.",
+        ))
+
+    return {
+        "status": "analyzed",
+        "quality": mesh_quality,
+        "triangleCount": triangle_count,
+        "nodeCount": len(points),
+        "surfaceAreaMm2Approx": round(total_area, 4),
+        "minimumTriangleEdgeMm": round(min_edge_mm, 4) if min_edge_mm is not None else None,
+        "maximumTriangleEdgeMm": round(max_edge_mm, 4) if max_edge_mm is not None else None,
+        "sampledWarningCount": len(warnings),
+    }, warnings
+
+
+def _printability_body_report(body, component_name, thresholds, max_items, include_mesh_analysis, mesh_quality):
     body_name = _safe_value(lambda: body.name)
     bbox = _bbox_to_dict(body)
     size_mm = _bbox_size_mm(bbox)
@@ -386,6 +557,10 @@ def _printability_body_report(body, component_name, thresholds, max_items):
         thresholds["buildAxis"],
         max_items,
     ))
+    mesh_analysis = {"status": "disabled"}
+    if include_mesh_analysis:
+        mesh_analysis, mesh_warnings = _mesh_printability_analysis(body, body_name, thresholds, max_items, mesh_quality)
+        warnings.extend(mesh_warnings)
     return {
         "name": body_name,
         "componentName": component_name,
@@ -397,12 +572,13 @@ def _printability_body_report(body, component_name, thresholds, max_items):
         "areaMm2": round(_safe_value(lambda: physical_props.area, 0) * 100.0, 4) if physical_props else None,
         "faceCount": _collection_count(_safe_value(lambda: body.faces)),
         "edgeCount": _collection_count(_safe_value(lambda: body.edges)),
+        "meshAnalysis": mesh_analysis,
         "warnings": warnings,
     }
 
 
 @register_tool("inspect_printability")
-def inspect_printability(body_names=None, include_invisible=False, build_axis="z", nozzle_diameter="0.4 mm", layer_height="0.2 mm", minimum_wall_thickness=None, minimum_hole_diameter="2.0 mm", minimum_slot_width="1.0 mm", minimum_feature_size=None, overhang_angle_degrees=45, max_items_per_warning=25):
+def inspect_printability(body_names=None, include_invisible=False, build_axis="z", nozzle_diameter="0.4 mm", layer_height="0.2 mm", minimum_wall_thickness=None, minimum_hole_diameter="2.0 mm", minimum_slot_width="1.0 mm", minimum_feature_size=None, overhang_angle_degrees=45, max_items_per_warning=25, include_mesh_analysis=True, mesh_quality="low"):
     """
     Read-only FDM printability sanity report.
 
@@ -428,6 +604,7 @@ def inspect_printability(body_names=None, include_invisible=False, build_axis="z
             "overhangAngleDegrees": float(overhang_angle_degrees),
         }
         max_items = max(1, min(int(max_items_per_warning or 25), 200))
+        mesh_quality = str(mesh_quality or "low")
 
         bodies = []
         skipped = []
@@ -438,7 +615,14 @@ def inspect_printability(body_names=None, include_invisible=False, build_axis="z
             if not include_invisible and _safe_value(lambda body=body: body.isVisible) is False:
                 skipped.append({"name": body_name, "componentName": component_name, "reason": "hidden"})
                 continue
-            bodies.append(_printability_body_report(body, component_name, thresholds, max_items))
+            bodies.append(_printability_body_report(
+                body,
+                component_name,
+                thresholds,
+                max_items,
+                bool(include_mesh_analysis),
+                mesh_quality,
+            ))
 
         all_warnings = [warning for body in bodies for warning in body.get("warnings", [])]
         severity_rank = {"high": 3, "medium": 2, "low": 1}
@@ -460,6 +644,7 @@ def inspect_printability(body_names=None, include_invisible=False, build_axis="z
                     "Heuristic report only; verify final results in the slicer preview.",
                     "Thin walls, narrow slots, and unsupported regions are inferred from BRep/bounding-box hints and may include false positives.",
                     "Hole warnings are based on rounded or cylindrical face radii when Fusion exposes them.",
+                    "Mesh analysis uses Fusion-exposed triangle mesh data when available; it is still not a replacement for slicer simulation.",
                 ],
             }
         }

@@ -157,7 +157,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 | Area | What Toolsmith exposes |
 | --- | --- |
 | Runtime safety | `doctor`, runtime diagnostics, fixed-port health, bearer auth, change journal, structured-tool routing |
-| Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference reports, material/appearance reports, `inspect_printability` heuristics |
+| Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference reports, material/appearance reports, mesh-aware `inspect_printability` warnings |
 | Safe modeling | typed sketching, guarded sketch constraint creation/deletion, extrudes, revolves, lofts, sweeps, token-targeted fillets/chamfers/shells, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry |
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |
 | Export and presentation | preflighted STL/STEP/PDF export, screenshots, staged visibility, still-frame demo sequences |

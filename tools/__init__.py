@@ -89,7 +89,7 @@ def get_tool_schemas():
         },
         {
             "name": "inspect_printability",
-            "description": "Read-only FDM printability sanity report for bodies. Reports bounding boxes, thin/tiny/narrow feature candidates, small rounded-hole candidates, and risky downward-face/overhang candidates without mutating geometry.",
+            "description": "Read-only FDM printability sanity report for bodies. Reports BRep heuristics plus optional Fusion triangle-mesh analysis for tiny facets and overhang candidates without mutating geometry.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -106,7 +106,9 @@ def get_tool_schemas():
                     "minimum_slot_width": {"type": "string", "default": "1.0 mm"},
                     "minimum_feature_size": {"type": "string", "description": "Defaults to max(nozzle diameter, 2x layer height)."},
                     "overhang_angle_degrees": {"type": "number", "default": 45},
-                    "max_items_per_warning": {"type": "integer", "default": 25}
+                    "max_items_per_warning": {"type": "integer", "default": 25},
+                    "include_mesh_analysis": {"type": "boolean", "default": True, "description": "When true, also analyze Fusion-exposed triangle mesh data if available. Read-only and still not a slicer simulation."},
+                    "mesh_quality": {"type": "string", "default": "low", "description": "Requested mesh quality hint for Fusion's mesh calculator when that API is available."}
                 }
             }
         },

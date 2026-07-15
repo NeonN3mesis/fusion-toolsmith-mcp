@@ -7,9 +7,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - Assembly joints
   - Create and inspect basic joints for repeatable component placement once the structured joint API surface is validated.
 
-- Deeper slicer-grade printability
-  - Move beyond heuristic warnings toward mesh/slicer-aware checks while keeping the tool read-only.
-
 ## Implemented
 
 - `create_offset_plane`
@@ -81,8 +78,9 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
   - Useful for mirrors, revolves, circular patterns, and repeatable feature placement.
 
 - `inspect_printability`
-  - General read-only FDM sanity report: bounding boxes, thin/tiny/narrow feature candidates, small rounded-hole candidates, and risky downward-face/overhang candidates.
-  - Reports warnings and limitations only; does not mutate geometry or claim slicer-level validation.
+  - General read-only FDM sanity report: bounding boxes, thin/tiny/narrow feature candidates, small rounded-hole candidates, risky downward-face/overhang candidates, and optional Fusion triangle-mesh analysis.
+  - Mesh-aware checks report triangle counts, approximate mesh surface area, tiny mesh edge candidates, and overhang triangle candidates when Fusion exposes mesh data.
+  - Reports warnings and limitations only; it does not mutate geometry or claim to replace slicer preview/simulation.
 
 - `capture_demo_sequence`
   - General presentation helper for named camera views, staged visibility, screenshots, and before/after capture steps.
