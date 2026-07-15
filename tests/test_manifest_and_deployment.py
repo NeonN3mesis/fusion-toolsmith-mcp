@@ -62,6 +62,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "create_hole_pattern",
             "create_counterbore_hole_pattern",
             "mirror_features_or_bodies",
+            "pattern_feature",
             "set_visibility",
             "bearer_sse_url",
             "Authorization",

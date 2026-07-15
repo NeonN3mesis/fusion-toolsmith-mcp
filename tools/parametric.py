@@ -297,6 +297,70 @@ def _find_feature_entity(design, feature_name):
             return entity
     return None
 
+def _entity_component(entity):
+    component = getattr(entity, "parentComponent", None)
+    if component:
+        return component
+    body = getattr(entity, "body", None)
+    if body:
+        return getattr(body, "parentComponent", None)
+    return None
+
+def _find_named_axis(root, name):
+    if not name:
+        return None, None
+    key = str(name).lower()
+    standard = {
+        "x": getattr(root, "xConstructionAxis", None),
+        "xconstructionaxis": getattr(root, "xConstructionAxis", None),
+        "y": getattr(root, "yConstructionAxis", None),
+        "yconstructionaxis": getattr(root, "yConstructionAxis", None),
+        "z": getattr(root, "zConstructionAxis", None),
+        "zconstructionaxis": getattr(root, "zConstructionAxis", None),
+    }
+    if key in standard and standard[key]:
+        return standard[key], root
+    for component in _all_components(root):
+        for axis in getattr(component, "constructionAxes", []) or []:
+            if getattr(axis, "name", None) == name:
+                return axis, component
+    return None, None
+
+def _selected_axis():
+    app = adsk.core.Application.get()
+    ui = app.userInterface
+    if ui.activeSelections.count < 1:
+        return None, None
+    entity = ui.activeSelections.item(0).entity
+    axis = adsk.fusion.ConstructionAxis.cast(entity)
+    if axis:
+        return axis, axis.parentComponent
+    edge = adsk.fusion.BRepEdge.cast(entity)
+    if edge:
+        return edge, edge.body.parentComponent
+    return None, None
+
+def _pattern_compute_option(value):
+    options = getattr(adsk.fusion, "PatternComputeOptions", None)
+    if not options:
+        return None
+    key = (value or "optimized").replace("_", "").replace(" ", "").lower()
+    mapping = {
+        "optimized": "OptimizedPatternCompute",
+        "identical": "IdenticalPatternCompute",
+        "adjust": "AdjustPatternCompute",
+    }
+    attr = mapping.get(key, "OptimizedPatternCompute")
+    return getattr(options, attr, None)
+
+def _pattern_distance_type(value):
+    distance_types = getattr(adsk.fusion, "PatternDistanceType", None)
+    if not distance_types:
+        return None
+    key = (value or "spacing").replace("_", "").replace(" ", "").lower()
+    attr = "ExtentPatternDistanceType" if key == "extent" else "SpacingPatternDistanceType"
+    return getattr(distance_types, attr, None)
+
 def _set_participant_body(ext_input, body):
     if not body:
         return
@@ -905,6 +969,146 @@ def mirror_features_or_bodies(name="Mirror", body_names=None, feature_names=None
             "resolvedInputs": resolved,
             "resultBodies": _collection_names(getattr(mirror_feature, "bodies", None)),
             "resultFeatures": _collection_names(getattr(mirror_feature, "resultFeatures", None)),
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
+
+@register_tool("pattern_feature")
+def pattern_feature(
+    name="Pattern",
+    pattern_type="rectangular",
+    body_names=None,
+    feature_names=None,
+    use_selected_entities=False,
+    direction_one_axis="x",
+    quantity_one=2,
+    distance_one="10 mm",
+    direction_two_axis=None,
+    quantity_two=None,
+    distance_two=None,
+    axis_name="z",
+    use_selected_axis=False,
+    quantity=2,
+    total_angle="360 deg",
+    distance_type="spacing",
+    compute_option="optimized",
+):
+    design = get_active_design()
+    root = design.rootComponent
+    before = _capture_design_state()
+
+    entities = adsk.core.ObjectCollection.create()
+    resolved = {"bodies": [], "features": [], "selected": []}
+    missing = {"bodies": [], "features": []}
+    target_component = None
+
+    for body_name in _normalize_name_list(body_names):
+        body = _find_body(root, body_name)
+        if body:
+            _collection_add(entities, body)
+            resolved["bodies"].append(body_name)
+            target_component = target_component or _entity_component(body)
+        else:
+            missing["bodies"].append(body_name)
+
+    for feature_name in _normalize_name_list(feature_names):
+        feature = _find_feature_entity(design, feature_name)
+        if feature:
+            _collection_add(entities, feature)
+            resolved["features"].append(feature_name)
+            target_component = target_component or _entity_component(feature)
+        else:
+            missing["features"].append(feature_name)
+
+    if use_selected_entities:
+        app = adsk.core.Application.get()
+        selections = getattr(getattr(app, "userInterface", None), "activeSelections", None)
+        selection_count = getattr(selections, "count", 0) if selections else 0
+        for index in range(selection_count):
+            entity = selections.item(index).entity
+            _collection_add(entities, entity)
+            resolved["selected"].append(_safe_name(entity) or getattr(entity, "objectType", None) or f"selection[{index}]")
+            target_component = target_component or _entity_component(entity)
+
+    entity_count = getattr(entities, "count", len(entities) if hasattr(entities, "__len__") else 0)
+    if entity_count == 0:
+        return {"error": "No pattern input entities resolved. Provide body_names, feature_names, or use_selected_entities=true."}
+    if missing["bodies"] or missing["features"]:
+        return {"error": f"Pattern input entities were not found: bodies={missing['bodies']}, features={missing['features']}."}
+
+    target_component = target_component or root
+    pattern_kind = (pattern_type or "rectangular").lower()
+    compute = _pattern_compute_option(compute_option)
+
+    if pattern_kind == "rectangular":
+        direction_one, _ = _find_named_axis(root, direction_one_axis)
+        if not direction_one:
+            return {"error": f"Direction axis '{direction_one_axis}' not found. Use x, y, z, or a named construction axis."}
+        quantity_one_input = adsk.core.ValueInput.createByString(str(quantity_one))
+        distance_one_input = adsk.core.ValueInput.createByString(str(distance_one))
+        distance_kind = _pattern_distance_type(distance_type)
+        pattern_features = target_component.features.rectangularPatternFeatures
+        try:
+            pattern_input = pattern_features.createInput(entities, direction_one, quantity_one_input, distance_one_input, distance_kind)
+        except TypeError:
+            pattern_input = pattern_features.createInput(entities, quantity_one_input, distance_one_input, direction_one)
+
+        if direction_two_axis:
+            direction_two, _ = _find_named_axis(root, direction_two_axis)
+            if not direction_two:
+                return {"error": f"Direction axis '{direction_two_axis}' not found. Use x, y, z, or a named construction axis."}
+            quantity_two_input = adsk.core.ValueInput.createByString(str(quantity_two or 1))
+            distance_two_input = adsk.core.ValueInput.createByString(str(distance_two or "0 mm"))
+            try:
+                pattern_input.setDirectionTwo(direction_two, quantity_two_input, distance_two_input)
+            except Exception:
+                for attr, val in (
+                    ("directionTwoEntity", direction_two),
+                    ("quantityTwo", quantity_two_input),
+                    ("distanceTwo", distance_two_input),
+                ):
+                    try:
+                        setattr(pattern_input, attr, val)
+                    except Exception:
+                        pass
+        feature = pattern_features.add(pattern_input)
+
+    elif pattern_kind == "circular":
+        if use_selected_axis:
+            axis, _ = _selected_axis()
+            if not axis:
+                return {"error": "No selected construction axis or linear edge found for circular pattern axis."}
+        else:
+            axis, _ = _find_named_axis(root, axis_name)
+            if not axis:
+                return {"error": f"Pattern axis '{axis_name}' not found. Use x, y, z, a named construction axis, or use_selected_axis=true."}
+        quantity_input = adsk.core.ValueInput.createByString(str(quantity))
+        total_angle_input = adsk.core.ValueInput.createByString(str(total_angle))
+        pattern_features = target_component.features.circularPatternFeatures
+        try:
+            pattern_input = pattern_features.createInput(entities, axis, quantity_input, total_angle_input)
+        except TypeError:
+            pattern_input = pattern_features.createInput(entities, quantity_input, total_angle_input, axis)
+        feature = pattern_features.add(pattern_input)
+
+    else:
+        return {"error": "pattern_type must be rectangular or circular."}
+
+    try:
+        if compute is not None:
+            pattern_input.patternComputeOption = compute
+    except Exception:
+        pass
+    feature.name = name
+
+    return {
+        "result": {
+            "message": f"Created {pattern_kind} pattern feature '{name}'.",
+            "featureName": feature.name,
+            "patternType": pattern_kind,
+            "resolvedInputs": resolved,
+            "resultBodies": _collection_names(getattr(feature, "bodies", None)),
+            "resultFeatures": _collection_names(getattr(feature, "resultFeatures", None)),
             "stateComparison": _compare_after_mutation(before),
         }
     }

@@ -589,6 +589,38 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "pattern_feature",
+            "description": "Create a rectangular or circular pattern from named bodies, named timeline features, or selected entities.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name for the created pattern feature."},
+                    "pattern_type": {"type": "string", "enum": ["rectangular", "circular"], "default": "rectangular"},
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Body name or names to pattern."
+                    },
+                    "feature_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Timeline feature name or names to pattern."
+                    },
+                    "use_selected_entities": {"type": "boolean", "default": False},
+                    "direction_one_axis": {"type": "string", "default": "x", "description": "Rectangular pattern first direction: x, y, z, or named construction axis."},
+                    "quantity_one": {"type": "integer", "default": 2},
+                    "distance_one": {"type": "string", "default": "10 mm"},
+                    "direction_two_axis": {"type": "string", "description": "Optional second rectangular direction: x, y, z, or named construction axis."},
+                    "quantity_two": {"type": "integer"},
+                    "distance_two": {"type": "string"},
+                    "axis_name": {"type": "string", "default": "z", "description": "Circular pattern axis: x, y, z, or named construction axis."},
+                    "use_selected_axis": {"type": "boolean", "default": False},
+                    "quantity": {"type": "integer", "default": 2},
+                    "total_angle": {"type": "string", "default": "360 deg"},
+                    "distance_type": {"type": "string", "enum": ["spacing", "extent"], "default": "spacing"},
+                    "compute_option": {"type": "string", "enum": ["optimized", "identical", "adjust"], "default": "optimized"}
+                }
+            }
+        },
+        {
             "name": "create_coil",
             "description": "Create a coil-like helical pipe feature in Fusion 360 and return design-state comparison.",
             "inputSchema": {

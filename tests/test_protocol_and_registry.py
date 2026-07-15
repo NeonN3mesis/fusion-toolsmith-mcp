@@ -1386,6 +1386,7 @@ def run(context):
         self.assertIn("create_hole_pattern", tool_names)
         self.assertIn("create_counterbore_hole_pattern", tool_names)
         self.assertIn("mirror_features_or_bodies", tool_names)
+        self.assertIn("pattern_feature", tool_names)
         self.assertIn("set_visibility", tool_names)
         self.assertIn("revert_active_document", tool_names)
         self.assertIn("get_runtime_diagnostics", tool_names)

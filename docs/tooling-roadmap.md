@@ -4,10 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Near-Term Tools
 
-- `pattern_feature`
-  - Rectangular and circular patterning for bodies or features.
-  - Support count, spacing/angle, axes, direction, and participant bodies where applicable.
-
 - `create_rounded_pocket`
   - Cut a shallow rounded-rectangle recess into a named target body.
   - Support depth, corner radius, plane/face placement, optional cleanup fillets/chamfers, and state comparison.
@@ -48,3 +44,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `mirror_features_or_bodies`
   - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.
   - Returns created names and before/after design-state comparison.
+
+- `pattern_feature`
+  - Rectangular and circular patterning for named bodies, named timeline features, or selected entities.
+  - Supports counts, spacing/angle, axes, optional second rectangular direction, and before/after design-state comparison.

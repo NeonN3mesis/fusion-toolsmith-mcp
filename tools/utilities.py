@@ -63,6 +63,7 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "create_hole_pattern",
     "create_counterbore_hole_pattern",
     "mirror_features_or_bodies",
+    "pattern_feature",
     "set_visibility",
 )
 
@@ -128,6 +129,7 @@ _TOOL_FIRST_POLICY = {
                 "create_hole_pattern",
                 "create_counterbore_hole_pattern",
                 "mirror_features_or_bodies",
+                "pattern_feature",
                 "set_visibility",
                 "validate_model",
             ],
