@@ -528,6 +528,46 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "create_hole_pattern",
+            "description": "Cut a general hole pattern into a named body. Supports explicit, rectangular, and circular point generation plus through, blind, counterbore, and countersink-intent cuts.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_body_name": {"type": "string"},
+                    "name": {"type": "string"},
+                    "hole_type": {"type": "string", "enum": ["through", "blind", "counterbore", "countersink"], "default": "through"},
+                    "base_plane": {"type": "string", "enum": ["xy", "xz", "yz"], "default": "xy"},
+                    "hole_diameter": {"type": "string"},
+                    "cut_depth": {"type": "string"},
+                    "points": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2},
+                        "description": "Explicit [x, y] length-expression points."
+                    },
+                    "pattern_type": {"type": "string", "enum": ["explicit", "rectangular", "circular"], "default": "explicit"},
+                    "origin": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2},
+                    "spacing": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2},
+                    "count": {
+                        "oneOf": [
+                            {"type": "integer"},
+                            {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}
+                        ]
+                    },
+                    "center": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2},
+                    "radius": {"type": "string"},
+                    "start_angle_deg": {"type": "number", "default": 0},
+                    "total_angle_deg": {"type": "number", "default": 360},
+                    "counterbore_diameter": {"type": "string"},
+                    "counterbore_depth": {"type": "string"},
+                    "countersink_diameter": {"type": "string"},
+                    "countersink_depth": {"type": "string"},
+                    "cut_direction": {"type": "string", "enum": ["positive", "negative"], "default": "positive"},
+                    "hide_sketch": {"type": "boolean", "default": True}
+                },
+                "required": ["target_body_name", "hole_diameter", "cut_depth"]
+            }
+        },
+        {
             "name": "create_coil",
             "description": "Create a coil-like helical pipe feature in Fusion 360 and return design-state comparison.",
             "inputSchema": {

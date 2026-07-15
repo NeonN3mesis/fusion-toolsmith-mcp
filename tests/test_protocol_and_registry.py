@@ -1383,6 +1383,7 @@ def run(context):
         self.assertIn("extract_reference_dimensions", tool_names)
         self.assertIn("create_rounded_rectangle_body", tool_names)
         self.assertIn("create_rounded_slot_cut", tool_names)
+        self.assertIn("create_hole_pattern", tool_names)
         self.assertIn("create_counterbore_hole_pattern", tool_names)
         self.assertIn("set_visibility", tool_names)
         self.assertIn("revert_active_document", tool_names)

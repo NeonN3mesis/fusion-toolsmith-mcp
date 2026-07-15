@@ -48,7 +48,7 @@ Show:
 
 - the source design remains open and unmodified
 - the new document contains a few clearly named bodies, cuts, and fastener features derived from the reference dimensions
-- the agent uses structured tools such as `create_rounded_rectangle_body`, `create_rounded_slot_cut`, and `create_counterbore_hole_pattern`
+- the agent uses structured tools such as `create_rounded_rectangle_body`, `create_rounded_slot_cut`, and `create_hole_pattern`
 - the agent uses `set_visibility` to hide construction sketches and stage the finished view
 
 Prompt:

@@ -266,6 +266,70 @@ def _set_participant_body(ext_input, body):
     except Exception:
         pass
 
+def _cut_depth_expression(depth, cut_direction):
+    text = str(depth)
+    if (cut_direction or "positive").lower() == "negative" and not text.strip().startswith("-"):
+        return f"-({text})"
+    return text
+
+def _hole_pattern_points(design, points=None, pattern_type="explicit", origin=None, spacing=None, count=None, center=None, radius=None, start_angle_deg=0, total_angle_deg=360):
+    pattern = (pattern_type or "explicit").lower()
+    generated = []
+    if pattern == "explicit":
+        if not isinstance(points, list) or not points:
+            raise ValueError("points must be a non-empty list of [x, y] length-expression pairs for explicit hole patterns.")
+        for point in points:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise ValueError("Each point must be [x, y] using Fusion length expressions, e.g. ['10 mm', '5 mm'].")
+            generated.append((_real_length(design, point[0]), _real_length(design, point[1]), [point[0], point[1]]))
+        return generated
+
+    if pattern == "rectangular":
+        if not isinstance(count, (list, tuple)) or len(count) != 2:
+            raise ValueError("rectangular pattern requires count=[columns, rows].")
+        if not isinstance(spacing, (list, tuple)) or len(spacing) != 2:
+            raise ValueError("rectangular pattern requires spacing=[x_spacing, y_spacing].")
+        origin = origin or ["0 mm", "0 mm"]
+        if not isinstance(origin, (list, tuple)) or len(origin) != 2:
+            raise ValueError("rectangular pattern origin must be [x, y].")
+        columns = int(count[0])
+        rows = int(count[1])
+        if columns <= 0 or rows <= 0:
+            raise ValueError("rectangular pattern count values must be positive.")
+        origin_x = _real_length(design, origin[0])
+        origin_y = _real_length(design, origin[1])
+        spacing_x = _real_length(design, spacing[0])
+        spacing_y = _real_length(design, spacing[1])
+        for row in range(rows):
+            for column in range(columns):
+                generated.append((origin_x + column * spacing_x, origin_y + row * spacing_y, [origin[0], origin[1], column, row]))
+        return generated
+
+    if pattern == "circular":
+        if count is None:
+            raise ValueError("circular pattern requires count.")
+        count_value = int(count if not isinstance(count, (list, tuple)) else count[0])
+        if count_value <= 0:
+            raise ValueError("circular pattern count must be positive.")
+        center = center or ["0 mm", "0 mm"]
+        if not isinstance(center, (list, tuple)) or len(center) != 2:
+            raise ValueError("circular pattern center must be [x, y].")
+        if radius is None:
+            raise ValueError("circular pattern requires radius.")
+        center_x = _real_length(design, center[0])
+        center_y = _real_length(design, center[1])
+        radius_value = _real_length(design, radius)
+        if radius_value <= 0:
+            raise ValueError("circular pattern radius must be positive.")
+        span = float(total_angle_deg)
+        step = 0 if count_value == 1 else span / count_value
+        for index in range(count_value):
+            angle = math.radians(float(start_angle_deg) + index * step)
+            generated.append((center_x + radius_value * math.cos(angle), center_y + radius_value * math.sin(angle), [center[0], center[1], index]))
+        return generated
+
+    raise ValueError("pattern_type must be explicit, rectangular, or circular.")
+
 def _draw_rounded_rectangle(sketch, center_u, center_v, width, height, radius):
     lines = sketch.sketchCurves.sketchLines
     arcs = sketch.sketchCurves.sketchArcs
@@ -455,6 +519,126 @@ def create_counterbore_hole_pattern(target_body_name, points, name="Counterbore 
                 "counterboreDepth": counterbore_depth,
                 "throughDepth": through_depth,
             },
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
+
+@register_tool("create_hole_pattern")
+def create_hole_pattern(
+    target_body_name,
+    name="Hole Pattern",
+    hole_type="through",
+    base_plane="xy",
+    hole_diameter="4 mm",
+    cut_depth="10 mm",
+    points=None,
+    pattern_type="explicit",
+    origin=None,
+    spacing=None,
+    count=None,
+    center=None,
+    radius=None,
+    start_angle_deg=0,
+    total_angle_deg=360,
+    counterbore_diameter=None,
+    counterbore_depth=None,
+    countersink_diameter=None,
+    countersink_depth=None,
+    cut_direction="positive",
+    hide_sketch=True,
+):
+    design = get_active_design()
+    root = design.rootComponent
+    target_body = _find_body(root, target_body_name)
+    if not target_body:
+        return {"error": f"Target body '{target_body_name}' not found."}
+    hole_kind = (hole_type or "through").lower()
+    if hole_kind not in ("through", "blind", "counterbore", "countersink"):
+        return {"error": "hole_type must be one of through, blind, counterbore, or countersink."}
+
+    before = _capture_design_state()
+    target_component = getattr(target_body, "parentComponent", None) or root
+    try:
+        generated_points = _hole_pattern_points(
+            design,
+            points=points,
+            pattern_type=pattern_type,
+            origin=origin,
+            spacing=spacing,
+            count=count,
+            center=center,
+            radius=radius,
+            start_angle_deg=start_angle_deg,
+            total_angle_deg=total_angle_deg,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    hole_radius = _real_length(design, hole_diameter) / 2.0
+    if hole_radius <= 0:
+        return {"error": "hole_diameter must be a positive length expression."}
+
+    cut_specs = []
+    warnings = []
+    if hole_kind == "counterbore":
+        if not counterbore_diameter or not counterbore_depth:
+            return {"error": "counterbore hole_type requires counterbore_diameter and counterbore_depth."}
+        counterbore_radius = _real_length(design, counterbore_diameter) / 2.0
+        if counterbore_radius <= hole_radius:
+            return {"error": "counterbore_diameter must be larger than hole_diameter."}
+        cut_specs.append(("Counterbore", counterbore_radius, counterbore_depth))
+    elif hole_kind == "countersink":
+        if not countersink_diameter or not countersink_depth:
+            return {"error": "countersink hole_type requires countersink_diameter and countersink_depth."}
+        countersink_radius = _real_length(design, countersink_diameter) / 2.0
+        if countersink_radius <= hole_radius:
+            return {"error": "countersink_diameter must be larger than hole_diameter."}
+        cut_specs.append(("CountersinkRelief", countersink_radius, countersink_depth))
+        warnings.append("Countersink is represented as a cylindrical relief cut; true conical countersink support is still a roadmap item.")
+
+    cut_specs.append(("Hole", hole_radius, cut_depth))
+
+    created_features = []
+    created_sketches = []
+    for index, (x_value, y_value, source_point) in enumerate(generated_points, start=1):
+        for label, radius_value, depth in cut_specs:
+            sketch = target_component.sketches.add(_base_plane(target_component, base_plane))
+            sketch.name = f"{name}_{index}_{label}_Sketch"
+            sketch.sketchCurves.sketchCircles.addByCenterRadius(_point_on_sketch(x_value, y_value), radius_value)
+            profile = sketch.profiles.item(0)
+            ext_input = target_component.features.extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation)
+            _set_participant_body(ext_input, target_body)
+            ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByString(_cut_depth_expression(depth, cut_direction)))
+            feature = target_component.features.extrudeFeatures.add(ext_input)
+            feature.name = f"{name}_{index}_{label}"
+            created_features.append(feature.name)
+            created_sketches.append(sketch.name)
+            if hide_sketch:
+                sketch.isLightBulbOn = False
+
+    return {
+        "result": {
+            "message": f"Created {len(generated_points)} {hole_kind} hole(s) in '{target_body_name}'.",
+            "targetBodyName": target_body_name,
+            "holeType": hole_kind,
+            "patternType": pattern_type,
+            "pointCount": len(generated_points),
+            "featureNames": created_features,
+            "sketchNames": created_sketches,
+            "generatedPoints": [
+                {"index": index, "x": x_value, "y": y_value, "source": source_point}
+                for index, (x_value, y_value, source_point) in enumerate(generated_points, start=1)
+            ],
+            "dimensions": {
+                "holeDiameter": hole_diameter,
+                "cutDepth": cut_depth,
+                "counterboreDiameter": counterbore_diameter,
+                "counterboreDepth": counterbore_depth,
+                "countersinkDiameter": countersink_diameter,
+                "countersinkDepth": countersink_depth,
+                "cutDirection": cut_direction,
+            },
+            "warnings": warnings,
             "stateComparison": _compare_after_mutation(before),
         }
     }

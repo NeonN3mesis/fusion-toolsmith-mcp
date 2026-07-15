@@ -59,6 +59,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "create_offset_plane",
             "create_rounded_rectangle_body",
             "create_rounded_slot_cut",
+            "create_hole_pattern",
             "create_counterbore_hole_pattern",
             "set_visibility",
             "bearer_sse_url",

@@ -4,10 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Near-Term Tools
 
-- `create_hole_pattern`
-  - Replace narrow hole helpers with a general hole feature tool.
-  - Support through, blind, counterbore, countersink, rectangular patterns, circular patterns, named target bodies, cut direction, and structured result metadata.
-
 - `mirror_features_or_bodies`
   - Mirror selected or named bodies/features/sketch entities across standard origin planes, named construction planes, or selected planar faces.
   - Return created names and before/after design-state comparison.
@@ -43,3 +39,12 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `capture_demo_sequence`
   - General presentation helper for named camera views, staged visibility, screenshots, and before/after capture steps.
   - Must remain generic and independent of any one project or model category.
+
+## Implemented
+
+- `create_offset_plane`
+  - Create a named construction plane offset from a standard plane, named construction plane, or selected planar face.
+
+- `create_hole_pattern`
+  - General hole-pattern cuts for explicit, rectangular, and circular point layouts.
+  - Supports through, blind, counterbore, and countersink-intent cuts with structured result metadata.
