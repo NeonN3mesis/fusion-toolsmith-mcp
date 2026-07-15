@@ -1,10 +1,10 @@
 # Demo Script
 
-Use this flow for a short README GIF or video. Keep the recording focused on the agent transcript and Fusion 360 changing state.
+Use this flow for a short README GIF or video. Keep the recording focused on the agent transcript and Fusion 360 changing state. Choose any non-sensitive Fusion design with enough sketches, bodies, parameters, and features to show inspection, safe mutation, and export preflight.
 
 ## Setup
 
-1. Open a real Fusion design that can act as a reference model. The current README demo uses `slate wall mount v13`.
+1. Open a real Fusion design that can act as a reference model.
 2. Start `FusionMCP` from Fusion 360.
 3. Run:
 
@@ -29,32 +29,32 @@ Show:
 Prompt:
 
 ```text
-Inspect the active Pixel Slate wall-mount design. Summarize components, bodies, sketches, timeline health, and user parameters.
+Inspect the active design. Summarize components, bodies, sketches, timeline health, and user parameters.
 ```
 
 Show:
 
 - the agent uses inspection tools before mutation
 - the agent calls `extract_reference_dimensions` after `inspect_design`
-- the result mentions actual model structure and real dimensions such as tablet size, clearance, wall thickness, lip width, and USB-C port openings
+- the result mentions actual model structure and real dimensions from the open design
 
 Prompt:
 
 ```text
-Create a separate new demo document that recreates the wall-mount workflow from scratch using the inspected reference dimensions. Do not modify the source design.
+Create a separate new demo document that recreates a small representative part using the inspected reference dimensions. Do not modify the source design.
 ```
 
 Show:
 
 - the source design remains open and unmodified
-- the new document contains a tablet reference, frame rails, bottom/side retaining lips, screw details, and mirrored cable openings
+- the new document contains a few clearly named bodies, cuts, and fastener features derived from the reference dimensions
 - the agent uses structured tools such as `create_rounded_rectangle_body`, `create_rounded_slot_cut`, and `create_counterbore_hole_pattern`
 - the agent uses `set_visibility` to hide construction sketches and stage the finished view
 
 Prompt:
 
 ```text
-Plan a parameter-safe change to the new demo mount. Do not edit yet. Include downstream impact.
+Plan a parameter-safe change to the new demo model. Do not edit yet. Include downstream impact.
 ```
 
 Show:
@@ -65,7 +65,7 @@ Show:
 Prompt:
 
 ```text
-Change LipHeight from 12 mm to 18 mm, capture before and after state, and compare the result.
+Change one named user parameter, capture before and after state, and compare the result.
 ```
 
 Show:
@@ -90,7 +90,6 @@ Save the final GIF or MP4 under:
 
 ```text
 docs/assets/fusion-toolsmith-demo.gif
-docs/assets/pixel-slate-demo/pixel-slate-wall-mount-demo.gif
 ```
 
 Then add it near the top of `README.md`.

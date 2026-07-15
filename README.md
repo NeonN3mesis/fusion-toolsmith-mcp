@@ -6,10 +6,6 @@ Fusion Toolsmith MCP runs inside Fusion 360, exposes MCP over local HTTP/SSE on 
 
 The installed Fusion add-in folder is still named `FusionMCP` for compatibility with existing local installs.
 
-![Fusion Toolsmith MCP demo](docs/assets/pixel-slate-demo/pixel-slate-wall-mount-demo.gif)
-
-Toolsmith recreating a Pixel Slate wall-mount workflow from scratch in a new Fusion document, then applying a structured parameter edit from `LipHeight = 12 mm` to `18 mm`, validating the before/after state, and passing export preflight.
-
 ## Why Toolsmith
 
 Generic Fusion MCP servers often expose a raw script bridge. Toolsmith adds a disciplined CAD workflow around that bridge:

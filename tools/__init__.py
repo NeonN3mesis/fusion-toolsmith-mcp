@@ -461,7 +461,7 @@ def get_tool_schemas():
         },
         {
             "name": "create_rounded_rectangle_body",
-            "description": "Create an extruded rounded-rectangle body from length expressions. Useful for brackets, plates, wall mounts, trays, and polished demo geometry without raw scripts.",
+            "description": "Create an extruded rounded-rectangle body from length expressions. Useful for brackets, plates, trays, enclosures, and other rounded rectangular CAD geometry without raw scripts.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1108,7 +1108,7 @@ def get_tool_schemas():
         },
         {
             "name": "set_visibility",
-            "description": "Show or hide named bodies, sketches, and construction planes, optionally hiding all sketches/planes and clearing the active selection for clean demos and inspection.",
+            "description": "Show or hide named bodies, sketches, and construction planes, optionally hiding all sketches/planes and clearing the active selection for clean inspection or presentation.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
