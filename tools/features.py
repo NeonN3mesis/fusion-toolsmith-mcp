@@ -707,7 +707,7 @@ def revolve_feature(sketch_name, axis_name="z", operation=None, angle="360 deg",
         op = _feature_operation(operation)
         component = _safe_value(lambda: sketch.parentComponent) or axis_component or root
         revolves = _safe_value(lambda: component.features.revolveFeatures)
-        if not revolves:
+        if revolves is None:
             return {"error": "This Fusion runtime does not expose revolveFeatures for API-created revolve features."}
         revolve_input = revolves.createInput(profile, axis, op)
         participants = _set_participant_bodies(revolve_input, participant_body_names)
@@ -765,7 +765,7 @@ def loft_feature(sections, operation=None, name=None, body_name=None, participan
         first_sketch = resolved_sections[0]["sketch"]
         component = _safe_value(lambda: first_sketch.parentComponent) or get_active_design().rootComponent
         lofts = _safe_value(lambda: component.features.loftFeatures)
-        if not lofts:
+        if lofts is None:
             return {"error": "This Fusion runtime does not expose loftFeatures for API-created loft features."}
 
         before = _design_state_snapshot(include_selections=False)
@@ -840,7 +840,7 @@ def sweep_feature(profile_sketch_name, path_sketch_name, operation=None, name=No
         op = _feature_operation(operation)
         component = _safe_value(lambda: profile_sketch.parentComponent) or get_active_design().rootComponent
         sweeps = _safe_value(lambda: component.features.sweepFeatures)
-        if not sweeps:
+        if sweeps is None:
             return {"error": "This Fusion runtime does not expose sweepFeatures for API-created sweep features."}
         create_path = _safe_value(lambda: component.features.createPath)
         if not create_path:

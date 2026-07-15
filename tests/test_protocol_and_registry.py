@@ -2554,6 +2554,8 @@ def run(context):
                 self.angle = angle
 
         class MockRevolves:
+            def __bool__(self):
+                return False
             def createInput(self, profile_arg, axis_arg, operation_arg):
                 input_obj = MockRevolveInput(profile_arg, axis_arg, operation_arg)
                 created_inputs.append(input_obj)
@@ -2653,6 +2655,8 @@ def run(context):
                 self.participantBodies = MockParticipantBodies()
 
         class MockLofts:
+            def __bool__(self):
+                return False
             def createInput(self, operation_arg):
                 input_obj = MockLoftInput(operation_arg)
                 created_inputs.append(input_obj)
@@ -2759,6 +2763,8 @@ def run(context):
                 self.participantBodies = MockParticipantBodies()
 
         class MockSweeps:
+            def __bool__(self):
+                return False
             def createInput(self, profile_arg, path_arg, operation_arg):
                 input_obj = MockSweepInput(profile_arg, path_arg, operation_arg)
                 created_inputs.append(input_obj)
