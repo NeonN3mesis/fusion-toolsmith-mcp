@@ -56,6 +56,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "doctor",
             "recommend_mcp_workflow",
             "extract_reference_dimensions",
+            "inspect_printability",
             "get_body_faces",
             "offset_face_or_press_pull",
             "create_offset_plane",

@@ -1399,6 +1399,7 @@ def run(context):
         self.assertIn("doctor", tool_names)
         self.assertIn("get_change_journal", tool_names)
         self.assertIn("clear_change_journal", tool_names)
+        self.assertIn("inspect_printability", tool_names)
 
     def test_get_runtime_diagnostics_reports_missing_required_tools_and_redacts_token(self):
         utilities = importlib.import_module("tools.utilities")
@@ -1635,6 +1636,61 @@ def run(context):
         self.assertEqual(snapshot["bodies"][0]["key"], "Root/BodyA")
         self.assertEqual(snapshot["sketches"][0]["curveCounts"]["lines"], 1)
         self.assertNotIn("selection", snapshot)
+
+    def test_inspect_printability_reports_fdm_risks_without_mutation(self):
+        tiny_edge = types.SimpleNamespace(length=0.02)
+        small_cylindrical_face = types.SimpleNamespace(
+            area=0.2,
+            geometry=types.SimpleNamespace(
+                objectType="adsk::core::Cylinder",
+                radius=0.04,
+            ),
+        )
+        downward_face = types.SimpleNamespace(
+            area=0.4,
+            geometry=types.SimpleNamespace(
+                objectType="adsk::core::Plane",
+                normal=types.SimpleNamespace(x=0, y=0, z=-1),
+            ),
+        )
+        body = types.SimpleNamespace(
+            name="RiskyBody",
+            isVisible=True,
+            isSolid=True,
+            entityToken="risk-token",
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0, y=0, z=0),
+                maxPoint=types.SimpleNamespace(x=0.02, y=3.0, z=4.0),
+            ),
+            physicalProperties=types.SimpleNamespace(volume=0.24, area=25.0),
+            edges=[tiny_edge],
+            faces=[small_cylindrical_face, downward_face],
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[body],
+            sketches=[],
+            occurrences=[],
+            allOccurrences=[],
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("inspect_printability", {})
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["readOnly"])
+        self.assertEqual(result["bodyCount"], 1)
+        self.assertEqual(result["riskLevel"], "high")
+        self.assertEqual(result["bodies"][0]["sizeMm"], [0.2, 30.0, 40.0])
+        codes = {warning["code"] for warning in result["warnings"]}
+        self.assertIn("tiny_body_dimension", codes)
+        self.assertIn("tiny_edge_features", codes)
+        self.assertIn("small_hole_or_pin_candidate", codes)
+        self.assertIn("risky_overhang_or_lip_candidate", codes)
 
     def test_compare_design_state_reports_unintended_changes(self):
         before = {

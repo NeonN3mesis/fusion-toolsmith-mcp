@@ -4,7 +4,9 @@ Inspection and selection tools/resources package.
 
 import adsk.core, adsk.fusion
 import json
+import math
 import re
+import traceback
 from . import register_tool, register_resource
 
 _EXPRESSION_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
@@ -35,6 +37,88 @@ def _bbox_size_mm(bbox):
     if not bbox or not bbox.get("min") or not bbox.get("max"):
         return None
     return [round((bbox["max"][i] - bbox["min"][i]) * 10.0, 4) for i in range(3)]
+
+
+def _cm_to_mm(value):
+    if isinstance(value, (int, float)):
+        return round(float(value) * 10.0, 4)
+    return None
+
+
+def _area_cm2_to_mm2(value):
+    if isinstance(value, (int, float)):
+        return round(float(value) * 100.0, 4)
+    return None
+
+
+def _length_expression_to_mm(design, expression, default_mm):
+    if expression is None:
+        return float(default_mm)
+    if isinstance(expression, (int, float)):
+        return float(expression)
+    match = re.fullmatch(r"\s*([-+]?\d+(?:\.\d+)?)\s*(mm|millimeter|millimeters|cm|centimeter|centimeters|in|inch|inches)?\s*", str(expression), re.IGNORECASE)
+    if match:
+        value = float(match.group(1))
+        unit = (match.group(2) or "mm").lower()
+        if unit.startswith("cm"):
+            return value * 10.0
+        if unit.startswith("in"):
+            return value * 25.4
+        return value
+    value_cm = _safe_value(lambda: design.unitsManager.evaluateExpression(str(expression), "cm"))
+    if value_cm is None:
+        value_default_units = _safe_value(lambda: design.unitsManager.evaluateExpression(str(expression), design.unitsManager.defaultLengthUnits))
+        if value_default_units is None:
+            raise ValueError(f"Could not evaluate length expression: {expression}")
+        value_cm = value_default_units
+    return float(value_cm) * 10.0
+
+
+def _axis_vector(axis):
+    key = (axis or "z").lower()
+    if key == "x":
+        return (1.0, 0.0, 0.0)
+    if key == "y":
+        return (0.0, 1.0, 0.0)
+    if key == "-x":
+        return (-1.0, 0.0, 0.0)
+    if key == "-y":
+        return (0.0, -1.0, 0.0)
+    if key == "-z":
+        return (0.0, 0.0, -1.0)
+    return (0.0, 0.0, 1.0)
+
+
+def _vector_tuple(vector):
+    if not vector:
+        return None
+    return (
+        _safe_value(lambda: vector.x),
+        _safe_value(lambda: vector.y),
+        _safe_value(lambda: vector.z),
+    )
+
+
+def _dot(a, b):
+    return sum(a[i] * b[i] for i in range(3))
+
+
+def _unit(vector):
+    if not vector or any(value is None for value in vector):
+        return None
+    length = math.sqrt(sum(value * value for value in vector))
+    if length == 0:
+        return None
+    return tuple(value / length for value in vector)
+
+
+def _angle_degrees_between(a, b):
+    unit_a = _unit(a)
+    unit_b = _unit(b)
+    if not unit_a or not unit_b:
+        return None
+    value = max(-1.0, min(1.0, _dot(unit_a, unit_b)))
+    return math.degrees(math.acos(value))
 
 
 def _name_filter(names):
@@ -134,6 +218,255 @@ def extract_reference_dimensions(body_names=None, sketch_names=None, include_par
             ],
         }
     }
+
+
+def _warning(code, severity, body_name, message, evidence=None, suggestion=None):
+    warning = {
+        "code": code,
+        "severity": severity,
+        "bodyName": body_name,
+        "message": message,
+    }
+    if evidence:
+        warning["evidence"] = evidence
+    if suggestion:
+        warning["suggestion"] = suggestion
+    return warning
+
+
+def _body_size_warning(body_name, size_mm, min_wall_mm, min_slot_mm, min_feature_mm):
+    if not size_mm:
+        return []
+    sorted_size = sorted(size_mm)
+    warnings = []
+    min_dim = sorted_size[0]
+    mid_dim = sorted_size[1] if len(sorted_size) > 1 else None
+    max_dim = sorted_size[-1]
+    if min_dim < min_feature_mm:
+        warnings.append(_warning(
+            "tiny_body_dimension",
+            "high",
+            body_name,
+            "One body bounding-box dimension is smaller than the configured minimum feature size.",
+            {"sizeMm": size_mm, "minimumFeatureMm": min_feature_mm},
+            "Increase the feature size or expect it to be lost or weak after slicing.",
+        ))
+    elif min_dim < min_wall_mm and max_dim >= min_wall_mm * 3:
+        warnings.append(_warning(
+            "thin_wall_candidate",
+            "medium",
+            body_name,
+            "One body bounding-box dimension is below the configured minimum wall thickness.",
+            {"sizeMm": size_mm, "minimumWallMm": min_wall_mm},
+            "Verify this is an intentional wall and that it is at least 2-3 extrusion widths.",
+        ))
+    if min_dim < min_slot_mm and mid_dim and max_dim >= min_slot_mm * 4:
+        warnings.append(_warning(
+            "narrow_slot_or_gap_candidate",
+            "medium",
+            body_name,
+            "Body proportions include a narrow dimension that may represent a slot, gap, rib, or thin flange.",
+            {"sizeMm": size_mm, "minimumSlotMm": min_slot_mm},
+            "Check slicer preview for merged walls or missing clearance.",
+        ))
+    return warnings
+
+
+def _edge_warnings(body, body_name, min_feature_mm, max_items):
+    warnings = []
+    short_edges = []
+    for index, edge in enumerate(_collection_items(_safe_value(lambda: body.edges))):
+        length = _edge_length(edge)
+        length_mm = _cm_to_mm(length)
+        if length_mm is not None and length_mm < min_feature_mm:
+            short_edges.append({"index": index, "lengthMm": length_mm})
+        if len(short_edges) >= max_items:
+            break
+    if short_edges:
+        warnings.append(_warning(
+            "tiny_edge_features",
+            "medium",
+            body_name,
+            "Short BRep edges may indicate tiny details, slivers, or tight notches that are hard to print cleanly.",
+            {"minimumFeatureMm": min_feature_mm, "edges": short_edges},
+            "Inspect these edges and simplify or enlarge them if they matter functionally.",
+        ))
+    return warnings
+
+
+def _face_radius_mm(face):
+    geometry = _safe_value(lambda: face.geometry)
+    radius = _safe_value(lambda: geometry.radius)
+    if radius is None:
+        cylinder = _safe_value(lambda: geometry.cylinder)
+        radius = _safe_value(lambda: cylinder.radius)
+    return _cm_to_mm(radius)
+
+
+def _face_normal(face):
+    geometry = _safe_value(lambda: face.geometry)
+    normal = _vector_tuple(_safe_value(lambda: geometry.normal))
+    if normal:
+        return normal
+    plane = _safe_value(lambda: geometry.plane)
+    return _vector_tuple(_safe_value(lambda: plane.normal))
+
+
+def _face_warnings(body, body_name, min_hole_mm, overhang_angle_degrees, build_axis, max_items):
+    warnings = []
+    small_round_faces = []
+    risky_down_faces = []
+    axis = _axis_vector(build_axis)
+    overhang_cutoff = 180.0 - float(overhang_angle_degrees)
+
+    for index, face in enumerate(_collection_items(_safe_value(lambda: body.faces))):
+        radius_mm = _face_radius_mm(face)
+        if radius_mm is not None:
+            diameter_mm = round(radius_mm * 2.0, 4)
+            if diameter_mm < min_hole_mm:
+                small_round_faces.append({
+                    "index": index,
+                    "diameterMm": diameter_mm,
+                    "geometryType": _safe_value(lambda face=face: face.geometry.objectType),
+                })
+
+        normal = _face_normal(face)
+        angle = _angle_degrees_between(normal, axis)
+        if angle is not None and angle >= overhang_cutoff:
+            risky_down_faces.append({
+                "index": index,
+                "normal": [round(value, 4) for value in _unit(normal)],
+                "angleFromBuildAxisDegrees": round(angle, 2),
+                "areaMm2": _area_cm2_to_mm2(_safe_value(lambda face=face: face.area)),
+            })
+
+        if len(small_round_faces) >= max_items and len(risky_down_faces) >= max_items:
+            break
+
+    if small_round_faces:
+        warnings.append(_warning(
+            "small_hole_or_pin_candidate",
+            "medium",
+            body_name,
+            "Cylindrical or rounded faces are below the configured minimum printable hole/pin diameter.",
+            {"minimumHoleDiameterMm": min_hole_mm, "faces": small_round_faces[:max_items]},
+            "Enlarge functional holes, add tolerance, or plan cleanup with a drill/reamer.",
+        ))
+    if risky_down_faces:
+        warnings.append(_warning(
+            "risky_overhang_or_lip_candidate",
+            "medium",
+            body_name,
+            "Downward-facing planar faces may create unsupported lips, bridges, or overhangs.",
+            {"overhangAngleDegrees": overhang_angle_degrees, "buildAxis": build_axis, "faces": risky_down_faces[:max_items]},
+            "Reorient the part, add chamfers/fillets, split the model, or plan supports where needed.",
+        ))
+    return warnings
+
+
+def _printability_body_report(body, component_name, thresholds, max_items):
+    body_name = _safe_value(lambda: body.name)
+    bbox = _bbox_to_dict(body)
+    size_mm = _bbox_size_mm(bbox)
+    physical_props = _safe_value(lambda: body.physicalProperties)
+    warnings = []
+    warnings.extend(_body_size_warning(
+        body_name,
+        size_mm,
+        thresholds["minimumWallThicknessMm"],
+        thresholds["minimumSlotWidthMm"],
+        thresholds["minimumFeatureSizeMm"],
+    ))
+    warnings.extend(_edge_warnings(body, body_name, thresholds["minimumFeatureSizeMm"], max_items))
+    warnings.extend(_face_warnings(
+        body,
+        body_name,
+        thresholds["minimumHoleDiameterMm"],
+        thresholds["overhangAngleDegrees"],
+        thresholds["buildAxis"],
+        max_items,
+    ))
+    return {
+        "name": body_name,
+        "componentName": component_name,
+        "isVisible": _safe_value(lambda: body.isVisible),
+        "isSolid": _safe_value(lambda: body.isSolid),
+        "boundingBox": bbox,
+        "sizeMm": size_mm,
+        "volumeMm3": round(_safe_value(lambda: physical_props.volume, 0) * 1000.0, 4) if physical_props else None,
+        "areaMm2": round(_safe_value(lambda: physical_props.area, 0) * 100.0, 4) if physical_props else None,
+        "faceCount": _collection_count(_safe_value(lambda: body.faces)),
+        "edgeCount": _collection_count(_safe_value(lambda: body.edges)),
+        "warnings": warnings,
+    }
+
+
+@register_tool("inspect_printability")
+def inspect_printability(body_names=None, include_invisible=False, build_axis="z", nozzle_diameter="0.4 mm", layer_height="0.2 mm", minimum_wall_thickness=None, minimum_hole_diameter="2.0 mm", minimum_slot_width="1.0 mm", minimum_feature_size=None, overhang_angle_degrees=45, max_items_per_warning=25):
+    """
+    Read-only FDM printability sanity report.
+
+    This is intentionally heuristic. It reports candidates for human review and
+    slicer verification; it does not mutate geometry or claim printability.
+    """
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        body_filter = _name_filter(body_names)
+        nozzle_mm = _length_expression_to_mm(design, nozzle_diameter, 0.4)
+        layer_mm = _length_expression_to_mm(design, layer_height, 0.2)
+        min_wall_mm = _length_expression_to_mm(design, minimum_wall_thickness, nozzle_mm * 3.0)
+        min_feature_mm = _length_expression_to_mm(design, minimum_feature_size, max(nozzle_mm, layer_mm * 2.0))
+        thresholds = {
+            "buildAxis": build_axis or "z",
+            "nozzleDiameterMm": round(nozzle_mm, 4),
+            "layerHeightMm": round(layer_mm, 4),
+            "minimumWallThicknessMm": round(min_wall_mm, 4),
+            "minimumHoleDiameterMm": round(_length_expression_to_mm(design, minimum_hole_diameter, 2.0), 4),
+            "minimumSlotWidthMm": round(_length_expression_to_mm(design, minimum_slot_width, 1.0), 4),
+            "minimumFeatureSizeMm": round(min_feature_mm, 4),
+            "overhangAngleDegrees": float(overhang_angle_degrees),
+        }
+        max_items = max(1, min(int(max_items_per_warning or 25), 200))
+
+        bodies = []
+        skipped = []
+        for body, component_name in _body_objects(root):
+            body_name = _safe_value(lambda body=body: body.name)
+            if body_filter and body_name not in body_filter:
+                continue
+            if not include_invisible and _safe_value(lambda body=body: body.isVisible) is False:
+                skipped.append({"name": body_name, "componentName": component_name, "reason": "hidden"})
+                continue
+            bodies.append(_printability_body_report(body, component_name, thresholds, max_items))
+
+        all_warnings = [warning for body in bodies for warning in body.get("warnings", [])]
+        severity_rank = {"high": 3, "medium": 2, "low": 1}
+        highest = "none"
+        if all_warnings:
+            highest = max((warning["severity"] for warning in all_warnings), key=lambda level: severity_rank.get(level, 0))
+        return {
+            "result": {
+                "readOnly": True,
+                "units": design.unitsManager.defaultLengthUnits,
+                "bodyCount": len(bodies),
+                "warningCount": len(all_warnings),
+                "riskLevel": highest,
+                "thresholds": thresholds,
+                "bodies": sorted(bodies, key=lambda item: (item.get("componentName") or "", item.get("name") or "")),
+                "warnings": all_warnings,
+                "skippedBodies": skipped,
+                "limitations": [
+                    "Heuristic report only; verify final results in the slicer preview.",
+                    "Thin walls, narrow slots, and unsupported regions are inferred from BRep/bounding-box hints and may include false positives.",
+                    "Hole warnings are based on rounded or cylindrical face radii when Fusion exposes them.",
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error inspecting printability: {e}\n{err}")
+        return {"error": f"Failed to inspect printability: {str(e)}"}
 
 
 def _find_component_by_name(root, component_name):
@@ -238,6 +571,19 @@ def _body_snapshots(root):
         for body in _collection_items(_safe_value(lambda component=component: component.bRepBodies)):
             bodies.append(_body_snapshot(body, component_name))
     return sorted(bodies, key=lambda b: b.get("key") or "")
+
+
+def _body_objects(root):
+    bodies = []
+    root_name = _safe_value(lambda: root.name)
+    for body in _collection_items(_safe_value(lambda: root.bRepBodies)):
+        bodies.append((body, root_name))
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        component_name = _safe_value(lambda component=component: component.name)
+        for body in _collection_items(_safe_value(lambda component=component: component.bRepBodies)):
+            bodies.append((body, component_name))
+    return bodies
 
 
 def _curve_counts(sketch):
@@ -509,6 +855,17 @@ def _collection_items(collection):
         return list(collection)
     except TypeError:
         return []
+
+def _collection_count(collection):
+    if not collection:
+        return 0
+    count = getattr(collection, "count", None)
+    if isinstance(count, int):
+        return count
+    try:
+        return len(collection)
+    except TypeError:
+        return len(_collection_items(collection))
 
 def _point_to_list(point):
     if not point:

@@ -88,6 +88,29 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "inspect_printability",
+            "description": "Read-only FDM printability sanity report for bodies. Reports bounding boxes, thin/tiny/narrow feature candidates, small rounded-hole candidates, and risky downward-face/overhang candidates without mutating geometry.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional body name or names to inspect. Omit for all visible bodies."
+                    },
+                    "include_invisible": {"type": "boolean", "default": False},
+                    "build_axis": {"type": "string", "enum": ["x", "y", "z", "-x", "-y", "-z"], "default": "z"},
+                    "nozzle_diameter": {"type": "string", "default": "0.4 mm"},
+                    "layer_height": {"type": "string", "default": "0.2 mm"},
+                    "minimum_wall_thickness": {"type": "string", "description": "Defaults to 3x nozzle diameter."},
+                    "minimum_hole_diameter": {"type": "string", "default": "2.0 mm"},
+                    "minimum_slot_width": {"type": "string", "default": "1.0 mm"},
+                    "minimum_feature_size": {"type": "string", "description": "Defaults to max(nozzle diameter, 2x layer height)."},
+                    "overhang_angle_degrees": {"type": "number", "default": 45},
+                    "max_items_per_warning": {"type": "integer", "default": 25}
+                }
+            }
+        },
+        {
             "name": "query_selection",
             "description": "Describe currently selected entities in the Fusion UI in agent-friendly terms (e.g., coordinates, type, owning component). Instructions: Ask the user to select the target entity in the Fusion UI if it's too difficult to find programmatically. Use this tool to read their selection.",
             "inputSchema": {"type": "object", "properties": {}}

@@ -4,10 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Validation And Presentation
 
-- `inspect_printability`
-  - General FDM sanity report: bounding box, thin walls, small holes, narrow slots, unsupported lips, tiny features, and risky overhang-like faces.
-  - Report warnings only; do not mutate geometry.
-
 - `capture_demo_sequence`
   - General presentation helper for named camera views, staged visibility, screenshots, and before/after capture steps.
   - Must remain generic and independent of any one project or model category.
@@ -50,3 +46,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `create_construction_axis`
   - Create named construction axes from two named/coordinate-backed points or selected line-like geometry.
   - Useful for mirrors, revolves, circular patterns, and repeatable feature placement.
+
+- `inspect_printability`
+  - General read-only FDM sanity report: bounding boxes, thin/tiny/narrow feature candidates, small rounded-hole candidates, and risky downward-face/overhang candidates.
+  - Reports warnings and limitations only; does not mutate geometry or claim slicer-level validation.

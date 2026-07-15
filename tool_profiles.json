@@ -18,6 +18,7 @@
         "capture_design_state",
         "compare_design_state",
         "extract_reference_dimensions",
+        "inspect_printability",
         "inspect_sketch",
         "inspect_feature",
         "get_projected_geometry_sources",
