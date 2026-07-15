@@ -6,6 +6,10 @@ Fusion Toolsmith MCP runs inside Fusion 360, exposes MCP over local HTTP/SSE on 
 
 The installed Fusion add-in folder is still named `FusionMCP` for compatibility with existing local installs.
 
+![Fusion Toolsmith MCP demo](docs/assets/fusion-toolsmith-demo.gif)
+
+Toolsmith inspecting a live Fusion model, applying a structured parameter edit from `toolsmithWidth = 42 mm` to `56 mm`, validating the before/after state, and passing export preflight.
+
 ## Why Toolsmith
 
 Generic Fusion MCP servers often expose a raw script bridge. Toolsmith adds a disciplined CAD workflow around that bridge:
