@@ -42,6 +42,19 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("FusionMCP add-in package", package_init)
         self.assertNotIn("from .FusionMCP import run, stop", package_init)
 
+    def test_addin_start_refreshes_runtime_modules(self):
+        with open(os.path.join(ROOT, "FusionMCP.py"), "r", encoding="utf-8") as f:
+            addin_entrypoint = f.read()
+        for text in [
+            "importlib.invalidate_caches()",
+            "_clear_runtime_modules()",
+            "force_reload=True",
+            "server.mcp_server",
+            "tools",
+            "mcp_primitives",
+        ]:
+            self.assertIn(text, addin_entrypoint)
+
     def test_live_smoke_script_checks_mcp_handshake(self):
         script_path = os.path.join(ROOT, "scripts", "test_fusion_mcp_live.ps1")
         with open(script_path, "r", encoding="utf-8") as f:
