@@ -226,6 +226,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "offset_face_or_press_pull",
             "dangerous",
             "bearer_sse_url",
+            "streamable_http_url",
+            "fusion://agent/server-capabilities",
             "fusion://runtime/change-journal",
             "get_change_journal",
             "fusion://docs/fusion-api",
@@ -358,6 +360,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "shell_body",
             "inspect_printability",
             "capture_demo_sequence",
+            "fusion://agent/server-capabilities",
         ]:
             self.assertIn(text, roadmap)
 

@@ -604,6 +604,22 @@ class ProtocolAndRegistryTests(unittest.TestCase):
             self.assertEqual(profile["missingFromSchema"], [])
             self.assertEqual(profile["missingFromRegistry"], [])
 
+    def test_server_capabilities_resource_describes_transports_and_safety(self):
+        resource = self.tools.read_resource("fusion://agent/server-capabilities")
+        self.assertEqual(resource["schemaVersion"], 1)
+        self.assertEqual(resource["server"]["name"], "fusion-mcp")
+        transport_names = {transport["name"] for transport in resource["transports"]}
+        self.assertIn("streamable_http", transport_names)
+        self.assertIn("http_sse", transport_names)
+        self.assertEqual(resource["discovery"]["healthEndpoint"], "/health")
+        self.assertTrue(resource["discovery"]["healthIsTokenFree"])
+        self.assertEqual(resource["safety"]["rawScriptTool"], "run_fusion_script")
+        self.assertIn("script_intent", resource["safety"]["rawScriptRequiredArguments"])
+        self.assertEqual(resource["safety"]["guardedUndoTool"], "undo_last_action")
+        self.assertIn("modeling", resource["profiles"])
+        self.assertIn("tool_first_workflow", resource["prompts"])
+        self.assertGreater(resource["counts"]["tools"], 0)
+
     def test_list_appearances_reports_design_and_library_matches(self):
         design_appearance = types.SimpleNamespace(
             name="Matte Black",
@@ -1385,6 +1401,7 @@ def run(context):
             thread.join(timeout=2)
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["server"], "fusion-mcp")
+        self.assertIn("streamable_http", payload["transports"])
         self.assertIn("task_manager_running", payload)
         self.assertIn("pending_tasks", payload)
         self.assertIn("discovery", payload)
@@ -1846,6 +1863,7 @@ def run(context):
         with open(discovery_path, "w", encoding="utf-8") as f:
             json.dump({
                 "sse_url": "http://127.0.0.1:9100/sse?token=secret-token",
+                "authorization_header": "Bearer secret-token",
                 "port": 9100,
                 "token": "secret-token",
             }, f)
@@ -1866,6 +1884,7 @@ def run(context):
         self.assertIn("missing_tool", result["requiredTools"]["missingFromRegistry"])
         self.assertTrue(result["restartRecommended"])
         self.assertEqual(result["runtime"]["discovery"]["payload"]["token"], "<redacted>")
+        self.assertEqual(result["runtime"]["discovery"]["payload"]["authorization_header"], "<redacted>")
         self.assertIn("token=<redacted>", result["runtime"]["discovery"]["payload"]["sse_url"])
 
     def test_doctor_reports_stale_discovery_and_task_manager_blockers(self):
@@ -1878,6 +1897,7 @@ def run(context):
         with open(discovery_path, "w", encoding="utf-8") as f:
             json.dump({
                 "sse_url": "http://127.0.0.1:9100/sse?token=stale-token",
+                "authorization_header": "Bearer stale-token",
                 "port": 9100,
                 "token": "stale-token",
             }, f)
@@ -1909,6 +1929,7 @@ def run(context):
         self.assertIn("TaskManager is not running", " ".join(result["blockingReasons"]))
         self.assertIn("Discovery token does not match", " ".join(result["blockingReasons"]))
         self.assertEqual(result["checks"]["discovery"]["payload"]["token"], "<redacted>")
+        self.assertEqual(result["checks"]["discovery"]["payload"]["authorization_header"], "<redacted>")
 
     def test_plan_parameterization_classifies_sketch_dimension_candidates(self):
         class ParamCollection:

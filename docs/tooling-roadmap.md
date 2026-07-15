@@ -118,3 +118,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - Safer undo workflow
   - `undo_last_action` captures design state before/after undo and automatically redoes risky undo results unless explicitly overridden with a reason.
   - Guardrails catch design-type changes, newly unhealthy timeline items, and broad component/body/sketch removals.
+
+- Server capability/adoption metadata
+  - `fusion://agent/server-capabilities` summarizes supported transports, discovery keys, safety gates, profiles, prompts, and capability counts.
+  - `/health` advertises both legacy SSE and Streamable HTTP compatibility while keeping credentials out of the health payload.

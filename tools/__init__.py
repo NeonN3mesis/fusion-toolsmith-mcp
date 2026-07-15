@@ -35,6 +35,79 @@ def read_tool_profiles():
         profile["missingFromRegistry"] = [name for name in tools if name not in registered]
     return profiles
 
+@register_resource("fusion://agent/server-capabilities")
+def read_server_capabilities():
+    tool_schemas = get_tool_schemas()
+    resource_schemas = get_resources_schemas()
+    profile_data = read_tool_profiles()
+    try:
+        from ..server import mcp_server
+    except Exception:
+        import server.mcp_server as mcp_server
+    prompts = [
+        prompt.get("name")
+        for prompt in getattr(mcp_server, "PROMPTS", [])
+        if prompt.get("name")
+    ]
+    return {
+        "schemaVersion": 1,
+        "server": {
+            "name": "fusion-mcp",
+            "productName": "Fusion Toolsmith MCP",
+            "version": "1.0.0",
+            "runsInside": "Autodesk Fusion 360 add-in",
+            "port": getattr(mcp_server, "DEFAULT_PORT", 9100),
+        },
+        "transports": [
+            {
+                "name": "streamable_http",
+                "endpoint": "/sse",
+                "authentication": "bearer",
+                "status": "preferred",
+                "sessionHeader": "Mcp-Session-Id",
+            },
+            {
+                "name": "http_sse",
+                "endpoint": "/sse",
+                "authentication": "bearer_or_query_token",
+                "status": "legacy_compatible",
+                "messageEndpoint": "/messages",
+            },
+        ],
+        "discovery": {
+            "file": "~/.fusion_mcp.json",
+            "preferredKeys": ["streamable_http_url", "authorization_header"],
+            "legacyKeys": ["sse_url", "bearer_sse_url"],
+            "healthEndpoint": "/health",
+            "healthIsTokenFree": True,
+        },
+        "safety": {
+            "toolFirstWorkflowResource": "fusion://agent/tool-first-workflow",
+            "toolProfilesResource": "fusion://agent/tool-profiles",
+            "changeJournalResource": "fusion://runtime/change-journal",
+            "rawScriptTool": "run_fusion_script",
+            "rawScriptRequiredArguments": ["script_intent", "mcp_tool_gap"],
+            "guardedUndoTool": "undo_last_action",
+            "preflightTools": ["doctor", "preflight_model_change", "preflight_export", "validate_model"],
+        },
+        "counts": {
+            "tools": len(tool_schemas),
+            "resources": len(resource_schemas),
+            "profiles": len(profile_data.get("profiles", {})),
+            "prompts": len(prompts),
+        },
+        "prompts": prompts,
+        "profiles": sorted(profile_data.get("profiles", {}).keys()),
+        "notableCapabilities": [
+            "structured CAD tools before raw scripts",
+            "machine-readable tool profiles",
+            "read-only inspection and physical-property reports",
+            "preflighted model changes and exports",
+            "local redacted change journal",
+            "guarded undo with automatic redo on risky state changes",
+        ],
+    }
+
 def get_tool_schemas():
     return [
         {
@@ -1706,6 +1779,12 @@ def get_resources_schemas():
             "uri": "fusion://agent/tool-profiles",
             "name": "Tool Profiles",
             "description": "Machine-readable FusionMCP tool groups for client exposure and agent routing.",
+            "mimeType": "application/json"
+        },
+        {
+            "uri": "fusion://agent/server-capabilities",
+            "name": "Server Capabilities",
+            "description": "Machine-readable summary of Fusion Toolsmith transports, discovery keys, safety gates, profiles, prompts, and capability counts.",
             "mimeType": "application/json"
         },
         {

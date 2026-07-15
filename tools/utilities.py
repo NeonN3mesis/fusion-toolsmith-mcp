@@ -510,6 +510,8 @@ def _redact_discovery_payload(payload):
     for key, value in payload.items():
         if key == "token":
             redacted[key] = "<redacted>"
+        elif key == "authorization_header":
+            redacted[key] = "<redacted>"
         elif key == "sse_url" and isinstance(value, str):
             redacted[key] = value.split("?token=", 1)[0] + "?token=<redacted>" if "?token=" in value else value
         else:

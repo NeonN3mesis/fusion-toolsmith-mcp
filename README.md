@@ -2,7 +2,7 @@
 
 Safety-first Autodesk Fusion 360 MCP add-in for agents that need to inspect, plan, validate, and package CAD changes without blindly running raw scripts.
 
-Fusion Toolsmith MCP runs inside Fusion 360, exposes MCP over local HTTP/SSE on port `9100`, and writes live discovery data to `~/.fusion_mcp.json`. The add-in is opt-in by default and does not start automatically with Fusion.
+Fusion Toolsmith MCP runs inside Fusion 360, exposes MCP over local HTTP on port `9100` with Streamable HTTP and legacy HTTP/SSE compatibility, and writes live discovery data to `~/.fusion_mcp.json`. The add-in is opt-in by default and does not start automatically with Fusion.
 
 The installed Fusion add-in folder is still named `FusionMCP` for compatibility with existing local installs.
 
@@ -27,6 +27,7 @@ See [docs/tooling-roadmap.md](docs/tooling-roadmap.md) for the general CAD tooli
 - Safer model mutation: explicit operations, preflight checks, downstream-consumer warnings, before/after design-state comparisons, and validation tools.
 - Export safety: preflight-gated STEP/STL/PDF workflows.
 - Local runtime hardening: fixed port, bearer-token support, token-free `/health`, session TTL cleanup, single active SSE client, and automatic Antigravity config sync.
+- Machine-readable adoption metadata: `fusion://agent/server-capabilities`, `fusion://agent/tool-profiles`, and `fusion://agent/tool-first-workflow`.
 
 ## Runtime Shape
 
@@ -47,7 +48,9 @@ The discovery file includes:
 
 - `sse_url`: legacy query-token URL for clients that only support URL auth.
 - `bearer_sse_url`: preferred token-free URL.
+- `streamable_http_url`: preferred Streamable HTTP endpoint.
 - `authorization_header`: preferred bearer auth header.
+- `transports`: advertised transport modes.
 - `port` and `token`.
 
 ## Install From This Checkout
@@ -110,7 +113,7 @@ Check runtime health:
 Invoke-RestMethod http://127.0.0.1:9100/health | ConvertTo-Json
 ```
 
-Expected health output includes `discovery`, `active_sessions`, `active_http_sessions`, `task_manager_running`, and `pending_tasks`. It should not include a token or `sse_url`.
+Expected health output includes `discovery`, `transports`, `active_sessions`, `active_http_sessions`, `task_manager_running`, and `pending_tasks`. It should not include a token or `sse_url`.
 
 ## Client Config
 
@@ -144,6 +147,14 @@ fusion-mcp list-profiles
 fusion://agent/tool-profiles
 ```
 
+Server adoption metadata is available as JSON:
+
+```text
+fusion://agent/server-capabilities
+```
+
+That resource summarizes supported transports, discovery keys, safety gates, profiles, prompts, and capability counts so clients can route without scraping README text.
+
 Use these mental profiles when exposing tools to agents or documenting workflows:
 
 - `core`: readiness, runtime diagnostics, workflow routing, and change-journal tools.
@@ -160,7 +171,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 
 | Area | What Toolsmith exposes |
 | --- | --- |
-| Runtime safety | `doctor`, runtime diagnostics, fixed-port health, bearer auth, change journal, structured-tool routing |
+| Runtime safety | `doctor`, runtime diagnostics, fixed-port health, Streamable HTTP/SSE metadata, bearer auth, change journal, structured-tool routing |
 | Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference/joint reports, physical-property reports, material/appearance reports, mesh-aware `inspect_printability` warnings |
 | Safe modeling | typed sketching, guarded sketch constraint creation/deletion, extrudes, revolves, lofts, sweeps, token-targeted fillets/chamfers/shells, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry, rigid point-to-point joints |
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |

@@ -460,6 +460,7 @@ class MCPServerHandler(BaseHTTPRequestHandler):
                 "server": "fusion-mcp",
                 "version": "1.0.0",
                 "transport": "sse",
+                "transports": ["sse", "streamable_http"],
                 "discovery": discovery_file_path(),
                 "active_sessions": active_sessions,
                 "active_http_sessions": active_http_sessions,
@@ -1072,8 +1073,10 @@ def start_server():
                 json.dump({
                     "sse_url": sse_url,
                     "bearer_sse_url": bearer_sse_url,
+                    "streamable_http_url": bearer_sse_url,
                     "authorization_header": f"Bearer {auth_token}",
                     "port": port,
+                    "transports": ["sse", "streamable_http"],
                     "token": auth_token
                 }, f)
         except Exception as e:
