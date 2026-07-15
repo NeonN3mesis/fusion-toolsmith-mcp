@@ -4,10 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Medium-Term Tools
 
-- `shell_body`
-  - Shell a named body with explicit wall thickness and optional open faces.
-  - Include timeline impact checks because shell operations can be fragile.
-
 - `create_construction_axis_or_point`
   - Create named construction axes and points from standard origins, selected geometry, explicit coordinates, or intersections.
   - Useful for mirrors, revolves, circular patterns, and repeatable hole placement.
@@ -46,3 +42,10 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `create_rounded_pocket`
   - Cut a shallow rounded-rectangle recess into a named target body.
   - Supports depth, corner radius, standard or selected plane/face placement, cut direction, and state comparison.
+
+- `get_body_faces`
+  - Return indexed face metadata for a named body so agents can target open faces safely.
+
+- `shell_body`
+  - Shell a named body with explicit wall thickness and optional open face indices.
+  - Includes before/after state comparison and uses `get_body_faces` for safe targeting.

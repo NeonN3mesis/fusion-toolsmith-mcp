@@ -179,6 +179,47 @@ def _edge_ref(body, edge, index):
     }
 
 
+def _body_faces_by_indices(body, face_indices=None):
+    faces = _safe_value(lambda: body.faces)
+    count = _safe_value(lambda: faces.count, 0) or 0
+    if count == 0:
+        raise ValueError(f"Body '{body.name}' has no faces.")
+    indices = list(range(count)) if face_indices is None else [int(index) for index in face_indices]
+    selected = []
+    for index in indices:
+        if index < 0 or index >= count:
+            raise ValueError(f"face index {index} is out of range for body '{body.name}' with {count} faces.")
+        selected.append(faces.item(index))
+    return selected
+
+
+def _face_body_index(body, face):
+    faces = _safe_value(lambda: body.faces)
+    count = _safe_value(lambda: faces.count, 0) or 0
+    for index in range(count):
+        if faces.item(index) == face:
+            return index
+    return None
+
+
+def _face_ref(body, face, index):
+    geometry = _safe_value(lambda: face.geometry)
+    centroid = _safe_value(lambda: face.centroid)
+    return {
+        "index": index,
+        "name": _safe_value(lambda: face.name),
+        "entityToken": _safe_value(lambda: face.entityToken),
+        "area": _safe_value(lambda: face.area),
+        "objectType": _safe_value(lambda: face.objectType),
+        "geometryType": _safe_value(lambda: geometry.objectType) if geometry else None,
+        "centroid": [
+            _safe_value(lambda: centroid.x),
+            _safe_value(lambda: centroid.y),
+            _safe_value(lambda: centroid.z),
+        ] if centroid else None,
+    }
+
+
 @register_tool("get_body_edges")
 def get_body_edges(body_name, edge_indices=None):
     """
@@ -208,6 +249,37 @@ def get_body_edges(body_name, edge_indices=None):
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error inspecting body edges: {e}\n{err}")
         return {"error": f"Failed to inspect body edges: {str(e)}"}
+
+
+@register_tool("get_body_faces")
+def get_body_faces(body_name, face_indices=None):
+    """
+    Return indexed face metadata for a named body.
+
+    This is the safe targeting companion for shell_body and selected-face
+    workflows. It gives agents stable face indices plus tokens and basic
+    geometry hints before they choose open faces for a mutating operation.
+    """
+    try:
+        body = _find_body_by_name(body_name)
+        if not body:
+            return {"error": f"Body '{body_name}' not found."}
+        faces = _body_faces_by_indices(body, face_indices)
+        return {
+            "result": {
+                "bodyName": _safe_value(lambda: body.name),
+                "componentName": _safe_value(lambda: body.parentComponent.name),
+                "faceCount": _safe_value(lambda: body.faces.count, len(faces)),
+                "faces": [
+                    _face_ref(body, face, _face_body_index(body, face))
+                    for face in faces
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error inspecting body faces: {e}\n{err}")
+        return {"error": f"Failed to inspect body faces: {str(e)}"}
 
 
 @register_tool("extrude_feature")
@@ -363,3 +435,72 @@ def chamfer_feature(body_name, edge_indices, distance, name=None, tangent_chain=
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error creating chamfer feature: {e}\n{err}")
         return {"error": f"Failed to create chamfer feature: {str(e)}"}
+
+
+@register_tool("shell_body")
+def shell_body(body_name, thickness, open_face_indices=None, name=None, thickness_side="inside", outside_thickness=None, tangent_chain=True):
+    """
+    Shell a named solid body with explicit wall thickness.
+
+    If open_face_indices is supplied, those faces are removed/opened by the
+    shell feature. Use get_body_faces first when face identity is uncertain.
+    """
+    try:
+        if not thickness:
+            return {"error": "thickness is required, e.g. '2 mm'."}
+        body = _find_body_by_name(body_name)
+        if not body:
+            return {"error": f"Body '{body_name}' not found."}
+
+        before = _design_state_snapshot(include_selections=False)
+        input_entities = adsk.core.ObjectCollection.create()
+        opened_faces = []
+        if open_face_indices:
+            opened_faces = _body_faces_by_indices(body, open_face_indices)
+            for face in opened_faces:
+                input_entities.add(face)
+        else:
+            input_entities.add(body)
+
+        component = _safe_value(lambda: body.parentComponent) or get_active_design().rootComponent
+        shells = component.features.shellFeatures
+        shell_input = shells.createInput(input_entities, bool(tangent_chain))
+        side = (thickness_side or "inside").replace("_", "").replace(" ", "").lower()
+        if side in ("inside", "both"):
+            shell_input.insideThickness = adsk.core.ValueInput.createByString(thickness)
+        if side == "outside":
+            shell_input.outsideThickness = adsk.core.ValueInput.createByString(outside_thickness or thickness)
+        elif side == "both":
+            shell_input.outsideThickness = adsk.core.ValueInput.createByString(outside_thickness or thickness)
+        if side not in ("inside", "outside", "both"):
+            return {"error": "thickness_side must be inside, outside, or both."}
+
+        shell = shells.add(shell_input)
+        if name:
+            shell.name = name
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        feature_name = _safe_value(lambda: shell.name) or name
+        inspected = inspect_feature(feature_name).get("result") if feature_name else None
+        return {
+            "result": {
+                "featureName": feature_name,
+                "bodyName": body.name,
+                "thickness": thickness,
+                "outsideThickness": outside_thickness,
+                "thicknessSide": thickness_side,
+                "openFaceIndices": [int(index) for index in (open_face_indices or [])],
+                "openedFaces": [
+                    _face_ref(body, face, _face_body_index(body, face))
+                    for face in opened_faces
+                ],
+                "tangentChain": bool(tangent_chain),
+                "feature": inspected,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating shell feature: {e}\n{err}")
+        return {"error": f"Failed to create shell feature: {str(e)}"}

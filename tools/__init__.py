@@ -349,6 +349,22 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "get_body_faces",
+            "description": "Return indexed face metadata for a named body, including entity tokens, area, geometry type, and centroid when available. Use before shell_body or selected-face workflows to choose explicit face indices.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name to inspect."},
+                    "face_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Optional subset of 0-based face indices. Omit to return all faces."
+                    }
+                },
+                "required": ["body_name"]
+            }
+        },
+        {
             "name": "extrude_feature",
             "description": "Create an extrusion from a named sketch profile with explicit NewBody/Join/Cut/Intersect operation and built-in before/after design-state comparison.",
             "inputSchema": {
@@ -409,6 +425,27 @@ def get_tool_schemas():
                     "tangent_chain": {"type": "boolean", "default": True}
                 },
                 "required": ["body_name", "edge_indices", "distance"]
+            }
+        },
+        {
+            "name": "shell_body",
+            "description": "Shell a named body with explicit wall thickness and optional open face indices. Use get_body_faces first when opening specific faces.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Name of the body to shell."},
+                    "thickness": {"type": "string", "description": "Inside or default shell thickness, e.g. '2 mm'."},
+                    "open_face_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Optional 0-based face indices to remove/open while shelling."
+                    },
+                    "name": {"type": "string", "description": "Optional name for the created shell feature."},
+                    "thickness_side": {"type": "string", "enum": ["inside", "outside", "both"], "default": "inside"},
+                    "outside_thickness": {"type": "string", "description": "Outside thickness for outside or both mode. Defaults to thickness."},
+                    "tangent_chain": {"type": "boolean", "default": True}
+                },
+                "required": ["body_name", "thickness"]
             }
         },
 

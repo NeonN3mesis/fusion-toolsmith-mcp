@@ -134,6 +134,7 @@ try {
         "inspect_design",
         "recommend_mcp_workflow",
         "extract_reference_dimensions",
+        "get_body_faces",
         "create_offset_plane",
         "create_rounded_rectangle_body",
         "create_rounded_slot_cut",
@@ -142,6 +143,7 @@ try {
         "create_counterbore_hole_pattern",
         "mirror_features_or_bodies",
         "pattern_feature",
+        "shell_body",
         "set_visibility"
     )
     $missingTools = @($requiredTools | Where-Object { $toolNames -notcontains $_ })

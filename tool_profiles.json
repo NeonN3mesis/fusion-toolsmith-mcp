@@ -25,7 +25,8 @@
         "get_dependency_graph",
         "query_selection",
         "get_current_selection",
-        "map_coordinates"
+        "map_coordinates",
+        "get_body_faces"
       ]
     },
     "modeling": {
@@ -39,6 +40,7 @@
         "extrude_feature",
         "fillet_feature",
         "chamfer_feature",
+        "shell_body",
         "combine_bodies",
         "create_box",
         "create_cylinder",
