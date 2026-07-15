@@ -571,6 +571,65 @@ def create_rounded_slot_cut(target_body_name, name="Rounded Slot Cut", base_plan
         }
     }
 
+@register_tool("create_rounded_pocket")
+def create_rounded_pocket(target_body_name, name="Rounded Pocket", base_plane="xy", width="40 mm", height="20 mm", depth="2 mm", corner_radius="3 mm", x_offset="0 mm", y_offset="0 mm", cut_direction="positive", use_selected_plane=False, hide_sketch=True):
+    design = get_active_design()
+    root = design.rootComponent
+    target_body = _find_body(root, target_body_name)
+    if not target_body:
+        return {"error": f"Target body '{target_body_name}' not found."}
+    before = _capture_design_state()
+
+    width_value = _real_length(design, width)
+    height_value = _real_length(design, height)
+    radius_value = _real_length(design, corner_radius)
+    x_value = _real_length(design, x_offset)
+    y_value = _real_length(design, y_offset)
+    if width_value <= 0 or height_value <= 0:
+        return {"error": "width and height must be positive length expressions."}
+    if radius_value * 2 > min(width_value, height_value):
+        return {"error": "corner_radius cannot exceed half of the smaller pocket dimension."}
+
+    target_component = getattr(target_body, "parentComponent", None) or root
+    if use_selected_plane:
+        sketch_plane, selected_component = _selected_base_plane()
+        if not sketch_plane:
+            return {"error": "No selected construction plane or planar face found for pocket placement."}
+        target_component = selected_component or target_component
+    else:
+        sketch_plane = _base_plane(target_component, base_plane)
+
+    sketch = target_component.sketches.add(sketch_plane)
+    sketch.name = f"{name}_Sketch"
+    _draw_rounded_rectangle(sketch, x_value, y_value, width_value, height_value, radius_value)
+
+    profile = sketch.profiles.item(0)
+    ext_input = target_component.features.extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation)
+    _set_participant_body(ext_input, target_body)
+    ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByString(_cut_depth_expression(depth, cut_direction)))
+    feature = target_component.features.extrudeFeatures.add(ext_input)
+    feature.name = name
+    if hide_sketch:
+        sketch.isLightBulbOn = False
+
+    return {
+        "result": {
+            "message": f"Created rounded pocket '{name}' in '{target_body_name}'.",
+            "featureName": feature.name,
+            "sketchName": sketch.name,
+            "targetBodyName": target_body_name,
+            "usedSelectedPlane": bool(use_selected_plane),
+            "dimensions": {
+                "width": width,
+                "height": height,
+                "depth": depth,
+                "cornerRadius": corner_radius,
+                "cutDirection": cut_direction,
+            },
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
+
 @register_tool("create_counterbore_hole_pattern")
 def create_counterbore_hole_pattern(target_body_name, points, name="Counterbore Pattern", base_plane="xy", hole_diameter="4 mm", counterbore_diameter="8 mm", counterbore_depth="2 mm", through_depth="10 mm", hide_sketch=True):
     if not isinstance(points, list) or not points:

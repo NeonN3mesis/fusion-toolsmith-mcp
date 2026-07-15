@@ -500,6 +500,28 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "create_rounded_pocket",
+            "description": "Cut a shallow rounded-rectangle pocket or recess into a named body from length expressions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_body_name": {"type": "string"},
+                    "name": {"type": "string"},
+                    "base_plane": {"type": "string", "enum": ["xy", "xz", "yz"], "default": "xy"},
+                    "width": {"type": "string", "description": "Overall pocket width, e.g. '40 mm'."},
+                    "height": {"type": "string", "description": "Overall pocket height, e.g. '20 mm'."},
+                    "depth": {"type": "string", "description": "Pocket cut depth, e.g. '2 mm'."},
+                    "corner_radius": {"type": "string", "description": "Corner radius, e.g. '3 mm'."},
+                    "x_offset": {"type": "string", "default": "0 mm"},
+                    "y_offset": {"type": "string", "default": "0 mm"},
+                    "cut_direction": {"type": "string", "enum": ["positive", "negative"], "default": "positive"},
+                    "use_selected_plane": {"type": "boolean", "default": False, "description": "Use the selected construction plane or planar face for pocket placement."},
+                    "hide_sketch": {"type": "boolean", "default": True}
+                },
+                "required": ["target_body_name", "width", "height", "depth", "corner_radius"]
+            }
+        },
+        {
             "name": "create_counterbore_hole_pattern",
             "description": "Cut repeated counterbore holes into a named body from explicit point coordinates and hole dimensions.",
             "inputSchema": {
