@@ -478,6 +478,7 @@ def _server_runtime_status():
             "serverRunning": _safe_value(lambda: mcp_server.server_instance is not None, False),
             "taskManagerRunning": _safe_value(lambda: TaskManager.is_running(), False),
             "pendingTasks": _safe_value(lambda: TaskManager.get_pending_task_count()),
+            "taskManager": _safe_value(lambda: TaskManager.get_pending_task_stats(), {}),
         }
     except Exception as e:
         return {
@@ -678,6 +679,15 @@ def doctor(required_tools=None, require_active_design=True):
             actions.append("Stop/start the FusionMCP add-in from Utilities > Add-Ins.")
         if server_status.get("pendingTasks"):
             warnings.append(f"TaskManager has {server_status.get('pendingTasks')} pending task(s).")
+        task_manager = server_status.get("taskManager") or {}
+        oldest_age = task_manager.get("oldestTaskAgeSeconds") or 0
+        timeout_seconds = task_manager.get("taskTimeoutSeconds") or 0
+        if task_manager.get("backpressureActive"):
+            blocking_reasons.append("TaskManager backpressure is active; too many tasks are pending.")
+            actions.append("Wait for pending tasks to drain or stop/start the FusionMCP add-in.")
+        elif timeout_seconds and oldest_age >= timeout_seconds:
+            warnings.append("TaskManager has stale pending task metadata.")
+            actions.append("Run doctor again or stop/start the FusionMCP add-in if pending tasks do not drain.")
 
     if not discovery.get("exists"):
         blocking_reasons.append("Discovery file is missing.")
@@ -892,6 +902,7 @@ def run_fusion_script(script, script_intent=None, mcp_tool_gap=None, allow_expor
         "design": design,
         "rootComp": design.rootComponent if design else None
     }
+    before = _safe_value(lambda: _design_state_snapshot(include_selections=False))
     old_stdout = sys.stdout
     new_stdout = io.StringIO()
     sys.stdout = new_stdout
@@ -906,11 +917,16 @@ def run_fusion_script(script, script_intent=None, mcp_tool_gap=None, allow_expor
         raise FusionScriptExecutionError(str(e), new_stdout.getvalue(), traceback.format_exc())
     finally:
         sys.stdout = old_stdout
+    after = _safe_value(lambda: _design_state_snapshot(include_selections=False))
+    state_comparison = None
+    if before and after:
+        state_comparison = _safe_value(lambda: compare_design_state(before, after).get("result"))
     return {
         "result": "Script executed",
         "output": new_stdout.getvalue(),
         "scriptIntent": script_intent.strip(),
         "mcpToolGap": mcp_tool_gap.strip(),
+        "stateComparison": state_comparison,
     }
 
 @register_tool("capture_view")

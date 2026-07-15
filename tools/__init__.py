@@ -19,6 +19,8 @@ _DESTRUCTIVE_TOOLS = {
     "undo_last_action",
     "revert_active_document",
     "run_fusion_script",
+    "set_active_document",
+    "set_timeline_marker",
 }
 
 _NON_IDEMPOTENT_MUTATION_PREFIXES = (
@@ -96,10 +98,8 @@ _IDEMPOTENT_MUTATION_TOOLS = {
     "import_parameters_csv",
     "modify_parameters",
     "offset_face_or_press_pull",
-    "set_active_document",
     "set_camera",
     "set_parameter",
-    "set_timeline_marker",
     "set_visibility",
 }
 
@@ -213,7 +213,7 @@ def read_server_capabilities():
         "transports": [
             {
                 "name": "streamable_http",
-                "endpoint": "/sse",
+                "endpoint": "/mcp",
                 "authentication": "bearer",
                 "status": "preferred",
                 "sessionHeader": "Mcp-Session-Id",

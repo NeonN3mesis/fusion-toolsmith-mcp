@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .offline_schema import load_offline_mcp_surface
 
@@ -229,14 +230,16 @@ def command_sync_config(args):
 
 def command_doctor(args):
     discovery = load_json(Path(args.discovery_path) if args.discovery_path else discovery_path())
+    streamable_url = discovery.get("streamable_http_url")
     bearer_url = discovery.get("bearer_sse_url")
     auth_header = discovery.get("authorization_header")
     sse_url = discovery.get("sse_url")
-    url = bearer_url or sse_url
+    url = streamable_url or bearer_url or sse_url
     if not url:
-        raise RuntimeError("Discovery file does not contain bearer_sse_url or sse_url.")
+        raise RuntimeError("Discovery file does not contain streamable_http_url, bearer_sse_url, or sse_url.")
 
-    health_url = url.split("/sse", 1)[0] + "/health"
+    parsed_url = urlparse(url)
+    health_url = f"{parsed_url.scheme}://{parsed_url.netloc}/health"
     with urllib.request.urlopen(health_url, timeout=args.timeout) as response:
         health = json.loads(response.read().decode("utf-8"))
     print(json.dumps({"health": health}, indent=2))
@@ -250,7 +253,7 @@ def command_doctor(args):
         }).encode("utf-8")
         request = urllib.request.Request(url, data=body, method="POST")
         request.add_header("Content-Type", "application/json")
-        if bearer_url and auth_header:
+        if auth_header and (streamable_url or bearer_url):
             request.add_header("Authorization", auth_header)
         if session_id:
             request.add_header("Mcp-Session-Id", session_id)
@@ -289,7 +292,7 @@ def command_doctor(args):
     if session_id:
         delete_request = urllib.request.Request(url, method="DELETE")
         delete_request.add_header("Mcp-Session-Id", session_id)
-        if bearer_url and auth_header:
+        if auth_header and (streamable_url or bearer_url):
             delete_request.add_header("Authorization", auth_header)
         try:
             urllib.request.urlopen(delete_request, timeout=args.timeout).close()
@@ -308,7 +311,7 @@ def command_print_config(args):
     }
     bearer = {
         args.server_name: {
-            "serverUrl": discovery.get("bearer_sse_url"),
+            "serverUrl": discovery.get("streamable_http_url") or discovery.get("bearer_sse_url"),
             "headers": {"Authorization": discovery.get("authorization_header")},
             "disabled": False,
         }

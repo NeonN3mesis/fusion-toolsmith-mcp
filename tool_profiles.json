@@ -51,7 +51,6 @@
         "draw_rectangle",
         "draw_circle",
         "add_sketch_constraint",
-        "delete_sketch_constraint",
         "project_geometry",
         "create_sketch_offset",
         "extrude_feature",
@@ -130,7 +129,6 @@
         "get_assembly_references",
         "get_assembly_joints",
         "get_timeline",
-        "set_timeline_marker",
         "clone_timeline_feature"
       ]
     },

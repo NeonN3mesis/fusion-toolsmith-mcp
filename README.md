@@ -49,8 +49,8 @@ C:\Users\<you>\.fusion_mcp.json
 The discovery file includes:
 
 - `sse_url`: legacy query-token URL for clients that only support URL auth.
-- `bearer_sse_url`: preferred token-free URL.
-- `streamable_http_url`: preferred Streamable HTTP endpoint.
+- `bearer_sse_url`: bearer-auth SSE URL for legacy SSE clients.
+- `streamable_http_url`: preferred bearer-auth Streamable HTTP endpoint (`/mcp`).
 - `authorization_header`: preferred bearer auth header.
 - `transports`: advertised transport modes.
 - `port` and `token`.
@@ -271,5 +271,5 @@ This is an offline companion to official Autodesk docs and is meant for quick pl
 
 - Fusion API calls must execute on Fusion's main thread through `TaskManager`.
 - `run_fusion_script` is intentionally a last-resort tool and requires intent/gap fields.
-- Query-token auth remains for legacy clients, but bearer auth is preferred.
+- Query-token auth remains for legacy SSE clients, but bearer auth is required for Streamable HTTP.
 - If behavior does not change after editing files, reload the add-in or restart Fusion; Fusion may still hold the old Python modules in memory.

@@ -5,6 +5,7 @@ Task Manager Module for FusionMCP
 import json
 import uuid
 import threading
+import time
 from typing import Dict, Callable, Any, Optional
 
 try:
@@ -34,6 +35,8 @@ class TaskManager:
     _pending_tasks: Dict[str, Dict[str, Any]] = {}
     _pending_tasks_lock = threading.Lock()
     _is_running = False
+    TASK_TIMEOUT_SECONDS = 60.0
+    MAX_PENDING_TASKS = 8
 
     def __new__(cls):
         if cls._instance is None:
@@ -113,12 +116,17 @@ class TaskManager:
             if not app:
                 print("TaskManager: Application not initialized")
                 return None
+            cls.prune_stale_tasks()
             task_id = str(uuid.uuid4())
             with cls._pending_tasks_lock:
+                if len(cls._pending_tasks) >= cls.MAX_PENDING_TASKS:
+                    print("TaskManager: Too many pending tasks, rejecting new task")
+                    return None
                 cls._pending_tasks[task_id] = {
                     'command': command,
                     'callback': callback,
-                    'data': data
+                    'data': data,
+                    'created_at': time.time(),
                 }
             event_data = {
                 'task_id': task_id,
@@ -142,8 +150,52 @@ class TaskManager:
 
     @classmethod
     def get_pending_task_count(cls) -> int:
+        cls.prune_stale_tasks()
         with cls._pending_tasks_lock:
             return len(cls._pending_tasks)
+
+    @classmethod
+    def prune_stale_tasks(cls, now: Optional[float] = None) -> int:
+        now = time.time() if now is None else now
+        removed = 0
+        with cls._pending_tasks_lock:
+            for task_id, task_info in list(cls._pending_tasks.items()):
+                created_at = task_info.get('created_at')
+                if created_at is None:
+                    continue
+                if now - created_at > cls.TASK_TIMEOUT_SECONDS:
+                    cls._pending_tasks.pop(task_id, None)
+                    removed += 1
+        if removed:
+            safe_log(f"TaskManager: Pruned {removed} stale pending task(s)")
+        return removed
+
+    @classmethod
+    def get_pending_task_stats(cls, now: Optional[float] = None) -> Dict[str, Any]:
+        now = time.time() if now is None else now
+        cls.prune_stale_tasks(now=now)
+        with cls._pending_tasks_lock:
+            ages = []
+            tasks = []
+            for task_id, task_info in cls._pending_tasks.items():
+                created_at = task_info.get('created_at')
+                age = None if created_at is None else max(0.0, now - created_at)
+                if age is not None:
+                    ages.append(age)
+                tasks.append({
+                    'task_id': task_id,
+                    'command': task_info.get('command'),
+                    'ageSeconds': round(age, 3) if age is not None else None,
+                })
+            pending_count = len(cls._pending_tasks)
+        return {
+            'pendingTasks': pending_count,
+            'oldestTaskAgeSeconds': round(max(ages), 3) if ages else 0.0,
+            'taskTimeoutSeconds': cls.TASK_TIMEOUT_SECONDS,
+            'maxPendingTasks': cls.MAX_PENDING_TASKS,
+            'backpressureActive': pending_count >= cls.MAX_PENDING_TASKS,
+            'tasks': tasks,
+        }
 
 
 class TaskEventHandler(adsk.core.CustomEventHandler):

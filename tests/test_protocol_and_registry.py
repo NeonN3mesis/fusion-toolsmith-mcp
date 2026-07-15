@@ -152,6 +152,10 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.mcp_server.sessions.clear()
         self.mcp_server.http_sessions.clear()
         self.mcp_server.subscriptions.clear()
+        self.task_manager.TaskManager._pending_tasks.clear()
+        self.task_manager.TaskManager._is_running = False
+        self.task_manager.TaskManager.TASK_TIMEOUT_SECONDS = 60.0
+        self.task_manager.TaskManager.MAX_PENDING_TASKS = 8
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.mcp_server.discovery_file_path = lambda: os.path.join(self.temp_dir.name, ".fusion_mcp.json")
@@ -459,6 +463,38 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertTrue(self.mcp_server.clear_change_journal())
         self.assertEqual(self.mcp_server.read_change_journal(), [])
 
+    def test_tool_call_journal_records_raw_script_state_changes(self):
+        original_import_tools = self.mcp_server.import_tools_module
+        session_id = "journal-session"
+        self.mcp_server.sessions[session_id] = queue.Queue()
+
+        class FakeTools:
+            @staticmethod
+            def execute_tool(name, arguments):
+                return {
+                    "result": "Script executed",
+                    "output": "changed",
+                    "stateComparison": {"hasChanges": True},
+                }
+
+        self.mcp_server.import_tools_module = lambda: FakeTools
+        try:
+            self.mcp_server.execute_mcp_request_main_thread(
+                session_id,
+                42,
+                "tools/call",
+                {"name": "run_fusion_script", "arguments": {"script": "redacted"}},
+            )
+            response = self.mcp_server.sessions[session_id].get(timeout=1)
+        finally:
+            self.mcp_server.import_tools_module = original_import_tools
+            self.mcp_server.sessions.pop(session_id, None)
+
+        self.assertIn("Script executed", json.loads(response)["result"]["content"][0]["text"])
+        entries = self.mcp_server.read_change_journal()
+        self.assertEqual(entries[-1]["tool"], "run_fusion_script")
+        self.assertTrue(entries[-1]["changedDesign"])
+
     def test_task_manager_wrappers_post_and_execute(self):
         self.assertTrue(self.task_manager.start_task_manager())
         called = []
@@ -466,6 +502,60 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIsNotNone(task_id)
         self.assertEqual(called, [True])
         self.assertTrue(self.task_manager.stop_task_manager())
+
+    def test_task_manager_prunes_stale_pending_tasks(self):
+        manager = self.task_manager.TaskManager
+        manager._pending_tasks["stale"] = {
+            "command": "mcp_request",
+            "callback": lambda _data: None,
+            "data": {},
+            "created_at": 1000.0,
+        }
+        manager._pending_tasks["fresh"] = {
+            "command": "mcp_request",
+            "callback": lambda _data: None,
+            "data": {},
+            "created_at": 1059.5,
+        }
+
+        removed = manager.prune_stale_tasks(now=1061.0)
+
+        self.assertEqual(removed, 1)
+        self.assertNotIn("stale", manager._pending_tasks)
+        self.assertIn("fresh", manager._pending_tasks)
+
+    def test_task_manager_pending_stats_reports_backpressure(self):
+        manager = self.task_manager.TaskManager
+        manager.MAX_PENDING_TASKS = 1
+        manager._pending_tasks["pending"] = {
+            "command": "mcp_request",
+            "callback": lambda _data: None,
+            "data": {},
+            "created_at": 1000.0,
+        }
+
+        stats = manager.get_pending_task_stats(now=1005.0)
+
+        self.assertEqual(stats["pendingTasks"], 1)
+        self.assertEqual(stats["oldestTaskAgeSeconds"], 5.0)
+        self.assertTrue(stats["backpressureActive"])
+
+    def test_task_manager_rejects_new_task_under_backpressure(self):
+        manager = self.task_manager.TaskManager
+        manager._is_running = True
+        manager._custom_event = types.SimpleNamespace(eventId="FusionMCP.TaskManagerEvent")
+        manager.MAX_PENDING_TASKS = 1
+        manager._pending_tasks["pending"] = {
+            "command": "mcp_request",
+            "callback": lambda _data: None,
+            "data": {},
+            "created_at": time.time(),
+        }
+
+        task_id = manager.post("mcp_request", lambda _data: None, {})
+
+        self.assertIsNone(task_id)
+        self.assertEqual(len(manager._pending_tasks), 1)
 
     def test_destructive_git_tools_are_not_advertised_or_registered(self):
         tool_names = {tool["name"] for tool in self.tools.get_tool_schemas()}
@@ -590,9 +680,10 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("sweep_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("list_appearances", resource["profiles"]["modeling"]["tools"])
         self.assertIn("inspect_body_style", resource["profiles"]["modeling"]["tools"])
-        self.assertIn("delete_sketch_constraint", resource["profiles"]["modeling"]["tools"])
         self.assertIn("create_rigid_joint", resource["profiles"]["modeling"]["tools"])
         self.assertIn("delete_sketch_constraint", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("set_active_document", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("set_timeline_marker", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
         self.assertIn("list_documents", resource["profiles"]["document"]["tools"])
         advertised = {schema["name"] for schema in self.tools.get_tool_schemas()}
@@ -600,6 +691,17 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         for profile in resource["profiles"].values():
             profiled.update(profile["tools"])
         self.assertEqual(sorted(advertised - profiled), [])
+        destructive = {
+            name
+            for name, schema in ((schema["name"], schema) for schema in self.tools.get_tool_schemas())
+            if schema["annotations"]["destructiveHint"]
+        }
+        dangerous = set(resource["profiles"]["dangerous"]["tools"])
+        for profile_name, profile in resource["profiles"].items():
+            if profile_name == "dangerous":
+                continue
+            self.assertFalse(set(profile["tools"]) & destructive)
+        self.assertTrue(destructive <= dangerous)
         for profile in resource["profiles"].values():
             self.assertEqual(profile["missingFromSchema"], [])
             self.assertEqual(profile["missingFromRegistry"], [])
@@ -613,6 +715,8 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         transport_names = {transport["name"] for transport in resource["transports"]}
         self.assertIn("streamable_http", transport_names)
         self.assertIn("http_sse", transport_names)
+        streamable = next(transport for transport in resource["transports"] if transport["name"] == "streamable_http")
+        self.assertEqual(streamable["endpoint"], "/mcp")
         self.assertEqual(resource["discovery"]["healthEndpoint"], "/health")
         self.assertTrue(resource["discovery"]["healthIsTokenFree"])
         self.assertEqual(resource["safety"]["rawScriptTool"], "run_fusion_script")
@@ -642,6 +746,8 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertFalse(schemas["create_box"]["annotations"]["readOnlyHint"])
         self.assertTrue(schemas["run_fusion_script"]["annotations"]["destructiveHint"])
         self.assertTrue(schemas["clear_change_journal"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["set_active_document"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["set_timeline_marker"]["annotations"]["destructiveHint"])
         self.assertFalse(schemas["search_local_fusion_docs"]["annotations"]["openWorldHint"])
 
     def test_resource_schemas_include_client_ranking_annotations(self):
@@ -1667,6 +1773,26 @@ def run(context):
             thread.join(timeout=2)
             self.mcp_server.sessions.pop(session_id, None)
 
+    def test_streamable_http_initialize_requires_auth(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/mcp",
+                data=payload,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(request, timeout=2)
+            self.assertEqual(ctx.exception.code, 403)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_streamable_http_initialize_creates_session(self):
         server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1674,10 +1800,13 @@ def run(context):
         try:
             payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
             request = urllib.request.Request(
-                f"http://127.0.0.1:{server.server_port}/sse",
+                f"http://127.0.0.1:{server.server_port}/mcp",
                 data=payload,
                 method="POST",
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
             )
             with urllib.request.urlopen(request, timeout=2) as response:
                 body = json.loads(response.read().decode("utf-8"))
@@ -1699,25 +1828,65 @@ def run(context):
         try:
             init_payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
             init_request = urllib.request.Request(
-                f"http://127.0.0.1:{server.server_port}/sse",
+                f"http://127.0.0.1:{server.server_port}/mcp",
                 data=init_payload,
                 method="POST",
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
             )
             with urllib.request.urlopen(init_request, timeout=2) as response:
                 session_id = response.headers.get("Mcp-Session-Id")
 
             tools_payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).encode("utf-8")
             tools_request = urllib.request.Request(
-                f"http://127.0.0.1:{server.server_port}/sse",
+                f"http://127.0.0.1:{server.server_port}/mcp",
                 data=tools_payload,
                 method="POST",
-                headers={"Content-Type": "application/json", "Mcp-Session-Id": session_id},
+                headers={
+                    "Content-Type": "application/json",
+                    "Mcp-Session-Id": session_id,
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
             )
             with urllib.request.urlopen(tools_request, timeout=2) as response:
                 body = json.loads(response.read().decode("utf-8"))
             tool_names = {tool["name"] for tool in body["result"]["tools"]}
             self.assertIn("inspect_design", tool_names)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_streamable_http_followup_requires_auth(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            init_payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
+            init_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/mcp",
+                data=init_payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
+            )
+            with urllib.request.urlopen(init_request, timeout=2) as response:
+                session_id = response.headers.get("Mcp-Session-Id")
+
+            tools_payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).encode("utf-8")
+            tools_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/mcp",
+                data=tools_payload,
+                method="POST",
+                headers={"Content-Type": "application/json", "Mcp-Session-Id": session_id},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(tools_request, timeout=2)
+            self.assertEqual(ctx.exception.code, 403)
         finally:
             server.shutdown()
             server.server_close()
@@ -1730,29 +1899,39 @@ def run(context):
         try:
             init_payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
             init_request = urllib.request.Request(
-                f"http://127.0.0.1:{server.server_port}/sse",
+                f"http://127.0.0.1:{server.server_port}/mcp",
                 data=init_payload,
                 method="POST",
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
             )
             with urllib.request.urlopen(init_request, timeout=2) as response:
                 session_id = response.headers.get("Mcp-Session-Id")
 
             delete_request = urllib.request.Request(
-                f"http://127.0.0.1:{server.server_port}/sse",
+                f"http://127.0.0.1:{server.server_port}/mcp",
                 data=b"",
                 method="DELETE",
-                headers={"Mcp-Session-Id": session_id},
+                headers={
+                    "Mcp-Session-Id": session_id,
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
             )
             with urllib.request.urlopen(delete_request, timeout=2) as response:
                 self.assertEqual(response.status, 200)
 
             tools_payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).encode("utf-8")
             tools_request = urllib.request.Request(
-                f"http://127.0.0.1:{server.server_port}/sse",
+                f"http://127.0.0.1:{server.server_port}/mcp",
                 data=tools_payload,
                 method="POST",
-                headers={"Content-Type": "application/json", "Mcp-Session-Id": session_id},
+                headers={
+                    "Content-Type": "application/json",
+                    "Mcp-Session-Id": session_id,
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
             )
             with self.assertRaises(urllib.error.HTTPError) as ctx:
                 urllib.request.urlopen(tools_request, timeout=2)

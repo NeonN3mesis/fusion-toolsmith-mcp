@@ -34,6 +34,7 @@ MAX_REQUEST_BYTES = 1024 * 1024
 DEFAULT_PORT = 9100
 MAX_SSE_SESSIONS = 1
 HTTP_SESSION_TTL_SECONDS = 60 * 60
+STREAMABLE_HTTP_PATH = "/mcp"
 server_stop_event = threading.Event()
 ANTIGRAVITY_SERVER_NAME = "autodesk-fusion-mcp"
 MAX_JOURNAL_ARGUMENT_TEXT = 300
@@ -141,6 +142,21 @@ def touch_http_session(session_id, now=None):
             return False
         http_sessions[session_id] = time.time() if now is None else now
         return True
+
+def get_task_manager_stats():
+    if hasattr(TaskManager, "get_pending_task_stats"):
+        try:
+            return TaskManager.get_pending_task_stats()
+        except Exception as e:
+            return {"error": str(e)}
+    return {
+        "pendingTasks": TaskManager.get_pending_task_count(),
+        "oldestTaskAgeSeconds": 0.0,
+        "taskTimeoutSeconds": None,
+        "maxPendingTasks": None,
+        "backpressureActive": False,
+        "tasks": [],
+    }
 
 def remove_http_session(session_id):
     with http_sessions_lock:
@@ -467,6 +483,7 @@ class MCPServerHandler(BaseHTTPRequestHandler):
                 active_sessions = len(sessions)
             with http_sessions_lock:
                 active_http_sessions = len(http_sessions)
+            task_stats = get_task_manager_stats()
             self._send_json({
                 "status": "ok",
                 "server": "fusion-mcp",
@@ -477,7 +494,8 @@ class MCPServerHandler(BaseHTTPRequestHandler):
                 "active_sessions": active_sessions,
                 "active_http_sessions": active_http_sessions,
                 "task_manager_running": TaskManager.is_running(),
-                "pending_tasks": TaskManager.get_pending_task_count(),
+                "pending_tasks": task_stats.get("pendingTasks"),
+                "task_manager": task_stats,
             })
             return
 
@@ -567,8 +585,11 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_empty(200)
             return
 
-        if parsed.path not in ('/', '/sse'):
+        if parsed.path not in ('/', '/sse', STREAMABLE_HTTP_PATH):
             self._send_empty(404)
+            return
+        if not self._is_authorized():
+            self._send_empty(403)
             return
 
         session_id = self.headers.get("Mcp-Session-Id") or self.headers.get("mcp-session-id")
@@ -584,7 +605,10 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_empty(403)
             return
         parsed = self._parsed_url()
-        if parsed.path in ('/', '/sse'):
+        if parsed.path in ('/', '/sse', STREAMABLE_HTTP_PATH):
+            if not self._is_authorized():
+                self._send_empty(403)
+                return
             try:
                 content_length = int(self.headers.get('Content-Length', 0))
             except ValueError:
@@ -1070,12 +1094,13 @@ def start_server():
         discovery_path = discovery_file_path()
         sse_url = f"http://127.0.0.1:{port}/sse?token={auth_token}"
         bearer_sse_url = f"http://127.0.0.1:{port}/sse"
+        streamable_http_url = f"http://127.0.0.1:{port}{STREAMABLE_HTTP_PATH}"
         try:
             with open(discovery_path, "w", encoding="utf-8") as f:
                 json.dump({
                     "sse_url": sse_url,
                     "bearer_sse_url": bearer_sse_url,
-                    "streamable_http_url": bearer_sse_url,
+                    "streamable_http_url": streamable_http_url,
                     "authorization_header": f"Bearer {auth_token}",
                     "port": port,
                     "transports": ["sse", "streamable_http"],
