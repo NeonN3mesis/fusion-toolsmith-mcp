@@ -45,6 +45,9 @@ This note tracks public Fusion 360 MCP patterns worth watching and the concrete 
 - Offline discoverability
   - `fusion-mcp dump-schemas` exports initialize metadata, tools, resources, templates, prompts, profiles, and server capabilities without launching Fusion.
 
+- No-Fusion client simulation
+  - `fusion-mcp mock-server` exposes deterministic `/health` and Streamable HTTP `/sse` responses for client integration tests without launching Fusion.
+
 - Agent workflow steering
   - `doctor`, `recommend_mcp_workflow`, `fusion://agent/tool-first-workflow`, and first-class MCP prompts route agents toward structured tools before raw scripts.
 
@@ -72,6 +75,6 @@ This note tracks public Fusion 360 MCP patterns worth watching and the concrete 
 ## Remaining Watch Items
 
 - Public package metadata and release polish.
-- More complete mock/simulation mode for no-Fusion client integration tests.
+- Broader mock fixture responses for additional high-value mutating tools.
 - Deeper typed CAD feature families where they remain general: sheet-metal workflows, richer joints/origin helpers, stronger sketch constraint editing, and slicer-grade printability.
 - Additional protocol evolution in MCP transports, authorization, and client-side approval UX.

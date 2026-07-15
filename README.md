@@ -131,6 +131,14 @@ Export the offline MCP schema bundle without launching Fusion:
 fusion-mcp dump-schemas --output dist\mcp-schemas.json
 ```
 
+Run a deterministic no-Fusion mock server for client integration tests:
+
+```powershell
+fusion-mcp mock-server --port 9101
+```
+
+The mock server exposes `/health` and Streamable HTTP MCP calls at `/sse`. It advertises the same offline tool/resource/prompt surface as `dump-schemas`, but tool calls return deterministic mock data instead of touching Fusion.
+
 For Antigravity/Gemini-style config, FusionMCP auto-syncs this file on add-in startup:
 
 ```text

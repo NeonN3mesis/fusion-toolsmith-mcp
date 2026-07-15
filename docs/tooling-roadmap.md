@@ -138,3 +138,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - Offline MCP schema export
   - `fusion-mcp dump-schemas` emits initialize metadata, tools, resources, resource templates, prompts, profiles, and server capabilities without launching Fusion.
   - Useful for GitHub review, client integration tests, and docs generation.
+
+- No-Fusion mock server
+  - `fusion-mcp mock-server` runs a deterministic Streamable HTTP endpoint on port `9101` by default.
+  - It reuses the offline MCP schema surface and returns stable mock responses for client handshake, tool listing, prompt/resource reads, `doctor`, inspection, validation, workflow, export-preflight, and capture calls.

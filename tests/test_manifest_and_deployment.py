@@ -3,7 +3,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.request
 import zipfile
 
 
@@ -260,6 +262,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("doctor", completed.stdout)
         self.assertIn("list-profiles", completed.stdout)
         self.assertIn("dump-schemas", completed.stdout)
+        self.assertIn("mock-server", completed.stdout)
 
     def test_cli_module_help_loads_without_fusion(self):
         completed = subprocess.run(
@@ -274,6 +277,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("install-addin", completed.stdout)
         self.assertIn("test-live", completed.stdout)
         self.assertIn("dump-schemas", completed.stdout)
+        self.assertIn("mock-server", completed.stdout)
 
     def test_cli_doctor_checks_required_live_tools(self):
         with open(os.path.join(ROOT, "fusion_mcp_cli", "cli.py"), "r", encoding="utf-8") as f:
@@ -399,6 +403,66 @@ class ManifestAndDeploymentTests(unittest.TestCase):
                 payload = json.load(f)
         self.assertIn("serverCapabilities", payload)
         self.assertIn("Wrote FusionMCP MCP schemas", completed.stdout)
+
+    def test_mock_server_exposes_streamable_http_without_fusion(self):
+        from fusion_mcp_cli.mock_server import create_mock_http_server
+
+        server = create_mock_http_server("127.0.0.1", 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def get_json(path):
+            with urllib.request.urlopen(base_url + path, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        def rpc(method, params=None, request_id=1, session_id=None):
+            payload = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}).encode("utf-8")
+            request = urllib.request.Request(
+                base_url + "/sse",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            if session_id:
+                request.add_header("Mcp-Session-Id", session_id)
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response, json.loads(response.read().decode("utf-8"))
+
+        try:
+            health = get_json("/health")
+            self.assertTrue(health["mock"])
+            self.assertEqual(health["transport"], "streamable_http")
+
+            response, initialized = rpc("initialize")
+            session_id = response.headers["Mcp-Session-Id"]
+            self.assertIn("instructions", initialized["result"])
+            self.assertTrue(session_id.startswith("mock-"))
+
+            _response, tools_payload = rpc("tools/list", request_id=2, session_id=session_id)
+            tool_names = {tool["name"] for tool in tools_payload["result"]["tools"]}
+            self.assertIn("doctor", tool_names)
+            self.assertIn("inspect_design", tool_names)
+
+            _response, doctor_payload = rpc("tools/call", {"name": "doctor", "arguments": {}}, request_id=3, session_id=session_id)
+            doctor_text = doctor_payload["result"]["content"][0]["text"]
+            self.assertIn("fusion-mcp-mock", doctor_text)
+            self.assertIn('"toolExecutionReady": true', doctor_text)
+
+            _response, resource_payload = rpc("resources/read", {"uri": "fusion://design/summary"}, request_id=4, session_id=session_id)
+            self.assertIn("Mock Fusion Toolsmith Design", resource_payload["result"]["contents"][0]["text"])
+
+            delete_request = urllib.request.Request(
+                base_url + "/sse",
+                headers={"Mcp-Session-Id": session_id},
+                method="DELETE",
+            )
+            with urllib.request.urlopen(delete_request, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     def test_tooling_roadmap_tracks_general_cad_gaps(self):
         with open(os.path.join(ROOT, "docs", "tooling-roadmap.md"), "r", encoding="utf-8") as f:
