@@ -149,6 +149,30 @@ def _with_tool_annotations(schemas):
         annotated.append(item)
     return annotated
 
+def _resource_annotations(uri):
+    if str(uri).startswith("fusion://agent/"):
+        return {"audience": ["assistant"], "priority": 0.95}
+    if str(uri).startswith("fusion://design/"):
+        return {"audience": ["assistant"], "priority": 0.85}
+    if str(uri).startswith("fusion://runtime/"):
+        return {"audience": ["assistant"], "priority": 0.7}
+    if str(uri).startswith("fusion://docs/"):
+        return {"audience": ["assistant"], "priority": 0.55}
+    return {"audience": ["assistant"], "priority": 0.5}
+
+def _with_resource_annotations(schemas, key="uri"):
+    annotated = []
+    for schema in schemas:
+        item = dict(schema)
+        uri = item.get(key)
+        if uri:
+            existing = dict(item.get("annotations") or {})
+            annotations = _resource_annotations(uri)
+            annotations.update(existing)
+            item["annotations"] = annotations
+        annotated.append(item)
+    return annotated
+
 @register_resource("fusion://agent/tool-profiles")
 def read_tool_profiles():
     path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tool_profiles.json")
@@ -227,6 +251,10 @@ def read_server_capabilities():
         "toolAnnotations": {
             "coverage": sum(1 for tool in tool_schemas if tool.get("annotations")),
             "fields": ["title", "readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"],
+        },
+        "resourceAnnotations": {
+            "coverage": sum(1 for resource in resource_schemas if resource.get("annotations")),
+            "fields": ["audience", "priority"],
         },
         "prompts": prompts,
         "profiles": sorted(profile_data.get("profiles", {}).keys()),
@@ -1884,7 +1912,7 @@ def get_tool_schemas():
     return _with_tool_annotations(schemas)
 
 def get_resources_schemas():
-    return [
+    schemas = [
         {
             "uri": "fusion://design/parameters",
             "name": "Design Parameters",
@@ -1934,9 +1962,10 @@ def get_resources_schemas():
             "mimeType": "application/json"
         }
     ]
+    return _with_resource_annotations(schemas)
 
 def get_resource_templates():
-    return [
+    templates = [
         {
             "uriTemplate": "fusion://design/tree/{depth}",
             "name": "Assembly Tree by Depth",
@@ -1944,6 +1973,7 @@ def get_resource_templates():
             "mimeType": "application/json"
         }
     ]
+    return _with_resource_annotations(templates, key="uriTemplate")
 
 def log_tool_exception(context, exc):
     message = f"{context}: {exc}\n{traceback.format_exc()}"

@@ -623,6 +623,8 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertGreater(resource["counts"]["tools"], 0)
         self.assertEqual(resource["toolAnnotations"]["coverage"], resource["counts"]["tools"])
         self.assertIn("readOnlyHint", resource["toolAnnotations"]["fields"])
+        self.assertEqual(resource["resourceAnnotations"]["coverage"], resource["counts"]["resources"])
+        self.assertIn("priority", resource["resourceAnnotations"]["fields"])
 
     def test_tool_schemas_include_mcp_risk_annotations(self):
         schemas = {schema["name"]: schema for schema in self.tools.get_tool_schemas()}
@@ -641,6 +643,26 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertTrue(schemas["run_fusion_script"]["annotations"]["destructiveHint"])
         self.assertTrue(schemas["clear_change_journal"]["annotations"]["destructiveHint"])
         self.assertFalse(schemas["search_local_fusion_docs"]["annotations"]["openWorldHint"])
+
+    def test_resource_schemas_include_client_ranking_annotations(self):
+        resources = {schema["uri"]: schema for schema in self.tools.get_resources_schemas()}
+        templates = {schema["uriTemplate"]: schema for schema in self.tools.get_resource_templates()}
+
+        for name, schema in {**resources, **templates}.items():
+            annotations = schema.get("annotations")
+            self.assertIsInstance(annotations, dict, name)
+            self.assertEqual(annotations["audience"], ["assistant"])
+            self.assertIsInstance(annotations["priority"], float, name)
+
+        self.assertGreater(
+            resources["fusion://agent/server-capabilities"]["annotations"]["priority"],
+            resources["fusion://docs/fusion-api"]["annotations"]["priority"],
+        )
+        self.assertGreater(
+            resources["fusion://design/summary"]["annotations"]["priority"],
+            resources["fusion://runtime/change-journal"]["annotations"]["priority"],
+        )
+        self.assertEqual(templates["fusion://design/tree/{depth}"]["annotations"]["priority"], 0.85)
 
     def test_list_appearances_reports_design_and_library_matches(self):
         design_appearance = types.SimpleNamespace(

@@ -130,3 +130,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - MCP tool risk annotations
   - Every advertised tool includes MCP `annotations` hints for read-only, destructive, idempotent, and open-world behavior.
   - Clients can use these hints for approval prompts and tool filtering; they are advisory metadata, not a replacement for Toolsmith's runtime guardrails.
+
+- MCP resource ranking annotations
+  - Every advertised resource and resource template includes assistant audience and priority metadata.
+  - Agent workflow resources rank highest, live design resources rank above runtime journals, and local docs remain available without crowding out model context.
