@@ -771,6 +771,101 @@ def _body_objects(root):
     return bodies
 
 
+def _body_matches_name(body, component_name, requested_name):
+    if not requested_name:
+        return True
+    body_name = _safe_value(lambda: body.name)
+    key = f"{component_name}/{body_name}"
+    return requested_name in (body_name, key)
+
+
+def _body_matches_token(body, entity_token):
+    if not entity_token:
+        return True
+    return _safe_value(lambda: body.entityToken) == entity_token
+
+
+def _resolve_bodies(body_name=None, body_entity_token=None, include_all=False):
+    design = get_active_design()
+    include_everything = bool(include_all) or (body_name is None and body_entity_token is None)
+    bodies = []
+    for body, component_name in _body_objects(design.rootComponent):
+        if include_everything:
+            bodies.append((body, component_name))
+            continue
+        if _body_matches_name(body, component_name, body_name) and _body_matches_token(body, body_entity_token):
+            bodies.append((body, component_name))
+    return bodies
+
+
+def _physical_properties_report(body, component_name):
+    props = _safe_value(lambda: body.physicalProperties)
+    material = _safe_value(lambda: body.physicalMaterial)
+    appearance = _safe_value(lambda: body.appearance)
+    bbox = _bbox_to_dict(body)
+    center = _safe_value(lambda: props.centerOfMass) if props else None
+    mass = _safe_value(lambda: props.mass) if props else None
+    volume = _safe_value(lambda: props.volume) if props else None
+    area = _safe_value(lambda: props.area) if props else None
+    density = _safe_value(lambda: props.density) if props else None
+    return {
+        "bodyName": _safe_value(lambda: body.name),
+        "componentName": component_name,
+        "entityToken": _safe_value(lambda: body.entityToken),
+        "isVisible": _safe_value(lambda: body.isVisible),
+        "isSolid": _safe_value(lambda: body.isSolid),
+        "boundingBox": bbox,
+        "boundingBoxSizeMm": _bbox_size_mm(bbox),
+        "massKg": mass,
+        "volumeCm3": volume,
+        "volumeMm3": round(volume * 1000.0, 6) if isinstance(volume, (int, float)) else None,
+        "areaCm2": area,
+        "areaMm2": round(area * 100.0, 6) if isinstance(area, (int, float)) else None,
+        "densityKgPerCm3": density,
+        "centerOfMassCm": _point_to_list(center),
+        "centerOfMassMm": [round(value * 10.0, 6) for value in _point_to_list(center)] if center else None,
+        "physicalMaterial": _entity_ref(material),
+        "appearance": _entity_ref(appearance),
+        "warnings": [] if props else ["Fusion did not expose physicalProperties for this body."],
+    }
+
+
+@register_tool("get_physical_properties")
+def get_physical_properties(body_name=None, body_entity_token=None, include_all=False):
+    """
+    Read-only physical-property report for one body, an entity token, or all bodies.
+
+    Fusion reports raw volumes in cm^3 and areas in cm^2; this tool also returns
+    mm-based conversions for print/CAD review workflows.
+    """
+    try:
+        bodies = _resolve_bodies(
+            body_name=body_name,
+            body_entity_token=body_entity_token,
+            include_all=bool(include_all),
+        )
+        if not bodies:
+            target = body_entity_token or body_name or "active design bodies"
+            return {"error": f"No body matched {target!r}."}
+        reports = [
+            _physical_properties_report(body, component_name)
+            for body, component_name in bodies
+        ]
+        return {
+            "result": {
+                "readOnly": True,
+                "bodyCount": len(reports),
+                "bodies": reports,
+                "warnings": [
+                    "Physical properties are read directly from Fusion and depend on assigned materials and model health.",
+                    "Raw Fusion units are centimeters, square centimeters, and cubic centimeters; mm conversions are included for review.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to get physical properties: {str(e)}"}
+
+
 def _curve_counts(sketch):
     curves = _safe_value(lambda: sketch.sketchCurves)
     if not curves:

@@ -31,6 +31,10 @@ Run inspect_printability with mesh analysis enabled. Treat mesh warnings as revi
 ```
 
 ```text
+Get physical properties for all bodies. Report mass, volume, area, center of mass, material assignments, and any bodies where Fusion did not expose properties.
+```
+
+```text
 Inspect this selected feature and map its dependencies before proposing any changes.
 ```
 

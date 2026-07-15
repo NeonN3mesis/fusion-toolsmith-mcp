@@ -137,6 +137,7 @@ try {
         "recommend_mcp_workflow",
         "extract_reference_dimensions",
         "inspect_printability",
+        "get_physical_properties",
         "get_body_faces",
         "get_body_edges",
         "get_assembly_tree",

@@ -113,6 +113,28 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "get_physical_properties",
+            "description": "Read-only physical-property report for one body, an entity token, or all bodies. Returns mass, volume, area, density, center of mass, bounding box, material, and appearance metadata with Fusion raw units and mm conversions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {
+                        "type": "string",
+                        "description": "Optional body name or component/body key to inspect. Omit with no entity token to report all bodies."
+                    },
+                    "body_entity_token": {
+                        "type": "string",
+                        "description": "Optional exact BRepBody entity token from inspection tools."
+                    },
+                    "include_all": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "When true, report every body in the active design. No mutation is performed."
+                    }
+                }
+            }
+        },
+        {
             "name": "query_selection",
             "description": "Describe currently selected entities in the Fusion UI in agent-friendly terms (e.g., coordinates, type, owning component). Instructions: Ask the user to select the target entity in the Fusion UI if it's too difficult to find programmatically. Use this tool to read their selection.",
             "inputSchema": {"type": "object", "properties": {}}

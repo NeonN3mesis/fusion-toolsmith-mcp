@@ -4,7 +4,30 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Next Tool Gaps
 
-- None currently listed. Add new general CAD-domain gaps here as they are discovered.
+- CAM/manufacturing workflows
+  - Setup creation, operation creation, toolpath generation, operation inspection, and post-processing.
+  - Keep this gated and explicit; manufacturing tools should not infer stock, machines, tools, feeds, speeds, or post processors.
+
+- Surface modeling workflows
+  - Patch, stitch, thicken, ruled surface, trim/extend, and surface-to-solid repair helpers.
+  - Start with inspection/preflight and narrow feature creation before destructive repair tools.
+
+- Sheet metal workflows
+  - Flange, bend, unfold/refold, flat pattern, and sheet-metal rule inspection.
+  - Treat flat pattern export as a preflight-gated export workflow.
+
+- Analysis workflows
+  - Dedicated physical properties, section analysis, and interference checks.
+  - Prefer read-only reporting first; mutating analysis entities should be separate tools with explicit names and cleanup behavior.
+
+- Safer undo workflow
+  - Add an undo guard that captures design state before/after undo and auto-redoes if undo would switch design type, remove broad structures, or create timeline health issues.
+
+- Mock/simulation mode
+  - Provide a deterministic no-Fusion mode for client integration tests, docs screenshots, and CI smoke coverage.
+
+- First-class MCP prompts
+  - Add focused workflow prompts for common CAD tasks such as threaded fasteners, sheet-metal enclosures, export readiness, and printability review.
 
 ## Implemented
 
@@ -89,3 +112,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `capture_demo_sequence`
   - General presentation helper for named camera views, staged visibility, screenshots, and before/after capture steps.
   - Captures still PNG frames for external video assembly and remains independent of any one project or model category.
+
+- `get_physical_properties`
+  - Read-only body mass, volume, area, density, center-of-mass, bounding-box, material, and appearance report.
+  - Supports single-body, entity-token, and all-body inspection without mutating the design.

@@ -20,6 +20,7 @@
         "compare_design_state",
         "extract_reference_dimensions",
         "inspect_printability",
+        "get_physical_properties",
         "inspect_sketch",
         "inspect_feature",
         "get_projected_geometry_sources",

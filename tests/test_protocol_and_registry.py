@@ -544,6 +544,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("get_assembly_references", resource["profiles"]["inspection"]["tools"])
         self.assertIn("get_assembly_joints", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("get_physical_properties", resource["profiles"]["inspection"]["tools"])
         self.assertIn("list_appearances", resource["profiles"]["inspection"]["tools"])
         self.assertIn("inspect_body_style", resource["profiles"]["inspection"]["tools"])
         self.assertIn("revolve_feature", resource["profiles"]["modeling"]["tools"])
@@ -628,6 +629,55 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(report["bodyName"], "Bracket")
         self.assertEqual(report["appearance"]["name"], "Satin Steel")
         self.assertEqual(report["physicalMaterial"]["entityToken"], "material-token")
+
+    def test_get_physical_properties_reports_converted_body_properties(self):
+        appearance = types.SimpleNamespace(
+            name="Blue Paint",
+            objectType="Appearance",
+            entityToken="appearance-token",
+        )
+        material = types.SimpleNamespace(
+            name="Aluminum",
+            objectType="PhysicalMaterial",
+            entityToken="material-token",
+        )
+        point_min = types.SimpleNamespace(x=0.0, y=0.0, z=0.0)
+        point_max = types.SimpleNamespace(x=2.0, y=3.0, z=4.0)
+        center = types.SimpleNamespace(x=1.0, y=1.5, z=2.0)
+        props = types.SimpleNamespace(
+            mass=0.42,
+            volume=24.0,
+            area=52.0,
+            density=0.0175,
+            centerOfMass=center,
+        )
+        body = types.SimpleNamespace(
+            name="Bracket",
+            entityToken="body-token",
+            isVisible=True,
+            isSolid=True,
+            boundingBox=types.SimpleNamespace(minPoint=point_min, maxPoint=point_max),
+            physicalProperties=props,
+            physicalMaterial=material,
+            appearance=appearance,
+        )
+        component = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=component)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("get_physical_properties", {"body_entity_token": "body-token"})
+
+        self.assertIn("result", res)
+        report = res["result"]["bodies"][0]
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(report["bodyName"], "Bracket")
+        self.assertEqual(report["massKg"], 0.42)
+        self.assertEqual(report["volumeMm3"], 24000.0)
+        self.assertEqual(report["areaMm2"], 5200.0)
+        self.assertEqual(report["centerOfMassMm"], [10.0, 15.0, 20.0])
+        self.assertEqual(report["boundingBoxSizeMm"], [20.0, 30.0, 40.0])
+        self.assertEqual(report["physicalMaterial"]["name"], "Aluminum")
+        self.assertEqual(report["appearance"]["entityToken"], "appearance-token")
 
     def test_change_journal_tools_and_resource(self):
         self.mcp_server.append_change_journal({

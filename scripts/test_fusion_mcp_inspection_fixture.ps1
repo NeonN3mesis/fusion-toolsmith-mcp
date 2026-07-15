@@ -199,6 +199,7 @@ try {
         "get_dependency_graph",
         "assess_change_impact",
         "plan_parameterization",
+        "get_physical_properties",
         "get_assembly_references",
         "doctor",
         "recommend_mcp_workflow",
@@ -545,8 +546,15 @@ def run(context):
     } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
     Assert-True -Condition ($printability.result.readOnly -eq $true) -Message "inspect_printability did not report readOnly=true."
 
+    $physicalProperties = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 24 -Name "get_physical_properties" -Arguments @{
+        body_name = "Fixture_BaseBody"
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    Assert-True -Condition ($physicalProperties.result.readOnly -eq $true) -Message "get_physical_properties did not report readOnly=true."
+    Assert-True -Condition ($physicalProperties.result.bodyCount -ge 1) -Message "get_physical_properties did not report Fixture_BaseBody."
+    Assert-True -Condition ($null -ne $physicalProperties.result.bodies[0].volumeMm3) -Message "get_physical_properties did not report converted volume."
+
     $demoOutput = Join-Path $env:TEMP "fusion_mcp_fixture_frames"
-    $demoCapture = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 24 -Name "capture_demo_sequence" -Arguments @{
+    $demoCapture = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 25 -Name "capture_demo_sequence" -Arguments @{
         output_dir = $demoOutput
         image_width = 640
         image_height = 360
