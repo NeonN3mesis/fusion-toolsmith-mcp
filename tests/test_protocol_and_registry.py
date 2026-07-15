@@ -427,9 +427,13 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("run_fusion_script", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("get_assembly_references", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("list_appearances", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("inspect_body_style", resource["profiles"]["inspection"]["tools"])
         self.assertIn("revolve_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("loft_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("sweep_feature", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("list_appearances", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("inspect_body_style", resource["profiles"]["modeling"]["tools"])
         self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
         self.assertIn("list_documents", resource["profiles"]["document"]["tools"])
         advertised = {schema["name"] for schema in self.tools.get_tool_schemas()}
@@ -440,6 +444,70 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         for profile in resource["profiles"].values():
             self.assertEqual(profile["missingFromSchema"], [])
             self.assertEqual(profile["missingFromRegistry"], [])
+
+    def test_list_appearances_reports_design_and_library_matches(self):
+        design_appearance = types.SimpleNamespace(
+            name="Matte Black",
+            objectType="Appearance",
+            entityToken="design-black-token",
+        )
+        library_appearance = types.SimpleNamespace(
+            name="Black Oxide",
+            objectType="Appearance",
+            entityToken="library-black-token",
+        )
+        library = types.SimpleNamespace(
+            name="Fusion Library",
+            appearances=[library_appearance],
+        )
+        self.mock_design = types.SimpleNamespace(
+            appearances=[design_appearance],
+            rootComponent=types.SimpleNamespace(),
+        )
+        _fake_app.activeProduct = self.mock_design
+        _fake_app.materialLibraries = [library]
+
+        res = self.tools.execute_tool("list_appearances", {
+            "query": "black",
+            "include_libraries": True,
+            "limit": 10,
+        })
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["count"], 2)
+        names = [item["name"] for item in res["result"]["appearances"]]
+        self.assertEqual(names, ["Matte Black", "Black Oxide"])
+        self.assertEqual(res["result"]["appearances"][1]["libraryName"], "Fusion Library")
+
+    def test_inspect_body_style_reports_appearance_and_material(self):
+        appearance = types.SimpleNamespace(
+            name="Satin Steel",
+            objectType="Appearance",
+            entityToken="appearance-token",
+        )
+        material = types.SimpleNamespace(
+            name="Steel",
+            objectType="PhysicalMaterial",
+            entityToken="material-token",
+        )
+        body = types.SimpleNamespace(
+            name="Bracket",
+            isVisible=True,
+            appearance=appearance,
+            material=material,
+            physicalMaterial=material,
+        )
+        component = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=component)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("inspect_body_style", {"body_name": "Bracket"})
+
+        self.assertIn("result", res)
+        report = res["result"]["bodies"][0]
+        self.assertEqual(report["bodyName"], "Bracket")
+        self.assertEqual(report["appearance"]["name"], "Satin Steel")
+        self.assertEqual(report["physicalMaterial"]["entityToken"], "material-token")
 
     def test_change_journal_tools_and_resource(self):
         self.mcp_server.append_change_journal({

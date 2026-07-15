@@ -34,6 +34,8 @@
         "get_body_edges",
         "get_assembly_tree",
         "get_assembly_references",
+        "list_appearances",
+        "inspect_body_style",
         "get_timeline",
         "measure_entity",
         "validate_model"
@@ -72,6 +74,8 @@
         "create_counterbore_hole_pattern",
         "mirror_features_or_bodies",
         "pattern_feature",
+        "list_appearances",
+        "inspect_body_style",
         "apply_appearance",
         "convert_mesh_to_solid",
         "reorganize_body_to_component",

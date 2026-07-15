@@ -34,6 +34,10 @@ Inspect this selected feature and map its dependencies before proposing any chan
 Find projected geometry in the selected sketch and report where it came from.
 ```
 
+```text
+List available black and metal appearances, inspect the current style assignments on all visible bodies, then suggest a body-by-body styling pass before applying anything.
+```
+
 ## Parameter Workflows
 
 ```text

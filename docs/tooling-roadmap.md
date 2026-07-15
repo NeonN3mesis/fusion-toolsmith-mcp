@@ -7,9 +7,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - Assembly joints
   - Create and inspect basic joints for repeatable component placement once the structured joint API surface is validated.
 
-- Material and appearance workflows
-  - Expand appearance assignment into reusable material/appearance inspection, assignment, and reporting workflows.
-
 - Stronger sketch constraint editing
   - Add more complete constraint creation/editing and safer constraint conflict reporting.
 
@@ -43,6 +40,11 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `get_assembly_references`
   - Read-only report of component origins, standard axes/planes, construction axes/planes/points, and occurrence transforms.
   - Complements component-targeted `create_construction_point`, `create_construction_axis`, and `create_offset_plane` for repeatable placement references.
+
+- Material and appearance workflows
+  - `list_appearances` discovers active-design and material-library appearances with optional filtering.
+  - `inspect_body_style` reports body appearance, material, and physical material assignments across components.
+  - `apply_appearance` applies a named or partial-match appearance to a named body.
 
 - `mirror_features_or_bodies`
   - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.

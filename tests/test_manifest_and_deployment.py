@@ -61,6 +61,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "get_body_edges",
             "get_assembly_tree",
             "get_assembly_references",
+            "list_appearances",
+            "inspect_body_style",
             "get_timeline",
             "measure_entity",
             "validate_model",

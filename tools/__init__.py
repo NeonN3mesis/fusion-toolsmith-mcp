@@ -1009,6 +1009,29 @@ def get_tool_schemas():
             "inputSchema": {"type": "object", "properties": {}}
         },
         {
+            "name": "list_appearances",
+            "description": "List available active-design and material-library appearances for styling bodies. Read-only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Optional case-insensitive name filter, such as 'steel', 'glass', or 'black'."},
+                    "include_libraries": {"type": "boolean", "default": True, "description": "Include appearances from installed Fusion material libraries, not only appearances already copied into the active design."},
+                    "limit": {"type": "integer", "default": 50, "description": "Maximum number of appearances to return. Clamped from 1 to 500."}
+                }
+            }
+        },
+        {
+            "name": "inspect_body_style",
+            "description": "Report current appearance/material assignments for a named body or all bodies. Read-only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name to inspect."},
+                    "include_all_bodies": {"type": "boolean", "default": False, "description": "When true, report style state for every body in all components."}
+                }
+            }
+        },
+        {
             "name": "apply_appearance",
             "description": "Style a named body in the active design with a materials library appearance.",
             "inputSchema": {

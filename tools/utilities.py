@@ -45,6 +45,8 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "inspect_feature",
     "get_body_faces",
     "get_assembly_references",
+    "list_appearances",
+    "inspect_body_style",
     "offset_face_or_press_pull",
     "revolve_feature",
     "loft_feature",
@@ -127,6 +129,8 @@ _TOOL_FIRST_POLICY = {
                 "inspect_sketch",
                 "inspect_feature",
                 "get_assembly_references",
+                "list_appearances",
+                "inspect_body_style",
                 "get_body_faces",
                 "assess_change_impact",
                 "map_coordinates",
@@ -154,6 +158,9 @@ _TOOL_FIRST_POLICY = {
                 "create_counterbore_hole_pattern",
                 "mirror_features_or_bodies",
                 "pattern_feature",
+                "list_appearances",
+                "inspect_body_style",
+                "apply_appearance",
                 "set_visibility",
                 "validate_model",
             ],
@@ -191,6 +198,24 @@ def _all_components(root):
         if component and component not in components:
             components.append(component)
     return components
+
+
+def _entity_ref(entity):
+    if not entity:
+        return None
+    return {
+        "name": _safe_value(lambda: entity.name),
+        "objectType": _safe_value(lambda: entity.objectType),
+        "entityToken": _safe_value(lambda: entity.entityToken),
+    }
+
+
+def _find_body_by_name(root, body_name):
+    for component in _all_components(root):
+        for body in _collection_items(_safe_value(lambda component=component: component.bRepBodies)):
+            if _safe_value(lambda body=body: body.name) == body_name:
+                return component, body
+    return None, None
 
 
 def _set_named_visibility(collection, requested_names, visible):
@@ -1437,6 +1462,115 @@ def get_best_practices():
     except Exception as e:
         return {"error": f"Failed to load best practices: {e}"}
 
+
+@register_tool("list_appearances")
+def list_appearances(query=None, include_libraries=True, limit=50):
+    try:
+        app = adsk.core.Application.get()
+        design = get_active_design()
+        query_text = str(query).strip().lower() if query is not None else ""
+        try:
+            max_results = int(limit)
+        except Exception:
+            max_results = 50
+        max_results = max(1, min(max_results, 500))
+
+        results = []
+        seen = set()
+
+        def add_appearance(appearance, source, library_name=None):
+            if len(results) >= max_results or not appearance:
+                return
+            name = _safe_value(lambda: appearance.name)
+            if not name:
+                return
+            if query_text and query_text not in name.lower():
+                return
+            key = (source, library_name, name)
+            if key in seen:
+                return
+            seen.add(key)
+            item = _entity_ref(appearance)
+            item.update({
+                "source": source,
+                "libraryName": library_name,
+            })
+            results.append(item)
+
+        for appearance in _collection_items(_safe_value(lambda: design.appearances)):
+            add_appearance(appearance, "design")
+
+        library_count = 0
+        if include_libraries:
+            for library in _collection_items(_safe_value(lambda: app.materialLibraries)):
+                library_count += 1
+                library_name = _safe_value(lambda library=library: library.name)
+                for appearance in _collection_items(_safe_value(lambda library=library: library.appearances)):
+                    add_appearance(appearance, "library", library_name)
+                    if len(results) >= max_results:
+                        break
+                if len(results) >= max_results:
+                    break
+
+        return {
+            "result": {
+                "query": query,
+                "includeLibraries": bool(include_libraries),
+                "limit": max_results,
+                "count": len(results),
+                "libraryCountScanned": library_count,
+                "appearances": results,
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to list appearances: {e}"}
+
+
+@register_tool("inspect_body_style")
+def inspect_body_style(body_name=None, include_all_bodies=False):
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        requested_name = str(body_name).strip() if body_name is not None else ""
+        include_all = bool(include_all_bodies)
+        if not requested_name and not include_all:
+            return {"error": "body_name is required unless include_all_bodies is true."}
+
+        body_reports = []
+        for component in _all_components(root):
+            component_name = _safe_value(lambda component=component: component.name)
+            for body in _collection_items(_safe_value(lambda component=component: component.bRepBodies)):
+                name = _safe_value(lambda body=body: body.name)
+                if requested_name and name != requested_name:
+                    continue
+                body_reports.append({
+                    "bodyName": name,
+                    "componentName": component_name,
+                    "isVisible": _safe_value(lambda body=body: body.isVisible),
+                    "appearance": _entity_ref(_safe_value(lambda body=body: body.appearance)),
+                    "material": _entity_ref(_safe_value(lambda body=body: body.material)),
+                    "physicalMaterial": _entity_ref(_safe_value(lambda body=body: body.physicalMaterial)),
+                })
+                if requested_name and not include_all:
+                    break
+            if requested_name and body_reports and not include_all:
+                break
+
+        if requested_name and not body_reports:
+            return {"error": f"Body '{requested_name}' not found."}
+
+        return {
+            "result": {
+                "bodyName": requested_name or None,
+                "includeAllBodies": include_all,
+                "count": len(body_reports),
+                "bodies": body_reports,
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect body style: {e}"}
+
+
 @register_tool("apply_appearance")
 def apply_appearance(body_name, appearance_name):
     try:
@@ -1445,20 +1579,7 @@ def apply_appearance(body_name, appearance_name):
         root = design.rootComponent
         
         # 1. Find the target body
-        target_body = None
-        for body in root.bRepBodies:
-            if body.name == body_name:
-                target_body = body
-                break
-                
-        if not target_body:
-            for occ in root.allOccurrences:
-                for body in occ.bRepBodies:
-                    if body.name == body_name:
-                        target_body = body
-                        break
-                if target_body:
-                    break
+        _target_component, target_body = _find_body_by_name(root, body_name)
                     
         if not target_body:
             return {"error": f"Body '{body_name}' not found."}
