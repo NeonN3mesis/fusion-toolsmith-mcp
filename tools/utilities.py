@@ -10,7 +10,7 @@ import sys
 import io
 import traceback
 from . import register_resource, register_tool
-from .inspection import _design_state_snapshot, _health_to_string, _safe_value, compare_design_state, get_active_design, get_feature_dependencies
+from .inspection import _collection_items, _design_state_snapshot, _health_to_string, _safe_value, compare_design_state, get_active_design, get_feature_dependencies
 
 class FusionScriptExecutionError(Exception):
     def __init__(self, message, stdout_text, traceback_text):
@@ -39,6 +39,7 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "doctor",
     "run_fusion_script",
     "inspect_design",
+    "extract_reference_dimensions",
     "inspect_sketch",
     "inspect_feature",
     "get_sketch_parameters",
@@ -56,6 +57,10 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "preflight_export",
     "export_asset",
     "create_2d_drawing",
+    "create_rounded_rectangle_body",
+    "create_rounded_slot_cut",
+    "create_counterbore_hole_pattern",
+    "set_visibility",
 )
 
 _TOOL_FIRST_POLICY = {
@@ -71,6 +76,7 @@ _TOOL_FIRST_POLICY = {
         "inspect_or_review": {
             "firstTools": ["doctor", "inspect_design", "get_assembly_tree"],
             "preferredTools": [
+                "extract_reference_dimensions",
                 "inspect_sketch",
                 "inspect_feature",
                 "get_feature_dependencies",
@@ -99,6 +105,7 @@ _TOOL_FIRST_POLICY = {
             "preferredTools": [
                 "query_selection",
                 "get_current_selection",
+                "extract_reference_dimensions",
                 "inspect_sketch",
                 "inspect_feature",
                 "assess_change_impact",
@@ -112,6 +119,10 @@ _TOOL_FIRST_POLICY = {
                 "fillet_feature",
                 "chamfer_feature",
                 "combine_bodies",
+                "create_rounded_rectangle_body",
+                "create_rounded_slot_cut",
+                "create_counterbore_hole_pattern",
+                "set_visibility",
                 "validate_model",
             ],
         },
@@ -131,6 +142,106 @@ _TOOL_FIRST_POLICY = {
         "exportPolicy": "Raw Fusion export APIs are blocked by default; use export_asset or create_2d_drawing.",
     },
 }
+
+
+def _normalize_names(names):
+    if names is None:
+        return []
+    if isinstance(names, str):
+        return [names]
+    return [str(name) for name in names]
+
+
+def _all_components(root):
+    components = [root]
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        if component and component not in components:
+            components.append(component)
+    return components
+
+
+def _set_named_visibility(collection, requested_names, visible):
+    requested = set(_normalize_names(requested_names))
+    changed = []
+    missing = set(requested)
+    if not requested:
+        return changed, []
+    for entity in _collection_items(collection):
+        name = _safe_value(lambda entity=entity: entity.name)
+        if name not in requested:
+            continue
+        try:
+            entity.isLightBulbOn = bool(visible)
+        except Exception:
+            try:
+                entity.isVisible = bool(visible)
+            except Exception:
+                pass
+        changed.append(name)
+        missing.discard(name)
+    return changed, sorted(missing)
+
+
+@register_tool("set_visibility")
+def set_visibility(body_names=None, sketch_names=None, construction_plane_names=None, visible=True, hide_all_sketches=False, hide_all_construction_planes=False, clear_selection=True):
+    design = get_active_design()
+    root = design.rootComponent
+    before = _design_state_snapshot(include_selections=True)
+    changed = {"bodies": [], "sketches": [], "constructionPlanes": []}
+    missing = {"bodies": [], "sketches": [], "constructionPlanes": []}
+
+    for component in _all_components(root):
+        body_changed, body_missing = _set_named_visibility(
+            _safe_value(lambda component=component: component.bRepBodies),
+            body_names,
+            visible,
+        )
+        sketch_changed, sketch_missing = _set_named_visibility(
+            _safe_value(lambda component=component: component.sketches),
+            sketch_names,
+            visible,
+        )
+        plane_changed, plane_missing = _set_named_visibility(
+            _safe_value(lambda component=component: component.constructionPlanes),
+            construction_plane_names,
+            visible,
+        )
+        changed["bodies"].extend(body_changed)
+        changed["sketches"].extend(sketch_changed)
+        changed["constructionPlanes"].extend(plane_changed)
+        missing["bodies"].extend(body_missing)
+        missing["sketches"].extend(sketch_missing)
+        missing["constructionPlanes"].extend(plane_missing)
+
+        if hide_all_sketches:
+            for sketch in _collection_items(_safe_value(lambda component=component: component.sketches)):
+                sketch.isLightBulbOn = False
+                changed["sketches"].append(_safe_value(lambda sketch=sketch: sketch.name))
+        if hide_all_construction_planes:
+            for plane in _collection_items(_safe_value(lambda component=component: component.constructionPlanes)):
+                plane.isLightBulbOn = False
+                changed["constructionPlanes"].append(_safe_value(lambda plane=plane: plane.name))
+
+    if clear_selection:
+        ui = _safe_value(lambda: adsk.core.Application.get().userInterface)
+        selections = _safe_value(lambda: ui.activeSelections) if ui else None
+        if selections:
+            _safe_value(lambda: selections.clear())
+
+    for key in missing:
+        missing[key] = sorted(set(missing[key]) - set(changed[key]))
+        changed[key] = sorted({name for name in changed[key] if name})
+
+    return {
+        "result": {
+            "visible": bool(visible),
+            "changed": changed,
+            "missing": missing,
+            "clearSelection": bool(clear_selection),
+            "stateComparison": compare_design_state(before, _design_state_snapshot(include_selections=True)).get("result"),
+        }
+    }
 
 
 def _tool_first_policy():

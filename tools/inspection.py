@@ -31,6 +31,121 @@ def inspect_design():
     return {"result": summary}
 
 
+def _bbox_size_mm(bbox):
+    if not bbox or not bbox.get("min") or not bbox.get("max"):
+        return None
+    return [round((bbox["max"][i] - bbox["min"][i]) * 10.0, 4) for i in range(3)]
+
+
+def _name_filter(names):
+    if names is None:
+        return None
+    if isinstance(names, str):
+        return {names}
+    return {str(name) for name in names}
+
+
+def _slot_inference(sketch, bbox):
+    counts = _curve_counts(sketch)
+    if counts.get("lines") != 2 or counts.get("arcs") != 2:
+        return None
+    arcs = _collection_items(_safe_value(lambda: sketch.sketchCurves.sketchArcs))
+    radii = [_safe_value(lambda arc=arc: arc.radius) for arc in arcs]
+    radii = [radius for radius in radii if isinstance(radius, (int, float))]
+    size = _bbox_size_mm(bbox)
+    return {
+        "kind": "rounded_slot_candidate",
+        "confidence": "medium",
+        "reason": "Sketch has two lines and two arcs.",
+        "sizeMm": size,
+        "averageRadiusMm": round((sum(radii) / len(radii)) * 10.0, 4) if radii else None,
+    }
+
+
+@register_tool("extract_reference_dimensions")
+def extract_reference_dimensions(body_names=None, sketch_names=None, include_parameters=True, infer_slots=True):
+    """
+    Read-only dimensional summary for recreating reference geometry with structured tools.
+    Values derived from Fusion bounding boxes are reported in millimeters.
+    """
+    design = get_active_design()
+    root = design.rootComponent
+    body_filter = _name_filter(body_names)
+    sketch_filter = _name_filter(sketch_names)
+
+    bodies = []
+    sketches = []
+    for component in _component_snapshots(root):
+        component_name = component.get("name")
+        for body in _collection_items(_safe_value(lambda component_name=component_name: _find_component_by_name(root, component_name).bRepBodies)):
+            body_name = _safe_value(lambda body=body: body.name)
+            if body_filter and body_name not in body_filter:
+                continue
+            bbox = _bbox_to_dict(body)
+            bodies.append({
+                "name": body_name,
+                "componentName": component_name,
+                "boundingBox": bbox,
+                "sizeMm": _bbox_size_mm(bbox),
+                "isVisible": _safe_value(lambda body=body: body.isVisible),
+                "isSolid": _safe_value(lambda body=body: body.isSolid),
+            })
+
+        component_obj = _find_component_by_name(root, component_name)
+        for sketch in _collection_items(_safe_value(lambda component_obj=component_obj: component_obj.sketches)):
+            sketch_name = _safe_value(lambda sketch=sketch: sketch.name)
+            if sketch_filter and sketch_name not in sketch_filter:
+                continue
+            bbox = _bbox_to_dict(sketch)
+            sketch_data = {
+                "name": sketch_name,
+                "componentName": component_name,
+                "boundingBox": bbox,
+                "sizeMm": _bbox_size_mm(bbox),
+                "isVisible": _safe_value(lambda sketch=sketch: sketch.isVisible),
+                "isFullyConstrained": _safe_value(lambda sketch=sketch: sketch.isFullyConstrained),
+                "curveCounts": _curve_counts(sketch),
+                "dimensionCount": len(_collection_items(_safe_value(lambda sketch=sketch: sketch.sketchDimensions))),
+            }
+            if infer_slots:
+                slot = _slot_inference(sketch, bbox)
+                if slot:
+                    sketch_data["inference"] = slot
+            sketches.append(sketch_data)
+
+    parameters = []
+    if include_parameters:
+        parameters = [
+            _parameter_snapshot(param, "user")
+            for param in _collection_items(_safe_value(lambda: design.userParameters))
+        ]
+
+    return {
+        "result": {
+            "units": design.unitsManager.defaultLengthUnits,
+            "bodyCount": len(bodies),
+            "sketchCount": len(sketches),
+            "bodies": sorted(bodies, key=lambda item: (item.get("componentName") or "", item.get("name") or "")),
+            "sketches": sorted(sketches, key=lambda item: (item.get("componentName") or "", item.get("name") or "")),
+            "parameters": sorted(parameters, key=lambda item: item.get("name") or ""),
+            "notes": [
+                "boundingBox values use Fusion internal model units; sizeMm is converted for agent planning.",
+                "slot inference is geometric best-effort and should be verified before cutting production geometry.",
+            ],
+        }
+    }
+
+
+def _find_component_by_name(root, component_name):
+    if _safe_value(lambda: root.name) == component_name:
+        return root
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        if _safe_value(lambda component=component: component.name) == component_name:
+            return component
+    return root
+
+
 def _document_snapshot(app):
     documents = []
     for index, doc in enumerate(_collection_items(_safe_value(lambda: app.documents))):

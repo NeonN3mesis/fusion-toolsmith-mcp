@@ -236,6 +236,229 @@ def _real_length(design, expression):
         raise ValueError(f"Could not evaluate length expression: {expression}")
     return float(value)
 
+def _base_plane(root, base_plane):
+    plane_name = (base_plane or "xy").lower()
+    if plane_name in ("xz", "xzconstructionplane"):
+        return root.xZConstructionPlane
+    if plane_name in ("yz", "yzconstructionplane"):
+        return root.yZConstructionPlane
+    return root.xYConstructionPlane
+
+def _point_on_sketch(u, v):
+    return adsk.core.Point3D.create(float(u), float(v), 0)
+
+def _find_body(root, body_name):
+    if not body_name:
+        return None
+    for component in _all_components(root):
+        for body in component.bRepBodies:
+            if getattr(body, "name", None) == body_name:
+                return body
+    return None
+
+def _set_participant_body(ext_input, body):
+    if not body:
+        return
+    try:
+        participants = adsk.core.ObjectCollection.create()
+        participants.add(body)
+        ext_input.participantBodies = participants
+    except Exception:
+        pass
+
+def _draw_rounded_rectangle(sketch, center_u, center_v, width, height, radius):
+    lines = sketch.sketchCurves.sketchLines
+    arcs = sketch.sketchCurves.sketchArcs
+    half_w = width / 2.0
+    half_h = height / 2.0
+    radius = max(0.0, min(radius, half_w, half_h))
+    if radius <= 0:
+        lines.addTwoPointRectangle(
+            _point_on_sketch(center_u - half_w, center_v - half_h),
+            _point_on_sketch(center_u + half_w, center_v + half_h),
+        )
+        return
+
+    left = center_u - half_w
+    right = center_u + half_w
+    bottom = center_v - half_h
+    top = center_v + half_h
+
+    lines.addByTwoPoints(_point_on_sketch(left + radius, top), _point_on_sketch(right - radius, top))
+    lines.addByTwoPoints(_point_on_sketch(right, top - radius), _point_on_sketch(right, bottom + radius))
+    lines.addByTwoPoints(_point_on_sketch(right - radius, bottom), _point_on_sketch(left + radius, bottom))
+    lines.addByTwoPoints(_point_on_sketch(left, bottom + radius), _point_on_sketch(left, top - radius))
+
+    arcs.addByCenterStartEnd(_point_on_sketch(right - radius, top - radius), _point_on_sketch(right - radius, top), _point_on_sketch(right, top - radius))
+    arcs.addByCenterStartEnd(_point_on_sketch(right - radius, bottom + radius), _point_on_sketch(right, bottom + radius), _point_on_sketch(right - radius, bottom))
+    arcs.addByCenterStartEnd(_point_on_sketch(left + radius, bottom + radius), _point_on_sketch(left + radius, bottom), _point_on_sketch(left, bottom + radius))
+    arcs.addByCenterStartEnd(_point_on_sketch(left + radius, top - radius), _point_on_sketch(left, top - radius), _point_on_sketch(left + radius, top))
+
+def _draw_rounded_slot(sketch, center_u, center_v, length, width, axis):
+    if length <= width:
+        raise ValueError("slot length must be larger than slot width.")
+    radius = width / 2.0
+    half_straight = (length - width) / 2.0
+    lines = sketch.sketchCurves.sketchLines
+    arcs = sketch.sketchCurves.sketchArcs
+    if (axis or "x").lower() == "y":
+        lines.addByTwoPoints(_point_on_sketch(center_u - radius, center_v - half_straight), _point_on_sketch(center_u - radius, center_v + half_straight))
+        lines.addByTwoPoints(_point_on_sketch(center_u + radius, center_v + half_straight), _point_on_sketch(center_u + radius, center_v - half_straight))
+        arcs.addByCenterStartEnd(_point_on_sketch(center_u, center_v + half_straight), _point_on_sketch(center_u - radius, center_v + half_straight), _point_on_sketch(center_u + radius, center_v + half_straight))
+        arcs.addByCenterStartEnd(_point_on_sketch(center_u, center_v - half_straight), _point_on_sketch(center_u + radius, center_v - half_straight), _point_on_sketch(center_u - radius, center_v - half_straight))
+        return
+
+    lines.addByTwoPoints(_point_on_sketch(center_u - half_straight, center_v + radius), _point_on_sketch(center_u + half_straight, center_v + radius))
+    lines.addByTwoPoints(_point_on_sketch(center_u + half_straight, center_v - radius), _point_on_sketch(center_u - half_straight, center_v - radius))
+    arcs.addByCenterStartEnd(_point_on_sketch(center_u + half_straight, center_v), _point_on_sketch(center_u + half_straight, center_v + radius), _point_on_sketch(center_u + half_straight, center_v - radius))
+    arcs.addByCenterStartEnd(_point_on_sketch(center_u - half_straight, center_v), _point_on_sketch(center_u - half_straight, center_v - radius), _point_on_sketch(center_u - half_straight, center_v + radius))
+
+@register_tool("create_rounded_rectangle_body")
+def create_rounded_rectangle_body(name="Rounded Rectangle", base_plane="xy", width="100 mm", height="50 mm", thickness="4 mm", corner_radius="3 mm", x_offset="0 mm", y_offset="0 mm", operation="new_body", hide_sketch=True):
+    design = get_active_design()
+    root = design.rootComponent
+    before = _capture_design_state()
+
+    width_value = _real_length(design, width)
+    height_value = _real_length(design, height)
+    radius_value = _real_length(design, corner_radius)
+    x_value = _real_length(design, x_offset)
+    y_value = _real_length(design, y_offset)
+    if width_value <= 0 or height_value <= 0:
+        return {"error": "width and height must be positive length expressions."}
+    if radius_value * 2 > min(width_value, height_value):
+        return {"error": "corner_radius cannot exceed half of the smaller rectangle dimension."}
+
+    sketch = root.sketches.add(_base_plane(root, base_plane))
+    sketch.name = f"{name}_Sketch"
+    _draw_rounded_rectangle(sketch, x_value, y_value, width_value, height_value, radius_value)
+
+    profile = sketch.profiles.item(0)
+    ext_input = root.features.extrudeFeatures.createInput(profile, _operation(operation))
+    ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByString(str(thickness)))
+    extrude = root.features.extrudeFeatures.add(ext_input)
+    extrude.name = name
+    body_name = None
+    if extrude.bodies.count > 0:
+        body_name = name
+        extrude.bodies.item(0).name = name
+    if hide_sketch:
+        sketch.isLightBulbOn = False
+
+    return {
+        "result": {
+            "message": f"Created rounded rectangle body '{name}'.",
+            "featureName": extrude.name,
+            "sketchName": sketch.name,
+            "bodyName": body_name,
+            "operation": operation,
+            "dimensions": {
+                "width": width,
+                "height": height,
+                "thickness": thickness,
+                "cornerRadius": corner_radius,
+            },
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
+
+@register_tool("create_rounded_slot_cut")
+def create_rounded_slot_cut(target_body_name, name="Rounded Slot Cut", base_plane="xy", length="20 mm", width="8 mm", cut_depth="5 mm", x_offset="0 mm", y_offset="0 mm", axis="x", hide_sketch=True):
+    design = get_active_design()
+    root = design.rootComponent
+    target_body = _find_body(root, target_body_name)
+    if not target_body:
+        return {"error": f"Target body '{target_body_name}' not found."}
+    before = _capture_design_state()
+
+    length_value = _real_length(design, length)
+    width_value = _real_length(design, width)
+    x_value = _real_length(design, x_offset)
+    y_value = _real_length(design, y_offset)
+    if width_value <= 0 or length_value <= 0:
+        return {"error": "length and width must be positive length expressions."}
+
+    sketch = root.sketches.add(_base_plane(root, base_plane))
+    sketch.name = f"{name}_Sketch"
+    _draw_rounded_slot(sketch, x_value, y_value, length_value, width_value, axis)
+
+    profile = sketch.profiles.item(0)
+    ext_input = root.features.extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation)
+    _set_participant_body(ext_input, target_body)
+    ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByString(str(cut_depth)))
+    feature = root.features.extrudeFeatures.add(ext_input)
+    feature.name = name
+    if hide_sketch:
+        sketch.isLightBulbOn = False
+
+    return {
+        "result": {
+            "message": f"Created rounded slot cut '{name}' in '{target_body_name}'.",
+            "featureName": feature.name,
+            "sketchName": sketch.name,
+            "targetBodyName": target_body_name,
+            "dimensions": {"length": length, "width": width, "cutDepth": cut_depth, "axis": axis},
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
+
+@register_tool("create_counterbore_hole_pattern")
+def create_counterbore_hole_pattern(target_body_name, points, name="Counterbore Pattern", base_plane="xy", hole_diameter="4 mm", counterbore_diameter="8 mm", counterbore_depth="2 mm", through_depth="10 mm", hide_sketch=True):
+    if not isinstance(points, list) or not points:
+        return {"error": "points must be a non-empty list of [x, y] length-expression pairs."}
+    design = get_active_design()
+    root = design.rootComponent
+    target_body = _find_body(root, target_body_name)
+    if not target_body:
+        return {"error": f"Target body '{target_body_name}' not found."}
+    before = _capture_design_state()
+
+    hole_radius = _real_length(design, hole_diameter) / 2.0
+    counterbore_radius = _real_length(design, counterbore_diameter) / 2.0
+    if hole_radius <= 0 or counterbore_radius <= 0:
+        return {"error": "hole_diameter and counterbore_diameter must be positive length expressions."}
+    created_features = []
+    created_sketches = []
+    for index, point in enumerate(points, start=1):
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            return {"error": "Each point must be [x, y] using Fusion length expressions, e.g. ['10 mm', '5 mm']."}
+        x_value = _real_length(design, point[0])
+        y_value = _real_length(design, point[1])
+
+        for label, radius, depth in (
+            ("Counterbore", counterbore_radius, counterbore_depth),
+            ("Through", hole_radius, through_depth),
+        ):
+            sketch = root.sketches.add(_base_plane(root, base_plane))
+            sketch.name = f"{name}_{index}_{label}_Sketch"
+            sketch.sketchCurves.sketchCircles.addByCenterRadius(_point_on_sketch(x_value, y_value), radius)
+            profile = sketch.profiles.item(0)
+            ext_input = root.features.extrudeFeatures.createInput(profile, adsk.fusion.FeatureOperations.CutFeatureOperation)
+            _set_participant_body(ext_input, target_body)
+            ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByString(str(depth)))
+            feature = root.features.extrudeFeatures.add(ext_input)
+            feature.name = f"{name}_{index}_{label}"
+            created_features.append(feature.name)
+            created_sketches.append(sketch.name)
+            if hide_sketch:
+                sketch.isLightBulbOn = False
+
+    return {
+        "result": {
+            "message": f"Created {len(points)} counterbore holes in '{target_body_name}'.",
+            "targetBodyName": target_body_name,
+            "featureNames": created_features,
+            "sketchNames": created_sketches,
+            "dimensions": {
+                "holeDiameter": hole_diameter,
+                "counterboreDiameter": counterbore_diameter,
+                "counterboreDepth": counterbore_depth,
+                "throughDepth": through_depth,
+            },
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
+
 def _all_components(root):
     components = [root]
     for occ in root.allOccurrences:

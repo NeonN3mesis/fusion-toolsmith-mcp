@@ -145,8 +145,8 @@ fusion://agent/tool-profiles
 Use these mental profiles when exposing tools to agents or documenting workflows:
 
 - `core`: `doctor`, `get_runtime_diagnostics`, `get_change_journal`, `recommend_mcp_workflow`, `get_best_practices`.
-- `inspection`: `inspect_design`, `capture_design_state`, `compare_design_state`, `inspect_sketch`, `inspect_feature`, `get_dependency_graph`, `query_selection`.
-- `modeling`: `create_sketch`, `draw_line`, `draw_rectangle`, `draw_circle`, `project_geometry`, `extrude_feature`, `fillet_feature`, `chamfer_feature`, `combine_bodies`.
+- `inspection`: `inspect_design`, `capture_design_state`, `compare_design_state`, `extract_reference_dimensions`, `inspect_sketch`, `inspect_feature`, `get_dependency_graph`, `query_selection`.
+- `modeling`: `create_sketch`, `draw_line`, `draw_rectangle`, `draw_circle`, `project_geometry`, `extrude_feature`, `fillet_feature`, `chamfer_feature`, `combine_bodies`, `create_rounded_rectangle_body`, `create_rounded_slot_cut`, `create_counterbore_hole_pattern`, `set_visibility`.
 - `parameters`: `get_parameter`, `set_parameter`, `modify_parameters`, `plan_parameterization`, `get_parameter_usage`.
 - `export`: `preflight_export`, `export_asset`, `create_2d_drawing`.
 - `docs`: `search_local_fusion_docs`, `get_fusion_api_help`, `search_fusion_api_documentation`, `get_mcp_workflow_guide`, `get_best_practices`.

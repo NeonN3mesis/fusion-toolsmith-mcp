@@ -17,6 +17,7 @@
         "inspect_design",
         "capture_design_state",
         "compare_design_state",
+        "extract_reference_dimensions",
         "inspect_sketch",
         "inspect_feature",
         "get_projected_geometry_sources",
@@ -41,7 +42,11 @@
         "combine_bodies",
         "create_box",
         "create_cylinder",
-        "create_coil"
+        "create_coil",
+        "create_rounded_rectangle_body",
+        "create_rounded_slot_cut",
+        "create_counterbore_hole_pattern",
+        "set_visibility"
       ]
     },
     "parameters": {

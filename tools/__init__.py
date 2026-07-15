@@ -69,6 +69,25 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "extract_reference_dimensions",
+            "description": "Read body, sketch, user parameter, bounding-box, and rounded-slot-candidate dimensions from the active design for recreating reference geometry with structured tools.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional body name or names to include. Omit for all bodies."
+                    },
+                    "sketch_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional sketch name or names to include. Omit for all sketches."
+                    },
+                    "include_parameters": {"type": "boolean", "default": True},
+                    "infer_slots": {"type": "boolean", "default": True, "description": "Infer rounded-slot candidates from two-line/two-arc sketches."}
+                }
+            }
+        },
+        {
             "name": "query_selection",
             "description": "Describe currently selected entities in the Fusion UI in agent-friendly terms (e.g., coordinates, type, owning component). Instructions: Ask the user to select the target entity in the Fusion UI if it's too difficult to find programmatically. Use this tool to read their selection.",
             "inputSchema": {"type": "object", "properties": {}}
@@ -438,6 +457,74 @@ def get_tool_schemas():
                     "operation": {"type": "string", "enum": ["new_body", "join", "cut", "intersect"], "description": "Feature operation type."}
                 },
                 "required": ["radius", "height"]
+            }
+        },
+        {
+            "name": "create_rounded_rectangle_body",
+            "description": "Create an extruded rounded-rectangle body from length expressions. Useful for brackets, plates, wall mounts, trays, and polished demo geometry without raw scripts.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "base_plane": {"type": "string", "enum": ["xy", "xz", "yz"], "default": "xy"},
+                    "width": {"type": "string", "description": "Overall width, e.g. '180 mm'."},
+                    "height": {"type": "string", "description": "Overall height, e.g. '70 mm'."},
+                    "thickness": {"type": "string", "description": "Extrude distance, e.g. '5 mm'."},
+                    "corner_radius": {"type": "string", "description": "Corner radius, e.g. '4 mm'."},
+                    "x_offset": {"type": "string", "default": "0 mm"},
+                    "y_offset": {"type": "string", "default": "0 mm"},
+                    "operation": {"type": "string", "enum": ["new_body", "join", "cut", "intersect"], "default": "new_body"},
+                    "hide_sketch": {"type": "boolean", "default": True}
+                },
+                "required": ["width", "height", "thickness", "corner_radius"]
+            }
+        },
+        {
+            "name": "create_rounded_slot_cut",
+            "description": "Cut a rounded slot into a named body from length expressions, with explicit target body and axis.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_body_name": {"type": "string"},
+                    "name": {"type": "string"},
+                    "base_plane": {"type": "string", "enum": ["xy", "xz", "yz"], "default": "xy"},
+                    "length": {"type": "string", "description": "Overall slot length, e.g. '24 mm'."},
+                    "width": {"type": "string", "description": "Slot width / end diameter, e.g. '9 mm'."},
+                    "cut_depth": {"type": "string", "description": "Cut extrusion distance, e.g. '8 mm'."},
+                    "x_offset": {"type": "string", "default": "0 mm"},
+                    "y_offset": {"type": "string", "default": "0 mm"},
+                    "axis": {"type": "string", "enum": ["x", "y"], "default": "x"},
+                    "hide_sketch": {"type": "boolean", "default": True}
+                },
+                "required": ["target_body_name", "length", "width", "cut_depth"]
+            }
+        },
+        {
+            "name": "create_counterbore_hole_pattern",
+            "description": "Cut repeated counterbore holes into a named body from explicit point coordinates and hole dimensions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_body_name": {"type": "string"},
+                    "points": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 2,
+                            "maxItems": 2
+                        },
+                        "description": "List of [x, y] length-expression coordinates, e.g. [['10 mm', '5 mm']]."
+                    },
+                    "name": {"type": "string"},
+                    "base_plane": {"type": "string", "enum": ["xy", "xz", "yz"], "default": "xy"},
+                    "hole_diameter": {"type": "string"},
+                    "counterbore_diameter": {"type": "string"},
+                    "counterbore_depth": {"type": "string"},
+                    "through_depth": {"type": "string"},
+                    "hide_sketch": {"type": "boolean", "default": True}
+                },
+                "required": ["target_body_name", "points", "hole_diameter", "counterbore_diameter", "counterbore_depth", "through_depth"]
             }
         },
         {
@@ -1017,6 +1104,28 @@ def get_tool_schemas():
                     "new_component_name": {"type": "string", "description": "Create a new sub-component with this name and move the body into it."}
                 },
                 "required": ["body_name"]
+            }
+        },
+        {
+            "name": "set_visibility",
+            "description": "Show or hide named bodies, sketches, and construction planes, optionally hiding all sketches/planes and clearing the active selection for clean demos and inspection.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+                    },
+                    "sketch_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+                    },
+                    "construction_plane_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+                    },
+                    "visible": {"type": "boolean", "default": True},
+                    "hide_all_sketches": {"type": "boolean", "default": False},
+                    "hide_all_construction_planes": {"type": "boolean", "default": False},
+                    "clear_selection": {"type": "boolean", "default": True}
+                }
             }
         },
         {
