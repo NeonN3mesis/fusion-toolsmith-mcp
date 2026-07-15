@@ -1469,14 +1469,14 @@ def get_tool_schemas():
         },
         {
             "name": "add_sketch_constraint",
-            "description": "Apply geometric constraints (such as midpoint, horizontal/vertical points, tangent, parallel) between sketch curves or points and return design-state comparison.",
+            "description": "Apply geometric constraints (such as midpoint, horizontal/vertical points, tangent, parallel, concentric, fixed) between sketch curves or points and return design-state comparison.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "sketch_name": {"type": "string", "description": "The name of the sketch to apply constraints in."},
                     "constraint_type": {
                         "type": "string",
-                        "enum": ["midpoint", "horizontal_points", "vertical_points", "coincident", "parallel", "perpendicular", "tangent", "equal", "horizontal", "vertical"],
+                        "enum": ["midpoint", "horizontal_points", "vertical_points", "coincident", "parallel", "perpendicular", "tangent", "equal", "concentric", "fixed", "horizontal", "vertical"],
                         "description": "The geometric relationship to apply."
                     },
                     "use_selection": {"type": "boolean", "default": True, "description": "If true, applies constraint to the currently selected entities in the Fusion 360 UI."},
@@ -1492,6 +1492,19 @@ def get_tool_schemas():
                     }
                 },
                 "required": ["sketch_name", "constraint_type"]
+            }
+        },
+        {
+            "name": "delete_sketch_constraint",
+            "description": "Delete a specific geometric constraint from a sketch using the constraint index from inspect_sketch. Requires a reason and returns before/after design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "The name of the sketch containing the constraint."},
+                    "constraint_index": {"type": "integer", "description": "0-based constraint index from inspect_sketch constraints[].index."},
+                    "reason": {"type": "string", "description": "Required. State why deleting this constraint is intentional."}
+                },
+                "required": ["sketch_name", "constraint_index", "reason"]
             }
         },
         {

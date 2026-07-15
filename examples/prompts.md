@@ -74,6 +74,10 @@ Offset the selected face by a small explicit distance using the controlled face-
 Before editing this sketch, inspect constraints, dimensions, projected geometry, and feature consumers. Then propose the smallest safe edit.
 ```
 
+```text
+Inspect this sketch's constraints. If one constraint needs removal, use its inspected constraint index, require an explicit reason, and compare design state before and after deletion.
+```
+
 ## Export
 
 ```text

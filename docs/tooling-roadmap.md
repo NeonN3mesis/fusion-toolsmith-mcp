@@ -7,9 +7,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - Assembly joints
   - Create and inspect basic joints for repeatable component placement once the structured joint API surface is validated.
 
-- Stronger sketch constraint editing
-  - Add more complete constraint creation/editing and safer constraint conflict reporting.
-
 - Entity-token targeting for more mutating tools
   - Let mutating tools target stable entity tokens when Fusion exposes them, not only names, indices, or current selection.
 
@@ -45,6 +42,10 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
   - `list_appearances` discovers active-design and material-library appearances with optional filtering.
   - `inspect_body_style` reports body appearance, material, and physical material assignments across components.
   - `apply_appearance` applies a named or partial-match appearance to a named body.
+
+- Stronger sketch constraint editing
+  - `add_sketch_constraint` supports common geometric constraints including midpoint, coincident, parallel, perpendicular, tangent, equal, concentric, fixed, horizontal, and vertical variants.
+  - `delete_sketch_constraint` removes an inspected geometric constraint by index with a required reason, deletability guard, and before/after design-state comparison.
 
 - `mirror_features_or_bodies`
   - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.

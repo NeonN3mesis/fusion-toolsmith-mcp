@@ -434,6 +434,8 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("sweep_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("list_appearances", resource["profiles"]["modeling"]["tools"])
         self.assertIn("inspect_body_style", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("delete_sketch_constraint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("delete_sketch_constraint", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
         self.assertIn("list_documents", resource["profiles"]["document"]["tools"])
         advertised = {schema["name"] for schema in self.tools.get_tool_schemas()}
@@ -4063,6 +4065,77 @@ def run(context):
 
         self.assertIn("result", res)
         self.assertEqual(added, [("coincident", "point1", "line1")])
+
+    def test_delete_sketch_constraint_requires_reason(self):
+        mock_constraint = types.SimpleNamespace(isDeletable=True, deleteMe=lambda: None)
+        mock_sketch = types.SimpleNamespace(
+            name="TestSketch",
+            geometricConstraints=types.SimpleNamespace(
+                count=1,
+                item=lambda idx: mock_constraint,
+            ),
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                sketches=[mock_sketch],
+                allOccurrences=[],
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("delete_sketch_constraint", {
+            "sketch_name": "TestSketch",
+            "constraint_index": 0,
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("reason is required", res["error"])
+
+    def test_delete_sketch_constraint(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+        deleted = []
+        mock_constraint = types.SimpleNamespace(
+            objectType="CoincidentConstraint",
+            isDeletable=True,
+            deleteMe=lambda: deleted.append(True),
+        )
+        mock_sketch = types.SimpleNamespace(
+            name="TestSketch",
+            geometricConstraints=types.SimpleNamespace(
+                count=1,
+                item=lambda idx: mock_constraint,
+            ),
+        )
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(
+                sketches=[mock_sketch],
+                allOccurrences=[],
+            )
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        parametric._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"constraints": 1 - len(deleted)}
+        }
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        try:
+            res = self.tools.execute_tool("delete_sketch_constraint", {
+                "sketch_name": "TestSketch",
+                "constraint_index": 0,
+                "reason": "Remove obsolete coincident constraint.",
+            })
+        finally:
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(deleted, [True])
+        self.assertEqual(res["result"]["constraintObjectType"], "CoincidentConstraint")
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
     def test_combine_bodies(self):
         added_combines = []

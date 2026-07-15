@@ -158,7 +158,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 | --- | --- |
 | Runtime safety | `doctor`, runtime diagnostics, fixed-port health, bearer auth, change journal, structured-tool routing |
 | Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference reports, material/appearance reports, `inspect_printability` heuristics |
-| Safe modeling | typed sketching, extrudes, revolves, lofts, sweeps, fillets, chamfers, shelling, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry |
+| Safe modeling | typed sketching, guarded sketch constraint creation/deletion, extrudes, revolves, lofts, sweeps, fillets, chamfers, shelling, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry |
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |
 | Export and presentation | preflighted STL/STEP/PDF export, screenshots, staged visibility, still-frame demo sequences |
 | Dangerous tools | raw scripts, undo/revert, timeline deletion/suppression, and document activation are isolated from normal workflows |

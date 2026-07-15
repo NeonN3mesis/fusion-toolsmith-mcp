@@ -73,6 +73,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "create_construction_point",
             "create_construction_axis",
             "add_sketch_constraint",
+            "delete_sketch_constraint",
             "create_sketch_offset",
             "create_parametric_feature",
             "revolve_feature",

@@ -8,7 +8,7 @@ import math
 import os
 import traceback
 from . import register_tool
-from .inspection import _design_state_snapshot, assess_change_impact, compare_design_state, get_active_design, get_feature_dependencies
+from .inspection import _design_state_snapshot, _safe_value, assess_change_impact, compare_design_state, get_active_design, get_feature_dependencies
 
 def _operation(value):
     mapping = {
@@ -2078,6 +2078,12 @@ def add_sketch_constraint(sketch_name, constraint_type, use_selection=True, sele
             if len(entities) < 2:
                 return {"error": "Equal constraint requires 2 entities."}
             constraints.addEqual(entities[0], entities[1])
+        elif c_type == "concentric":
+            if len(entities) < 2:
+                return {"error": "Concentric constraint requires 2 circle/arc entities."}
+            constraints.addConcentric(entities[0], entities[1])
+        elif c_type == "fix" or c_type == "fixed":
+            constraints.addFixed(entities[0])
         elif c_type == "horizontal":
             constraints.addHorizontal(entities[0])
         elif c_type == "vertical":
@@ -2098,6 +2104,57 @@ def add_sketch_constraint(sketch_name, constraint_type, use_selection=True, sele
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error adding geometric constraint: {e}\n{err}")
         return {"error": f"Failed to add geometric constraint: {str(e)}"}
+
+
+@register_tool("delete_sketch_constraint")
+def delete_sketch_constraint(sketch_name, constraint_index, reason=None):
+    import traceback
+    try:
+        from .inspection import _find_sketch_by_name
+    except ImportError:
+        from inspection import _find_sketch_by_name
+
+    try:
+        reason_error = _require_reason(reason, "deleting a sketch geometric constraint")
+        if reason_error:
+            return reason_error
+
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            return {"error": f"Sketch '{sketch_name}' not found."}
+
+        constraints = sketch.geometricConstraints
+        try:
+            index = int(constraint_index)
+        except Exception:
+            return {"error": "constraint_index must be an integer from inspect_sketch constraints[].index."}
+        count = getattr(constraints, "count", 0)
+        if index < 0 or index >= count:
+            return {"error": f"constraint_index {index} is out of range for sketch '{sketch_name}' with {count} constraints."}
+
+        constraint = constraints.item(index)
+        if _safe_value(lambda: constraint.isDeletable) is False:
+            return {"error": f"Constraint index {index} in sketch '{sketch_name}' is not deletable."}
+
+        before = _design_state_snapshot(include_selections=False)
+        object_type = _safe_value(lambda: constraint.objectType)
+        constraint.deleteMe()
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        return {
+            "result": {
+                "message": f"Deleted geometric constraint index {index} from sketch '{sketch_name}'.",
+                "sketchName": sketch_name,
+                "constraintIndex": index,
+                "constraintObjectType": object_type,
+                "reason": reason,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error deleting sketch constraint: {e}\n{err}")
+        return {"error": f"Failed to delete sketch constraint: {str(e)}"}
 
 
 def _find_body_by_name(name):
