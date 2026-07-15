@@ -185,7 +185,12 @@ try {
     )
     $missingTools = @($requiredTools | Where-Object { $toolNames -notcontains $_ })
     if ($toolsResponse.id -ne 2 -or $missingTools.Count -gt 0) {
-        throw "tools/list did not return expected tools. Missing: $($missingTools -join ', ')"
+        $installedAddIn = Join-Path $env:APPDATA "Autodesk\Autodesk Fusion 360\API\AddIns\FusionMCP"
+        $installedHint = ""
+        if (Test-Path -LiteralPath $installedAddIn -PathType Container) {
+            $installedHint = " Installed add-in path exists at $installedAddIn."
+        }
+        throw "tools/list did not return expected tools. Missing: $($missingTools -join ', ').$installedHint If you just installed or updated FusionMCP, stop and run the FusionMCP add-in again from Fusion 360 Utilities > Add-Ins, or restart Fusion so it reloads Python modules."
     }
 
     $inspectBody = @{

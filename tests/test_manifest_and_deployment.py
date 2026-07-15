@@ -120,6 +120,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "bearer_sse_url",
             "Authorization",
             "TaskManager is not running",
+            "stop and run the FusionMCP add-in again",
+            "reloads Python modules",
         ]:
             self.assertIn(text, script)
 
