@@ -212,6 +212,122 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(res["result"]["components"][1]["constructionPoints"][0]["name"], "Child Point")
         self.assertEqual(res["result"]["occurrences"][0]["componentName"], "Child")
 
+    def test_get_assembly_joints_reports_joints_and_as_built_joints(self):
+        joint = types.SimpleNamespace(
+            name="RigidA",
+            objectType="Joint",
+            entityToken="joint-token",
+            isLightBulbOn=True,
+            isSuppressed=False,
+            healthState=0,
+            jointMotion=types.SimpleNamespace(objectType="RigidJointMotion", jointType="rigid"),
+            occurrenceOne=types.SimpleNamespace(name="OccA", entityToken="occ-a-token", objectType="Occurrence"),
+            occurrenceTwo=types.SimpleNamespace(name="OccB", entityToken="occ-b-token", objectType="Occurrence"),
+            geometryOrOriginOne=types.SimpleNamespace(name="PointA", entityToken="point-a-token", objectType="ConstructionPoint"),
+            geometryOrOriginTwo=types.SimpleNamespace(name="PointB", entityToken="point-b-token", objectType="ConstructionPoint"),
+        )
+        as_built = types.SimpleNamespace(
+            name="AsBuiltA",
+            objectType="AsBuiltJoint",
+            entityToken="as-built-token",
+            jointMotion=types.SimpleNamespace(objectType="RigidJointMotion", jointType="rigid"),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            joints=[joint],
+            asBuiltJoints=[as_built],
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("get_assembly_joints", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(res["result"]["jointCount"], 1)
+        self.assertEqual(res["result"]["asBuiltJointCount"], 1)
+        self.assertEqual(res["result"]["joints"][0]["name"], "RigidA")
+        self.assertEqual(res["result"]["joints"][0]["occurrenceOne"]["name"], "OccA")
+        self.assertEqual(res["result"]["asBuiltJoints"][0]["name"], "AsBuiltA")
+
+    def test_create_rigid_joint_from_named_points(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+        original_joint_geometry = getattr(sys.modules["adsk.fusion"], "JointGeometry", None)
+        original_rigid_motion = getattr(sys.modules["adsk.fusion"], "RigidJointMotion", None)
+
+        class MockJointInput:
+            def __init__(self, geometry_one, geometry_two):
+                self.geometry_one = geometry_one
+                self.geometry_two = geometry_two
+                self.isFlipped = False
+                self.offsetX = None
+                self.offsetY = None
+                self.offsetZ = None
+                self.motion_set = False
+            def setAsRigidJointMotion(self):
+                self.motion_set = True
+
+        created_inputs = []
+        class MockJoints:
+            def createInput(self, geometry_one, geometry_two):
+                joint_input = MockJointInput(geometry_one, geometry_two)
+                created_inputs.append(joint_input)
+                return joint_input
+            def add(self, joint_input):
+                return types.SimpleNamespace(name="", input=joint_input)
+
+        point_a = types.SimpleNamespace(name="PointA", objectType="ConstructionPoint")
+        point_b = types.SimpleNamespace(name="PointB", objectType="ConstructionPoint")
+        root = types.SimpleNamespace(
+            name="Root",
+            joints=MockJoints(),
+            constructionPoints=[point_a, point_b],
+            sketches=[],
+            allOccurrences=[],
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+        sys.modules["adsk.fusion"].JointGeometry = types.SimpleNamespace(
+            createByPoint=lambda point: types.SimpleNamespace(point=point)
+        )
+        sys.modules["adsk.fusion"].RigidJointMotion = types.SimpleNamespace(create=lambda: types.SimpleNamespace())
+        parametric._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": len(created_inputs)}
+        }
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        try:
+            res = self.tools.execute_tool("create_rigid_joint", {
+                "name": "RigidA",
+                "point_one_name": "PointA",
+                "point_two_name": "PointB",
+                "flip": True,
+                "offset_z": "2 mm",
+            })
+        finally:
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+            if original_joint_geometry is None:
+                delattr(sys.modules["adsk.fusion"], "JointGeometry")
+            else:
+                sys.modules["adsk.fusion"].JointGeometry = original_joint_geometry
+            if original_rigid_motion is None:
+                delattr(sys.modules["adsk.fusion"], "RigidJointMotion")
+            else:
+                sys.modules["adsk.fusion"].RigidJointMotion = original_rigid_motion
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["jointName"], "RigidA")
+        self.assertEqual(created_inputs[0].geometry_one.point, point_a)
+        self.assertEqual(created_inputs[0].geometry_two.point, point_b)
+        self.assertTrue(created_inputs[0].motion_set)
+        self.assertTrue(created_inputs[0].isFlipped)
+        self.assertEqual(created_inputs[0].offsetZ, "2 mm")
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
     def test_server_uses_fixed_default_port(self):
         self.assertEqual(self.mcp_server.DEFAULT_PORT, 9100)
         self.assertTrue(callable(self.mcp_server.is_port_available))
@@ -427,6 +543,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("run_fusion_script", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("get_assembly_references", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("get_assembly_joints", resource["profiles"]["inspection"]["tools"])
         self.assertIn("list_appearances", resource["profiles"]["inspection"]["tools"])
         self.assertIn("inspect_body_style", resource["profiles"]["inspection"]["tools"])
         self.assertIn("revolve_feature", resource["profiles"]["modeling"]["tools"])
@@ -435,6 +552,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("list_appearances", resource["profiles"]["modeling"]["tools"])
         self.assertIn("inspect_body_style", resource["profiles"]["modeling"]["tools"])
         self.assertIn("delete_sketch_constraint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_rigid_joint", resource["profiles"]["modeling"]["tools"])
         self.assertIn("delete_sketch_constraint", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
         self.assertIn("list_documents", resource["profiles"]["document"]["tools"])

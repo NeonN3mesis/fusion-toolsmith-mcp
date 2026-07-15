@@ -997,6 +997,68 @@ def _find_named_point_entity(component, root, name):
 
     return None, None
 
+
+def _find_entity_by_token(entity_token):
+    if not entity_token:
+        return None
+    design = get_active_design()
+    found = _safe_value(lambda: design.findEntityByToken(entity_token))
+    if not found:
+        return None
+    if isinstance(found, (list, tuple)):
+        return found[0] if found else None
+    if hasattr(found, "count") and hasattr(found, "item"):
+        return found.item(0) if found.count else None
+    return found
+
+
+def _resolve_joint_point(root, point_name=None, entity_token=None):
+    if entity_token:
+        entity = _find_entity_by_token(entity_token)
+        if not entity:
+            raise ValueError(f"Point entity token '{entity_token}' did not resolve to a Fusion entity.")
+        return entity, _safe_name(entity), _safe_value(lambda: entity.parentComponent)
+    entity, component = _find_named_point_entity(root, root, point_name)
+    if not entity:
+        raise ValueError(f"Point '{point_name}' not found. Use a construction point, sketch point, or point entity token.")
+    return entity, point_name, component
+
+
+def _joint_geometry_by_point(entity):
+    joint_geometry_class = getattr(adsk.fusion, "JointGeometry", None)
+    create_by_point = getattr(joint_geometry_class, "createByPoint", None)
+    if not create_by_point:
+        raise ValueError("This Fusion runtime does not expose JointGeometry.createByPoint.")
+    geometry = create_by_point(entity)
+    if not geometry:
+        raise ValueError("Fusion failed to create joint geometry from the supplied point entity.")
+    return geometry
+
+
+def _set_rigid_joint_motion(joint_input):
+    set_rigid = getattr(joint_input, "setAsRigidJointMotion", None)
+    if callable(set_rigid):
+        set_rigid()
+        return "setAsRigidJointMotion"
+    rigid_class = getattr(adsk.fusion, "RigidJointMotion", None)
+    create = getattr(rigid_class, "create", None)
+    if callable(create):
+        joint_input.jointMotion = create()
+        return "RigidJointMotion.create"
+    return "default"
+
+
+def _set_joint_offset(joint_input, attr, expression):
+    if expression is None:
+        return None
+    value = adsk.core.ValueInput.createByString(str(expression))
+    try:
+        setattr(joint_input, attr, value)
+        return expression
+    except Exception:
+        return None
+
+
 def _selected_point_entity():
     app = adsk.core.Application.get()
     ui = app.userInterface
@@ -1227,6 +1289,80 @@ def create_offset_plane(name="Offset Plane", base_plane_name="xy", offset="0 mm"
             "stateComparison": _compare_after_mutation(before),
         }
     }
+
+
+@register_tool("create_rigid_joint")
+def create_rigid_joint(name="Rigid Joint", point_one_name=None, point_two_name=None, point_one_entity_token=None, point_two_entity_token=None, flip=False, offset_x=None, offset_y=None, offset_z=None):
+    """
+    Create a basic point-to-point rigid assembly joint.
+
+    This intentionally starts with the narrowest repeatable joint workflow:
+    callers must provide two explicit point-like references by name or entity
+    token, usually after get_assembly_references/get_assembly_joints.
+    """
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        point_one, point_one_label, component_one = _resolve_joint_point(
+            root,
+            point_name=point_one_name,
+            entity_token=point_one_entity_token,
+        )
+        point_two, point_two_label, component_two = _resolve_joint_point(
+            root,
+            point_name=point_two_name,
+            entity_token=point_two_entity_token,
+        )
+        joints = _safe_value(lambda: root.joints)
+        if not joints:
+            return {"error": "This Fusion runtime does not expose rootComponent.joints for API-created assembly joints."}
+
+        geometry_one = _joint_geometry_by_point(point_one)
+        geometry_two = _joint_geometry_by_point(point_two)
+        joint_input = joints.createInput(geometry_one, geometry_two)
+        if not joint_input:
+            return {"error": "Fusion failed to create rigid joint input from the supplied point references."}
+        motion_method = _set_rigid_joint_motion(joint_input)
+        try:
+            joint_input.isFlipped = bool(flip)
+        except Exception:
+            pass
+        offsets = {
+            "offsetX": _set_joint_offset(joint_input, "offsetX", offset_x),
+            "offsetY": _set_joint_offset(joint_input, "offsetY", offset_y),
+            "offsetZ": _set_joint_offset(joint_input, "offsetZ", offset_z),
+        }
+
+        before = _capture_design_state()
+        joint = joints.add(joint_input)
+        if not joint:
+            return {"error": "Fusion failed to create the rigid joint. The point references may not be valid joint origins."}
+        joint.name = name
+
+        return {
+            "result": {
+                "message": f"Created rigid joint '{name}'.",
+                "jointName": _safe_name(joint),
+                "pointOneName": point_one_label,
+                "pointTwoName": point_two_label,
+                "componentOneName": _safe_name(component_one),
+                "componentTwoName": _safe_name(component_two),
+                "usedEntityTokens": bool(point_one_entity_token or point_two_entity_token),
+                "flip": bool(flip),
+                "offsets": offsets,
+                "motionMethod": motion_method,
+                "stateComparison": _compare_after_mutation(before),
+                "warnings": [
+                    "This tool creates rigid point-to-point joints only. Revolute, slider, cylindrical, pin-slot, planar, and ball joints are intentionally separate future expansions.",
+                    "Inspect existing joints first with get_assembly_joints to avoid duplicate or conflicting assembly constraints.",
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating rigid joint: {e}\n{err}")
+        return {"error": f"Failed to create rigid joint: {str(e)}"}
+
 
 def _safe_name(entity):
     try:

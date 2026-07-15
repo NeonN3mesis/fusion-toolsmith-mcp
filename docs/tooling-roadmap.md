@@ -4,8 +4,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Next Tool Gaps
 
-- Assembly joints
-  - Create and inspect basic joints for repeatable component placement once the structured joint API surface is validated.
+- None currently listed. Add new general CAD-domain gaps here as they are discovered.
 
 ## Implemented
 
@@ -31,6 +30,11 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `get_assembly_references`
   - Read-only report of component origins, standard axes/planes, construction axes/planes/points, and occurrence transforms.
   - Complements component-targeted `create_construction_point`, `create_construction_axis`, and `create_offset_plane` for repeatable placement references.
+
+- Assembly joints
+  - `get_assembly_joints` reports existing joints and as-built joints without mutating the model.
+  - `create_rigid_joint` creates a narrow point-to-point rigid joint from named construction/sketch points or point entity tokens.
+  - Revolute, slider, cylindrical, pin-slot, planar, and ball joints remain intentionally separate future expansions rather than inferred behavior.
 
 - Material and appearance workflows
   - `list_appearances` discovers active-design and material-library appearances with optional filtering.

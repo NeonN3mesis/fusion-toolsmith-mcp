@@ -1259,6 +1259,35 @@ def _component_reference_report(component):
         "constructionPoints": [_entity_ref(point) for point in _collection_items(_safe_value(lambda: component.constructionPoints))],
     }
 
+
+def _joint_motion_report(joint):
+    motion = _safe_value(lambda: joint.jointMotion)
+    return {
+        "objectType": _safe_value(lambda: motion.objectType),
+        "jointType": _safe_value(lambda: motion.jointType),
+        "rotationAxis": _safe_value(lambda: motion.rotationAxis),
+        "slideDirection": _safe_value(lambda: motion.slideDirection),
+    } if motion else None
+
+
+def _joint_report(joint, index, source):
+    return {
+        "index": index,
+        "source": source,
+        "name": _safe_value(lambda: joint.name),
+        "objectType": _safe_value(lambda: joint.objectType),
+        "entityToken": _safe_value(lambda: joint.entityToken),
+        "isLightBulbOn": _safe_value(lambda: joint.isLightBulbOn),
+        "isSuppressed": _safe_value(lambda: joint.isSuppressed),
+        "healthState": _safe_value(lambda: joint.healthState),
+        "jointMotion": _joint_motion_report(joint),
+        "occurrenceOne": _entity_ref(_safe_value(lambda: joint.occurrenceOne)),
+        "occurrenceTwo": _entity_ref(_safe_value(lambda: joint.occurrenceTwo)),
+        "geometryOrOriginOne": _entity_ref(_safe_value(lambda: joint.geometryOrOriginOne)),
+        "geometryOrOriginTwo": _entity_ref(_safe_value(lambda: joint.geometryOrOriginTwo)),
+    }
+
+
 @register_tool("get_assembly_references")
 def get_assembly_references(include_all_components=True):
     """
@@ -1297,6 +1326,43 @@ def get_assembly_references(include_all_components=True):
         }
     except Exception as e:
         return {"error": f"Failed to inspect assembly references: {str(e)}"}
+
+
+@register_tool("get_assembly_joints")
+def get_assembly_joints(include_as_built=True):
+    """
+    Read-only report of assembly joints and as-built joints exposed by Fusion.
+
+    Use this before creating or editing assembly relationships so agents can
+    avoid duplicating existing constraints or changing the wrong components.
+    """
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        joints = [
+            _joint_report(joint, index, "joints")
+            for index, joint in enumerate(_collection_items(_safe_value(lambda: root.joints)))
+        ]
+        as_built = []
+        if include_as_built:
+            as_built = [
+                _joint_report(joint, index, "asBuiltJoints")
+                for index, joint in enumerate(_collection_items(_safe_value(lambda: root.asBuiltJoints)))
+            ]
+        return {
+            "result": {
+                "readOnly": True,
+                "jointCount": len(joints),
+                "asBuiltJointCount": len(as_built),
+                "joints": joints,
+                "asBuiltJoints": as_built,
+                "warnings": [
+                    "This tool reports existing assembly relationships only; create_rigid_joint is the narrow mutating companion for point-to-point rigid joints.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect assembly joints: {str(e)}"}
 
 # Resource Readers
 @register_resource("fusion://design/parameters")

@@ -75,6 +75,10 @@ Create named construction points and an axis for a repeatable pattern setup, the
 ```
 
 ```text
+Inspect assembly references and existing joints first, then create a rigid point-to-point joint only from explicit named points or entity tokens.
+```
+
+```text
 Offset the selected face by a small explicit distance using the controlled face-offset tool. Explain why this is the face-offset branch of Press Pull and not an arbitrary Press Pull operation.
 ```
 

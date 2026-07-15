@@ -143,8 +143,8 @@ fusion://agent/tool-profiles
 Use these mental profiles when exposing tools to agents or documenting workflows:
 
 - `core`: readiness, runtime diagnostics, workflow routing, and change-journal tools.
-- `inspection`: design snapshots, printability checks, sketch/feature/parameter/dependency inspection, selection queries, body face/edge targeting, assembly reference inspection, material/appearance reporting, timeline/tree inspection, and mutation preflight.
-- `modeling`: structured sketches, constraints, projection, extrude/revolve/loft/sweep/fillet/chamfer/shell, offset face, combine, primitives, component-targeted construction geometry, rounded cuts/pockets, hole patterns, mirror/pattern, appearance discovery/application, mesh conversion, and component organization.
+- `inspection`: design snapshots, printability checks, sketch/feature/parameter/dependency inspection, selection queries, body face/edge targeting, assembly reference/joint inspection, material/appearance reporting, timeline/tree inspection, and mutation preflight.
+- `modeling`: structured sketches, constraints, projection, extrude/revolve/loft/sweep/fillet/chamfer/shell, offset face, combine, primitives, component-targeted construction geometry, rigid point-to-point joints, rounded cuts/pockets, hole patterns, mirror/pattern, appearance discovery/application, mesh conversion, and component organization.
 - `parameters`: user/model parameter reads and edits, parameterization planning, sketch dimension editing, and parameter CSV import/export.
 - `export`: preflight-gated STEP/STL/PDF export plus still-frame capture helpers.
 - `presentation`: viewport camera, visibility staging, user prompts, screenshots, and `capture_demo_sequence` still-frame sequences.
@@ -157,8 +157,8 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 | Area | What Toolsmith exposes |
 | --- | --- |
 | Runtime safety | `doctor`, runtime diagnostics, fixed-port health, bearer auth, change journal, structured-tool routing |
-| Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference reports, material/appearance reports, mesh-aware `inspect_printability` warnings |
-| Safe modeling | typed sketching, guarded sketch constraint creation/deletion, extrudes, revolves, lofts, sweeps, token-targeted fillets/chamfers/shells, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry |
+| Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference/joint reports, material/appearance reports, mesh-aware `inspect_printability` warnings |
+| Safe modeling | typed sketching, guarded sketch constraint creation/deletion, extrudes, revolves, lofts, sweeps, token-targeted fillets/chamfers/shells, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry, rigid point-to-point joints |
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |
 | Export and presentation | preflighted STL/STEP/PDF export, screenshots, staged visibility, still-frame demo sequences |
 | Dangerous tools | raw scripts, undo/revert, timeline deletion/suppression, and document activation are isolated from normal workflows |

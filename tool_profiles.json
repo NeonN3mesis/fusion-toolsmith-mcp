@@ -34,6 +34,7 @@
         "get_body_edges",
         "get_assembly_tree",
         "get_assembly_references",
+        "get_assembly_joints",
         "list_appearances",
         "inspect_body_style",
         "get_timeline",
@@ -68,6 +69,7 @@
         "create_offset_plane",
         "create_construction_point",
         "create_construction_axis",
+        "create_rigid_joint",
         "create_rounded_rectangle_body",
         "create_rounded_slot_cut",
         "create_rounded_pocket",
@@ -125,6 +127,7 @@
         "list_documents",
         "get_assembly_tree",
         "get_assembly_references",
+        "get_assembly_joints",
         "get_timeline",
         "set_timeline_marker",
         "clone_timeline_feature"

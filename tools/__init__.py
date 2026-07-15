@@ -943,6 +943,24 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "create_rigid_joint",
+            "description": "Create a basic point-to-point rigid assembly joint from two explicit construction/sketch point names or point entity tokens.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "default": "Rigid Joint", "description": "Name for the created joint."},
+                    "point_one_name": {"type": "string", "description": "First construction point or sketch point name."},
+                    "point_two_name": {"type": "string", "description": "Second construction point or sketch point name."},
+                    "point_one_entity_token": {"type": "string", "description": "Optional Fusion entity token for the first point-like reference."},
+                    "point_two_entity_token": {"type": "string", "description": "Optional Fusion entity token for the second point-like reference."},
+                    "flip": {"type": "boolean", "default": False, "description": "Set Fusion joint input flip when supported."},
+                    "offset_x": {"type": "string", "description": "Optional X offset expression, e.g. '1 mm'."},
+                    "offset_y": {"type": "string", "description": "Optional Y offset expression, e.g. '1 mm'."},
+                    "offset_z": {"type": "string", "description": "Optional Z offset expression, e.g. '1 mm'."}
+                }
+            }
+        },
+        {
             "name": "create_construction_axis",
             "description": "Create a named construction axis from two points or from the currently selected line-like entity.",
             "inputSchema": {
@@ -1453,6 +1471,16 @@ def get_tool_schemas():
                 "type": "object",
                 "properties": {
                     "include_all_components": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
+            "name": "get_assembly_joints",
+            "description": "Read-only report of assembly joints and as-built joints exposed by Fusion.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_as_built": {"type": "boolean", "default": True, "description": "Include as-built joints when Fusion exposes them on the root component."}
                 }
             }
         },
