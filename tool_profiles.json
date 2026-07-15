@@ -41,6 +41,7 @@
         "fillet_feature",
         "chamfer_feature",
         "shell_body",
+        "offset_face_or_press_pull",
         "combine_bodies",
         "create_box",
         "create_cylinder",

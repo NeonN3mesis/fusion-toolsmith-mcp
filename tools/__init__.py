@@ -350,7 +350,7 @@ def get_tool_schemas():
         },
         {
             "name": "get_body_faces",
-            "description": "Return indexed face metadata for a named body, including entity tokens, area, geometry type, and centroid when available. Use before shell_body or selected-face workflows to choose explicit face indices.",
+            "description": "Return indexed face metadata for a named body, including entity tokens, area, geometry type, and centroid when available. Use before shell_body, offset_face_or_press_pull, or selected-face workflows to choose explicit face indices.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -362,6 +362,25 @@ def get_tool_schemas():
                     }
                 },
                 "required": ["body_name"]
+            }
+        },
+        {
+            "name": "offset_face_or_press_pull",
+            "description": "Create a controlled Offset Face feature on explicit face indices of a named body or selected BRep faces. This covers the face-offset branch of Press Pull only; use extrude_feature or fillet_feature for other Press Pull outcomes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Name of the body whose faces should be offset. Required unless use_selection=true."},
+                    "face_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Explicit 0-based face indices on the body. Use get_body_faces first."
+                    },
+                    "distance": {"type": "string", "description": "Fusion distance expression, e.g. '1 mm' or '-0.5 mm'. Positive follows the face normal."},
+                    "name": {"type": "string", "description": "Optional name for the created Offset Face feature."},
+                    "use_selection": {"type": "boolean", "default": False, "description": "If true, offset currently selected BRep faces instead of body_name/face_indices."}
+                },
+                "required": ["distance"]
             }
         },
         {

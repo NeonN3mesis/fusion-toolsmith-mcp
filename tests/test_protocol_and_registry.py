@@ -1379,6 +1379,7 @@ def run(context):
         self.assertIn("create_construction_axis", tool_names)
         self.assertIn("get_body_edges", tool_names)
         self.assertIn("get_body_faces", tool_names)
+        self.assertIn("offset_face_or_press_pull", tool_names)
         self.assertIn("extrude_feature", tool_names)
         self.assertIn("fillet_feature", tool_names)
         self.assertIn("chamfer_feature", tool_names)

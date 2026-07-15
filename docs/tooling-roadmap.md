@@ -2,12 +2,6 @@
 
 This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these tools domain-neutral: no product-specific dimensions, names, or workflows.
 
-## Medium-Term Tools
-
-- `offset_face_or_press_pull`
-  - Controlled direct-modeling face offset with strong preflight warnings and dependency reporting.
-  - Require explicit target face selection or stable entity reference.
-
 ## Validation And Presentation
 
 - `inspect_printability`
@@ -45,6 +39,10 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `shell_body`
   - Shell a named body with explicit wall thickness and optional open face indices.
   - Includes before/after state comparison and uses `get_body_faces` for safe targeting.
+
+- `offset_face_or_press_pull`
+  - Create a controlled Offset Face feature on explicit body face indices or selected BRep faces.
+  - Includes before/after state comparison and warnings that it covers face-offset behavior only, not arbitrary Press Pull edge/profile routing.
 
 - `create_construction_point`
   - Create named construction points from coordinates, named point entities, or selected point-like geometry.

@@ -220,6 +220,31 @@ def _face_ref(body, face, index):
     }
 
 
+def _selected_brep_faces():
+    app = adsk.core.Application.get()
+    selections = _safe_value(lambda: app.userInterface.activeSelections)
+    if not selections or _safe_value(lambda: selections.count, 0) == 0:
+        return []
+
+    faces = []
+    for index in range(selections.count):
+        entity = _safe_value(lambda index=index: selections.item(index).entity)
+        face = adsk.fusion.BRepFace.cast(entity)
+        if face:
+            faces.append(face)
+    return faces
+
+
+def _face_parent_component(face):
+    return _safe_value(lambda: face.body.parentComponent)
+
+
+def _same_component_faces(faces):
+    components = [_face_parent_component(face) for face in faces]
+    first = components[0] if components else None
+    return bool(first) and all(component == first for component in components)
+
+
 @register_tool("get_body_edges")
 def get_body_edges(body_name, edge_indices=None):
     """
@@ -280,6 +305,88 @@ def get_body_faces(body_name, face_indices=None):
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error inspecting body faces: {e}\n{err}")
         return {"error": f"Failed to inspect body faces: {str(e)}"}
+
+
+@register_tool("offset_face_or_press_pull")
+def offset_face_or_press_pull(body_name=None, face_indices=None, distance=None, name=None, use_selection=False):
+    """
+    Create a controlled Offset Face feature on explicit or selected BRep faces.
+
+    This intentionally implements the face-offset branch of Fusion's Press Pull
+    behavior. It does not try to emulate Press Pull for edges or sketch profiles,
+    where Fusion may create fillets or extrudes instead.
+    """
+    try:
+        if not distance:
+            return {"error": "distance is required, e.g. '1 mm' or '-0.5 mm'."}
+
+        body = None
+        if use_selection:
+            faces = _selected_brep_faces()
+            if not faces:
+                return {"error": "No selected BRep faces found."}
+        else:
+            if not body_name:
+                return {"error": "body_name is required unless use_selection=true."}
+            if face_indices is None or len(face_indices) == 0:
+                return {"error": "face_indices is required. Use get_body_faces first to choose explicit face indices."}
+            body = _find_body_by_name(body_name)
+            if not body:
+                return {"error": f"Body '{body_name}' not found."}
+            faces = _body_faces_by_indices(body, face_indices)
+
+        if not _same_component_faces(faces):
+            return {"error": "All offset faces must belong to the same component."}
+
+        component = _face_parent_component(faces[0]) or get_active_design().rootComponent
+        offset_faces = _safe_value(lambda: component.features.offsetFacesFeatures)
+        if not offset_faces:
+            return {"error": "This Fusion runtime does not expose offsetFacesFeatures for API-created Offset Face features."}
+
+        before = _design_state_snapshot(include_selections=False)
+        distance_input = adsk.core.ValueInput.createByString(str(distance))
+        offset_input = offset_faces.createInput(faces, distance_input)
+        if offset_input is None:
+            return {"error": "Fusion failed to create Offset Face input for the supplied faces and distance."}
+
+        feature = offset_faces.add(offset_input)
+        if not feature:
+            return {"error": "Fusion failed to create the Offset Face feature. The distance or selected faces may be geometrically invalid."}
+        if name:
+            feature.name = name
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        feature_name = _safe_value(lambda: feature.name) or name
+        inspected = inspect_feature(feature_name).get("result") if feature_name else None
+        resolved_body = body or _safe_value(lambda: faces[0].body)
+        return {
+            "result": {
+                "featureName": feature_name,
+                "bodyName": _safe_value(lambda: resolved_body.name),
+                "componentName": _safe_value(lambda: component.name),
+                "faceIndices": [
+                    _face_body_index(_safe_value(lambda face=face: face.body), face)
+                    for face in faces
+                ],
+                "faces": [
+                    _face_ref(_safe_value(lambda face=face: face.body), face, _face_body_index(_safe_value(lambda face=face: face.body), face))
+                    for face in faces
+                ],
+                "distance": distance,
+                "useSelection": bool(use_selection),
+                "warnings": [
+                    "This tool creates a Fusion Offset Face feature only; it does not emulate Press Pull for edges or sketch profiles.",
+                    "Positive distance follows the selected face normal; negative distance offsets the opposite direction.",
+                ],
+                "feature": inspected,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating offset face feature: {e}\n{err}")
+        return {"error": f"Failed to create offset face feature: {str(e)}"}
 
 
 @register_tool("extrude_feature")
