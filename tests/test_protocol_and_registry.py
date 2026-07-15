@@ -1300,6 +1300,31 @@ def run(context):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_sse_messages_delete_closes_session(self):
+        session_id = "sse-delete-session"
+        self.mcp_server.sessions[session_id] = queue.Queue()
+        self.mcp_server.subscriptions[session_id] = {"fusion://runtime/change-journal"}
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            delete_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/messages?session_id={session_id}&token={self.mcp_server.auth_token}",
+                data=b"",
+                method="DELETE",
+            )
+            with urllib.request.urlopen(delete_request, timeout=2) as response:
+                self.assertEqual(response.status, 200)
+
+            self.assertNotIn(session_id, self.mcp_server.sessions)
+            self.assertNotIn(session_id, self.mcp_server.subscriptions)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.mcp_server.sessions.pop(session_id, None)
+            self.mcp_server.subscriptions.pop(session_id, None)
+
     def test_streamable_http_tool_call_posts_to_task_manager(self):
         original_post = self.mcp_server.TaskManager.post
         original_execute = self.mcp_server.execute_mcp_request_main_thread

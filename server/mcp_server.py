@@ -138,6 +138,16 @@ def remove_http_session(session_id):
     with http_sessions_lock:
         http_sessions.pop(session_id, None)
 
+def remove_sse_session(session_id):
+    with sessions_lock:
+        q = sessions.pop(session_id, None)
+    with subscriptions_lock:
+        subscriptions.pop(session_id, None)
+    if q:
+        q.put("CLOSE")
+        return True
+    return False
+
 def _redact_journal_value(value):
     if isinstance(value, dict):
         redacted = {}
@@ -486,12 +496,7 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 log_message(f"SSE Error: {e}")
             finally:
-                with sessions_lock:
-                    if session_id in sessions:
-                        del sessions[session_id]
-                with subscriptions_lock:
-                    if session_id in subscriptions:
-                        del subscriptions[session_id]
+                remove_sse_session(session_id)
         elif parsed.path == '/shutdown':
             if not self._is_authorized():
                 self._send_empty(403)
@@ -512,6 +517,20 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_empty(403)
             return
         parsed = self._parsed_url()
+        if parsed.path == '/messages':
+            if not self._is_authorized():
+                self._send_empty(403)
+                return
+            session_id = self._query_value("session_id")
+            if not session_id:
+                self._send_empty(400)
+                return
+            if not remove_sse_session(session_id):
+                self._send_empty(404)
+                return
+            self._send_empty(200)
+            return
+
         if parsed.path not in ('/', '/sse'):
             self._send_empty(404)
             return

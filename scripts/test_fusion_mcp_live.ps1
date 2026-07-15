@@ -94,6 +94,8 @@ if ($authHeaders.ContainsKey("Authorization")) {
 }
 
 $response = $request.GetResponse()
+$reader = $null
+$messagesUri = $null
 try {
     $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
     $endpointEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
@@ -233,6 +235,17 @@ try {
     }
 }
 finally {
+    if ($messagesUri) {
+        try {
+            Invoke-WebRequest -Uri $messagesUri -Method Delete -Headers $authHeaders -TimeoutSec $TimeoutSec | Out-Null
+        }
+        catch {
+            Write-Warning "Failed to explicitly close MCP SSE session: $($_.Exception.Message)"
+        }
+    }
+    if ($reader) {
+        $reader.Dispose()
+    }
     $response.Close()
 }
 
