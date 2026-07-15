@@ -51,6 +51,7 @@
         "extrude_feature",
         "revolve_feature",
         "loft_feature",
+        "sweep_feature",
         "fillet_feature",
         "chamfer_feature",
         "shell_body",

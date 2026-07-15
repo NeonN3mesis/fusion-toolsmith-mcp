@@ -76,6 +76,36 @@ def _profiles_from_sections(sections):
     return resolved
 
 
+def _sketch_curves(sketch):
+    curves = _safe_value(lambda: sketch.sketchCurves)
+    if not curves:
+        return []
+    groups = [
+        ("lines", _safe_value(lambda: curves.sketchLines)),
+        ("circles", _safe_value(lambda: curves.sketchCircles)),
+        ("arcs", _safe_value(lambda: curves.sketchArcs)),
+        ("ellipses", _safe_value(lambda: curves.sketchEllipses)),
+        ("fittedSplines", _safe_value(lambda: curves.sketchFittedSplines)),
+        ("fixedSplines", _safe_value(lambda: curves.sketchFixedSplines)),
+        ("conics", _safe_value(lambda: curves.sketchConicCurves)),
+    ]
+    result = []
+    for group_name, collection in groups:
+        for item in _collection_items(collection):
+            result.append((group_name, item))
+    return result
+
+
+def _sketch_curve_by_index(sketch, curve_index):
+    curves = _sketch_curves(sketch)
+    if not curves:
+        raise ValueError(f"Sketch '{sketch.name}' has no path curves.")
+    index = int(curve_index)
+    if index < 0 or index >= len(curves):
+        raise ValueError(f"path_curve_index {index} is out of range for sketch '{sketch.name}' with {len(curves)} path curves.")
+    return curves[index]
+
+
 def _set_participant_bodies(ext_input, body_names):
     if not body_names:
         return []
@@ -654,6 +684,79 @@ def loft_feature(sections, operation=None, name=None, body_name=None, participan
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error creating loft feature: {e}\n{err}")
         return {"error": f"Failed to create loft feature: {str(e)}"}
+
+
+@register_tool("sweep_feature")
+def sweep_feature(profile_sketch_name, path_sketch_name, operation=None, name=None, profile_index=0, path_curve_index=0, chain_path=False, body_name=None, participant_body_names=None):
+    """
+    Create a solid sweep from a named sketch profile along an explicit path curve.
+
+    Path selection is index-based so callers can inspect the path sketch first
+    and avoid depending on whatever happens to be selected in the UI.
+    """
+    try:
+        if not operation:
+            return {"error": "operation is required and must be one of NewBody, Join, Cut, or Intersect."}
+        profile_sketch = _find_sketch_by_name(profile_sketch_name)
+        if not profile_sketch:
+            return {"error": f"Profile sketch '{profile_sketch_name}' not found."}
+        path_sketch = _find_sketch_by_name(path_sketch_name)
+        if not path_sketch:
+            return {"error": f"Path sketch '{path_sketch_name}' not found."}
+
+        before = _design_state_snapshot(include_selections=False)
+        profile = _profile_by_index(profile_sketch, profile_index)
+        path_group, path_curve = _sketch_curve_by_index(path_sketch, path_curve_index)
+        op = _feature_operation(operation)
+        component = _safe_value(lambda: profile_sketch.parentComponent) or get_active_design().rootComponent
+        sweeps = _safe_value(lambda: component.features.sweepFeatures)
+        if not sweeps:
+            return {"error": "This Fusion runtime does not expose sweepFeatures for API-created sweep features."}
+        create_path = _safe_value(lambda: component.features.createPath)
+        if not create_path:
+            return {"error": "This Fusion runtime does not expose features.createPath for API-created sweep paths."}
+        path = component.features.createPath(path_curve, bool(chain_path))
+        sweep_input = sweeps.createInput(profile, path, op)
+        participants = _set_participant_bodies(sweep_input, participant_body_names)
+        sweep = sweeps.add(sweep_input)
+        if name:
+            sweep.name = name
+
+        result_body_names = []
+        bodies = _safe_value(lambda: sweep.bodies)
+        for index, body in enumerate(_collection_items(bodies)):
+            if body_name:
+                body.name = body_name if index == 0 else f"{body_name}_{index}"
+            result_body_names.append(_safe_value(lambda body=body: body.name))
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        feature_name = _safe_value(lambda: sweep.name) or name
+        inspected = inspect_feature(feature_name).get("result") if feature_name else None
+        return {
+            "result": {
+                "featureName": feature_name,
+                "profileSketchName": profile_sketch.name,
+                "profileIndex": int(profile_index),
+                "pathSketchName": path_sketch.name,
+                "pathCurveIndex": int(path_curve_index),
+                "pathCurveGroup": path_group,
+                "chainPath": bool(chain_path),
+                "operation": _operation_label(op),
+                "participantBodies": participants or _body_names(_safe_value(lambda: sweep.participantBodies)),
+                "resultBodies": result_body_names,
+                "warnings": [
+                    "Use inspect_sketch on the path sketch before choosing path_curve_index.",
+                    "This tool creates a single-path solid sweep; guide rails and surface sweeps are not yet implemented.",
+                ],
+                "feature": inspected,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating sweep feature: {e}\n{err}")
+        return {"error": f"Failed to create sweep feature: {str(e)}"}
 
 
 @register_tool("fillet_feature")

@@ -383,6 +383,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("revolve_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("loft_feature", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("sweep_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
         self.assertIn("list_documents", resource["profiles"]["document"]["tools"])
         advertised = {schema["name"] for schema in self.tools.get_tool_schemas()}
@@ -1420,6 +1421,7 @@ def run(context):
         self.assertIn("extrude_feature", tool_names)
         self.assertIn("revolve_feature", tool_names)
         self.assertIn("loft_feature", tool_names)
+        self.assertIn("sweep_feature", tool_names)
         self.assertIn("fillet_feature", tool_names)
         self.assertIn("chamfer_feature", tool_names)
         self.assertIn("shell_body", tool_names)
@@ -2432,6 +2434,133 @@ def run(context):
             {"sketchName": "SectionB", "profileIndex": 0},
         ])
         self.assertEqual(created_inputs[0].loftSections._items, [profile_a, profile_b])
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_sweep_feature_creates_profile_along_indexed_path_curve(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+
+        class MockCollection:
+            def __init__(self, items=None):
+                self._items = list(items or [])
+                self.count = len(self._items)
+            def item(self, index):
+                return self._items[index]
+            def add(self, item):
+                self._items.append(item)
+                self.count = len(self._items)
+
+        profile = types.SimpleNamespace(name="ProfileA")
+        path_curve = types.SimpleNamespace(name="PathLine")
+        result_body = types.SimpleNamespace(name="Body0")
+        created_inputs = []
+        created_paths = []
+
+        class MockParticipantBodies:
+            def __init__(self):
+                self.items = []
+            def add(self, body):
+                self.items.append(body)
+
+        class MockSweepInput:
+            def __init__(self, profile_arg, path_arg, operation_arg):
+                self.profile = profile_arg
+                self.path = path_arg
+                self.operation = operation_arg
+                self.participantBodies = MockParticipantBodies()
+
+        class MockSweeps:
+            def createInput(self, profile_arg, path_arg, operation_arg):
+                input_obj = MockSweepInput(profile_arg, path_arg, operation_arg)
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                self.last_input = input_obj
+                return types.SimpleNamespace(
+                    name="",
+                    bodies=MockCollection([result_body]),
+                    participantBodies=MockCollection(input_obj.participantBodies.items),
+                )
+
+        def create_path(curve, chain):
+            path = types.SimpleNamespace(curve=curve, chain=chain)
+            created_paths.append(path)
+            return path
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(
+                sweepFeatures=MockSweeps(),
+                createPath=create_path,
+            ),
+        )
+        profile_sketch = types.SimpleNamespace(
+            name="ProfileSketch",
+            parentComponent=component,
+            profiles=MockCollection([profile]),
+        )
+        path_sketch = types.SimpleNamespace(
+            name="PathSketch",
+            parentComponent=component,
+            profiles=MockCollection([]),
+            sketchCurves=types.SimpleNamespace(
+                sketchLines=MockCollection([path_curve]),
+                sketchCircles=MockCollection([]),
+                sketchArcs=MockCollection([]),
+                sketchEllipses=MockCollection([]),
+                sketchFittedSplines=MockCollection([]),
+                sketchFixedSplines=MockCollection([]),
+                sketchConicCurves=MockCollection([]),
+            ),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            sketches=[profile_sketch, path_sketch],
+            bRepBodies=[],
+            allOccurrences=[],
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1, "unhealthyTimelineItems": 0}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {
+            "result": {"featureName": feature_name, "operation": "NewBody"}
+        }
+        try:
+            res = self.tools.execute_tool("sweep_feature", {
+                "profile_sketch_name": "ProfileSketch",
+                "profile_index": 0,
+                "path_sketch_name": "PathSketch",
+                "path_curve_index": 0,
+                "chain_path": True,
+                "operation": "NewBody",
+                "name": "SweepA",
+                "body_name": "SweepBody",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["featureName"], "SweepA")
+        self.assertEqual(res["result"]["operation"], "NewBody")
+        self.assertEqual(res["result"]["resultBodies"], ["SweepBody"])
+        self.assertEqual(res["result"]["pathSketchName"], "PathSketch")
+        self.assertEqual(res["result"]["pathCurveIndex"], 0)
+        self.assertEqual(res["result"]["pathCurveGroup"], "lines")
+        self.assertTrue(res["result"]["chainPath"])
+        self.assertEqual(created_paths[0].curve, path_curve)
+        self.assertTrue(created_paths[0].chain)
+        self.assertEqual(created_inputs[0].profile, profile)
+        self.assertEqual(created_inputs[0].path, created_paths[0])
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
     def test_fillet_feature_requires_edge_indices(self):

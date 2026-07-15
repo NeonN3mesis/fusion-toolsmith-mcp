@@ -4,9 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Next Tool Gaps
 
-- Sweep/path tool
-  - Create sweep features from a named profile and path, including basic path validation and result-body reporting.
-
 - Assembly joints and origin helpers
   - Inspect and create basic joint/origin/construction references for repeatable component placement.
 
@@ -38,6 +35,10 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `loft_feature`
   - Create solid loft features from ordered named sketch profiles.
   - Requires an explicit operation and returns section order, result bodies, participants, warnings, inspection, and before/after design-state comparison.
+
+- `sweep_feature`
+  - Create solid sweep features from a named sketch profile and an explicit indexed curve in a named path sketch.
+  - Requires an explicit operation and returns path targeting, result bodies, participants, warnings, inspection, and before/after design-state comparison.
 
 - `mirror_features_or_bodies`
   - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.

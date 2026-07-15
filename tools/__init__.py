@@ -494,6 +494,33 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "sweep_feature",
+            "description": "Create a solid sweep from a named sketch profile along an explicit indexed curve in a named path sketch, with required operation and before/after design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile_sketch_name": {"type": "string", "description": "Sketch containing the profile to sweep."},
+                    "profile_index": {"type": "integer", "default": 0, "description": "0-based profile index in the profile sketch."},
+                    "path_sketch_name": {"type": "string", "description": "Sketch containing the path curve."},
+                    "path_curve_index": {"type": "integer", "default": 0, "description": "0-based curve index from the path sketch. Inspect the sketch first."},
+                    "chain_path": {"type": "boolean", "default": False, "description": "If true, let Fusion chain connected path curves from the selected curve."},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["NewBody", "Join", "Cut", "Intersect", "new_body", "join", "cut", "intersect"],
+                        "description": "Required explicit feature operation. Do not guess."
+                    },
+                    "name": {"type": "string", "description": "Optional name for the created sweep feature."},
+                    "body_name": {"type": "string", "description": "Optional name for the first result body."},
+                    "participant_body_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit participant bodies for Join/Cut/Intersect operations."
+                    }
+                },
+                "required": ["profile_sketch_name", "path_sketch_name", "operation"]
+            }
+        },
+        {
             "name": "fillet_feature",
             "description": "Create a constant-radius fillet on explicit edge indices of a named body with built-in before/after design-state comparison. Inspect or select edges before choosing indices.",
             "inputSchema": {
