@@ -767,6 +767,53 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "create_construction_point",
+            "description": "Create a named construction point from coordinates, a named point, or the currently selected point-like entity.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name for the new construction point."},
+                    "mode": {"type": "string", "enum": ["coordinates", "named", "selected"], "default": "coordinates"},
+                    "base_plane_name": {"type": "string", "default": "xy", "description": "Sketch plane used when creating a coordinate-backed reference point."},
+                    "x": {"type": "string", "default": "0 mm", "description": "First sketch-plane coordinate when mode=coordinates."},
+                    "y": {"type": "string", "default": "0 mm", "description": "Second sketch-plane coordinate when mode=coordinates."},
+                    "point_name": {"type": "string", "description": "Existing construction/sketch point name when mode=named."},
+                    "use_selected_point": {"type": "boolean", "default": False},
+                    "hide_reference_sketch": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
+            "name": "create_construction_axis",
+            "description": "Create a named construction axis from two points or from the currently selected line-like entity.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name for the new construction axis."},
+                    "mode": {"type": "string", "enum": ["two_points", "selected_line"], "default": "two_points"},
+                    "point_name_one": {"type": "string", "description": "First existing construction/sketch point name."},
+                    "point_name_two": {"type": "string", "description": "Second existing construction/sketch point name."},
+                    "point_one": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "description": "First [x, y] sketch-plane coordinate for a coordinate-backed reference point."
+                    },
+                    "point_two": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "description": "Second [x, y] sketch-plane coordinate for a coordinate-backed reference point."
+                    },
+                    "base_plane_name": {"type": "string", "default": "xy"},
+                    "use_selected_line": {"type": "boolean", "default": False},
+                    "hide_reference_sketch": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
             "name": "clone_timeline_feature",
             "description": "Extract parameters and details of an existing timeline feature in the active design, creating a clean JSON recipe.",
             "inputSchema": {

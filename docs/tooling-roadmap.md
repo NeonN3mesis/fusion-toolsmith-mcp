@@ -4,10 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Medium-Term Tools
 
-- `create_construction_axis_or_point`
-  - Create named construction axes and points from standard origins, selected geometry, explicit coordinates, or intersections.
-  - Useful for mirrors, revolves, circular patterns, and repeatable hole placement.
-
 - `offset_face_or_press_pull`
   - Controlled direct-modeling face offset with strong preflight warnings and dependency reporting.
   - Require explicit target face selection or stable entity reference.
@@ -49,3 +45,10 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `shell_body`
   - Shell a named body with explicit wall thickness and optional open face indices.
   - Includes before/after state comparison and uses `get_body_faces` for safe targeting.
+
+- `create_construction_point`
+  - Create named construction points from coordinates, named point entities, or selected point-like geometry.
+
+- `create_construction_axis`
+  - Create named construction axes from two named/coordinate-backed points or selected line-like geometry.
+  - Useful for mirrors, revolves, circular patterns, and repeatable feature placement.

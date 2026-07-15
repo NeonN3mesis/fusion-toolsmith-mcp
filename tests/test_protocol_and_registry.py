@@ -1375,6 +1375,8 @@ def run(context):
         self.assertIn("draw_circle", tool_names)
         self.assertIn("project_geometry", tool_names)
         self.assertIn("create_offset_plane", tool_names)
+        self.assertIn("create_construction_point", tool_names)
+        self.assertIn("create_construction_axis", tool_names)
         self.assertIn("get_body_edges", tool_names)
         self.assertIn("get_body_faces", tool_names)
         self.assertIn("extrude_feature", tool_names)

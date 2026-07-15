@@ -889,6 +889,82 @@ def _find_center_point(component, root, name):
 
     return None
 
+def _find_named_point_entity(component, root, name):
+    if not name:
+        return None, None
+
+    for point in getattr(component, "constructionPoints", []) or []:
+        if getattr(point, "name", None) == name:
+            return point, component
+
+    for sketch in getattr(component, "sketches", []) or []:
+        for sketch_point in getattr(sketch, "sketchPoints", []) or []:
+            if getattr(sketch_point, "name", None) == name:
+                return sketch_point, component
+
+    for comp in _all_components(root):
+        if comp == component:
+            continue
+        for point in getattr(comp, "constructionPoints", []) or []:
+            if getattr(point, "name", None) == name:
+                return point, comp
+        for sketch in getattr(comp, "sketches", []) or []:
+            for sketch_point in getattr(sketch, "sketchPoints", []) or []:
+                if getattr(sketch_point, "name", None) == name:
+                    return sketch_point, comp
+
+    return None, None
+
+def _selected_point_entity():
+    app = adsk.core.Application.get()
+    ui = app.userInterface
+    if ui.activeSelections.count < 1:
+        return None, None
+    entity = ui.activeSelections.item(0).entity
+    for class_name in ("ConstructionPoint", "SketchPoint", "BRepVertex"):
+        caster = getattr(adsk.fusion, class_name, None)
+        cast = getattr(caster, "cast", None)
+        selected = cast(entity) if cast else None
+        if selected:
+            parent = getattr(selected, "parentComponent", None)
+            if not parent and getattr(selected, "body", None):
+                parent = selected.body.parentComponent
+            if not parent and getattr(selected, "parentSketch", None):
+                parent = selected.parentSketch.parentComponent
+            return selected, parent
+    return None, None
+
+def _selected_line_entity():
+    app = adsk.core.Application.get()
+    ui = app.userInterface
+    if ui.activeSelections.count < 1:
+        return None, None
+    entity = ui.activeSelections.item(0).entity
+    for class_name in ("ConstructionAxis", "SketchLine", "BRepEdge"):
+        caster = getattr(adsk.fusion, class_name, None)
+        cast = getattr(caster, "cast", None)
+        selected = cast(entity) if cast else None
+        if selected:
+            parent = getattr(selected, "parentComponent", None)
+            if not parent and getattr(selected, "body", None):
+                parent = selected.body.parentComponent
+            if not parent and getattr(selected, "parentSketch", None):
+                parent = selected.parentSketch.parentComponent
+            return selected, parent
+    return None, None
+
+def _create_reference_sketch_point(component, base_plane_name, x, y, point_name, hide_sketch=True):
+    sketch = component.sketches.add(_base_plane(component, base_plane_name))
+    sketch.name = f"{point_name}_ReferenceSketch"
+    point = sketch.sketchPoints.add(_point_on_sketch(x, y))
+    point.name = f"{point_name}_SketchPoint"
+    if hide_sketch:
+        sketch.isLightBulbOn = False
+    return point, sketch
+
+def _is_coordinate_pair(value):
+    return isinstance(value, (list, tuple)) and len(value) == 2
+
 def _section_type(value):
     mapping = {
         "circular": adsk.fusion.PipeSectionTypes.CircularPipeSectionType,
@@ -909,6 +985,118 @@ def _point_on_plane(origin, u_dir, v_dir, normal, x, y, z):
     point.translateBy(v)
     point.translateBy(n)
     return point
+
+@register_tool("create_construction_point")
+def create_construction_point(name="Construction Point", mode="coordinates", base_plane_name="xy", x="0 mm", y="0 mm", point_name=None, use_selected_point=False, hide_reference_sketch=True):
+    design = get_active_design()
+    root = design.rootComponent
+    before = _capture_design_state()
+    target_component = root
+    source_entity = None
+    reference_sketch_name = None
+
+    point_mode = (mode or "coordinates").lower()
+    if use_selected_point or point_mode == "selected":
+        source_entity, selected_component = _selected_point_entity()
+        if not source_entity:
+            return {"error": "No selected construction point, sketch point, or vertex found."}
+        target_component = selected_component or root
+    elif point_mode == "named":
+        source_entity, found_component = _find_named_point_entity(root, root, point_name)
+        if not source_entity:
+            return {"error": f"Point '{point_name}' not found."}
+        target_component = found_component or root
+    elif point_mode == "coordinates":
+        x_value = _real_length(design, x)
+        y_value = _real_length(design, y)
+        source_entity, sketch = _create_reference_sketch_point(root, base_plane_name, x_value, y_value, name, hide_reference_sketch)
+        reference_sketch_name = _safe_name(sketch)
+        target_component = root
+    else:
+        return {"error": "mode must be coordinates, named, or selected."}
+
+    points = target_component.constructionPoints
+    point_input = points.createInput()
+    point_input.setByPoint(source_entity)
+    point = points.add(point_input)
+    point.name = name
+
+    return {
+        "result": {
+            "message": f"Created construction point '{name}'.",
+            "pointName": point.name,
+            "mode": point_mode,
+            "componentName": _safe_name(target_component),
+            "referenceSketchName": reference_sketch_name,
+            "sourceName": point_name if point_mode == "named" else _safe_name(source_entity),
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
+
+
+@register_tool("create_construction_axis")
+def create_construction_axis(name="Construction Axis", mode="two_points", point_name_one=None, point_name_two=None, point_one=None, point_two=None, base_plane_name="xy", use_selected_line=False, hide_reference_sketch=True):
+    design = get_active_design()
+    root = design.rootComponent
+    before = _capture_design_state()
+    axis_mode = (mode or "two_points").lower()
+    target_component = root
+    reference_sketches = []
+
+    axes = target_component.constructionAxes
+    axis_input = axes.createInput()
+
+    if use_selected_line or axis_mode == "selected_line":
+        line_entity, selected_component = _selected_line_entity()
+        if not line_entity:
+            return {"error": "No selected construction axis, sketch line, or linear edge found."}
+        target_component = selected_component or root
+        axes = target_component.constructionAxes
+        axis_input = axes.createInput()
+        axis_input.setByLine(line_entity)
+    elif axis_mode == "two_points":
+        first = second = None
+        if point_name_one:
+            first, first_component = _find_named_point_entity(root, root, point_name_one)
+            target_component = first_component or target_component
+        if point_name_two:
+            second, second_component = _find_named_point_entity(root, root, point_name_two)
+            target_component = second_component or target_component
+        if not first and point_one:
+            if not _is_coordinate_pair(point_one):
+                return {"error": "point_one must be a two-item [x, y] coordinate array."}
+            x_value = _real_length(design, point_one[0])
+            y_value = _real_length(design, point_one[1])
+            first, sketch = _create_reference_sketch_point(target_component, base_plane_name, x_value, y_value, f"{name}_Point1", hide_reference_sketch)
+            reference_sketches.append(_safe_name(sketch))
+        if not second and point_two:
+            if not _is_coordinate_pair(point_two):
+                return {"error": "point_two must be a two-item [x, y] coordinate array."}
+            x_value = _real_length(design, point_two[0])
+            y_value = _real_length(design, point_two[1])
+            second, sketch = _create_reference_sketch_point(target_component, base_plane_name, x_value, y_value, f"{name}_Point2", hide_reference_sketch)
+            reference_sketches.append(_safe_name(sketch))
+        if not first or not second:
+            return {"error": "two_points mode requires point_name_one/point_name_two or point_one/point_two coordinates."}
+        axes = target_component.constructionAxes
+        axis_input = axes.createInput()
+        axis_input.setByTwoPoints(first, second)
+    else:
+        return {"error": "mode must be two_points or selected_line."}
+
+    axis = axes.add(axis_input)
+    axis.name = name
+
+    return {
+        "result": {
+            "message": f"Created construction axis '{name}'.",
+            "axisName": axis.name,
+            "mode": axis_mode,
+            "componentName": _safe_name(target_component),
+            "referenceSketchNames": reference_sketches,
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
 
 @register_tool("create_offset_plane")
 def create_offset_plane(name="Offset Plane", base_plane_name="xy", offset="0 mm", use_selected_plane=False):

@@ -136,6 +136,8 @@ try {
         "extract_reference_dimensions",
         "get_body_faces",
         "create_offset_plane",
+        "create_construction_point",
+        "create_construction_axis",
         "create_rounded_rectangle_body",
         "create_rounded_slot_cut",
         "create_rounded_pocket",
