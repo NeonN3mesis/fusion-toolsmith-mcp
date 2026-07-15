@@ -4,9 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Next Tool Gaps
 
-- True conical countersink support
-  - Replace the current cylindrical countersink-intent relief with actual conical geometry when Fusion API support and target geometry allow it.
-
 - Revolve tool
   - Create revolve features from named sketch profiles and explicit axes, with operation, angle, and before/after state comparison.
 
@@ -38,7 +35,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 - `create_hole_pattern`
   - General hole-pattern cuts for explicit, rectangular, and circular point layouts.
-  - Supports through, blind, counterbore, and countersink-intent cuts with structured result metadata.
+  - Supports through, blind, counterbore, and true conical countersink cuts with structured result metadata.
 
 - `mirror_features_or_bodies`
   - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.

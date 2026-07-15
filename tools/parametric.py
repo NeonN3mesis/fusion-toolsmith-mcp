@@ -377,6 +377,57 @@ def _cut_depth_expression(depth, cut_direction):
         return f"-({text})"
     return text
 
+def _create_offset_construction_plane(component, base_plane, offset_expression, name, hide=True):
+    plane_input = component.constructionPlanes.createInput()
+    plane_input.setByOffset(_base_plane(component, base_plane), adsk.core.ValueInput.createByString(str(offset_expression)))
+    plane = component.constructionPlanes.add(plane_input)
+    plane.name = name
+    if hide:
+        try:
+            plane.isLightBulbOn = False
+        except Exception:
+            pass
+    return plane
+
+def _create_countersink_loft_cut(component, target_body, base_plane, x_value, y_value, top_radius, bottom_radius, depth, cut_direction, name, index, hide_sketch=True):
+    loft_features = getattr(component.features, "loftFeatures", None)
+    if not loft_features:
+        raise ValueError("This Fusion runtime does not expose loftFeatures; conical countersink cuts are unavailable.")
+
+    offset = _cut_depth_expression(depth, cut_direction)
+    offset_plane = _create_offset_construction_plane(
+        component,
+        base_plane,
+        offset,
+        f"{name}_{index}_Countersink_OffsetPlane",
+        hide=hide_sketch,
+    )
+    top_sketch = component.sketches.add(_base_plane(component, base_plane))
+    top_sketch.name = f"{name}_{index}_Countersink_TopSketch"
+    top_sketch.sketchCurves.sketchCircles.addByCenterRadius(_point_on_sketch(x_value, y_value), top_radius)
+    bottom_sketch = component.sketches.add(offset_plane)
+    bottom_sketch.name = f"{name}_{index}_Countersink_BottomSketch"
+    bottom_sketch.sketchCurves.sketchCircles.addByCenterRadius(_point_on_sketch(x_value, y_value), bottom_radius)
+
+    top_profile = top_sketch.profiles.item(0)
+    bottom_profile = bottom_sketch.profiles.item(0)
+    loft_input = loft_features.createInput(adsk.fusion.FeatureOperations.CutFeatureOperation)
+    loft_input.loftSections.add(top_profile)
+    loft_input.loftSections.add(bottom_profile)
+    _set_participant_body(loft_input, target_body)
+    feature = loft_features.add(loft_input)
+    feature.name = f"{name}_{index}_Countersink"
+
+    if hide_sketch:
+        top_sketch.isLightBulbOn = False
+        bottom_sketch.isLightBulbOn = False
+
+    return {
+        "featureName": feature.name,
+        "sketchNames": [top_sketch.name, bottom_sketch.name],
+        "constructionPlaneName": offset_plane.name,
+    }
+
 def _hole_pattern_points(design, points=None, pattern_type="explicit", origin=None, spacing=None, count=None, center=None, radius=None, start_angle_deg=0, total_angle_deg=360):
     pattern = (pattern_type or "explicit").lower()
     generated = []
@@ -744,6 +795,7 @@ def create_hole_pattern(
 
     cut_specs = []
     warnings = []
+    countersink_radius = None
     if hole_kind == "counterbore":
         if not counterbore_diameter or not counterbore_depth:
             return {"error": "counterbore hole_type requires counterbore_diameter and counterbore_depth."}
@@ -757,14 +809,34 @@ def create_hole_pattern(
         countersink_radius = _real_length(design, countersink_diameter) / 2.0
         if countersink_radius <= hole_radius:
             return {"error": "countersink_diameter must be larger than hole_diameter."}
-        cut_specs.append(("CountersinkRelief", countersink_radius, countersink_depth))
-        warnings.append("Countersink is represented as a cylindrical relief cut; true conical countersink support is still a roadmap item.")
 
     cut_specs.append(("Hole", hole_radius, cut_depth))
 
     created_features = []
     created_sketches = []
+    created_construction_planes = []
     for index, (x_value, y_value, source_point) in enumerate(generated_points, start=1):
+        if hole_kind == "countersink":
+            try:
+                countersink_result = _create_countersink_loft_cut(
+                    target_component,
+                    target_body,
+                    base_plane,
+                    x_value,
+                    y_value,
+                    countersink_radius,
+                    hole_radius,
+                    countersink_depth,
+                    cut_direction,
+                    name,
+                    index,
+                    hide_sketch=hide_sketch,
+                )
+            except ValueError as exc:
+                return {"error": str(exc)}
+            created_features.append(countersink_result["featureName"])
+            created_sketches.extend(countersink_result["sketchNames"])
+            created_construction_planes.append(countersink_result["constructionPlaneName"])
         for label, radius_value, depth in cut_specs:
             sketch = target_component.sketches.add(_base_plane(target_component, base_plane))
             sketch.name = f"{name}_{index}_{label}_Sketch"
@@ -789,6 +861,7 @@ def create_hole_pattern(
             "pointCount": len(generated_points),
             "featureNames": created_features,
             "sketchNames": created_sketches,
+            "constructionPlaneNames": created_construction_planes,
             "generatedPoints": [
                 {"index": index, "x": x_value, "y": y_value, "source": source_point}
                 for index, (x_value, y_value, source_point) in enumerate(generated_points, start=1)
@@ -802,6 +875,7 @@ def create_hole_pattern(
                 "countersinkDepth": countersink_depth,
                 "cutDirection": cut_direction,
             },
+            "countersinkGeometry": "conical_loft_cut" if hole_kind == "countersink" else None,
             "warnings": warnings,
             "stateComparison": _compare_after_mutation(before),
         }

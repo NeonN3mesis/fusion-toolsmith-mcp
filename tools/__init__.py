@@ -630,7 +630,7 @@ def get_tool_schemas():
         },
         {
             "name": "create_hole_pattern",
-            "description": "Cut a general hole pattern into a named body. Supports explicit, rectangular, and circular point generation plus through, blind, counterbore, and countersink-intent cuts.",
+            "description": "Cut a general hole pattern into a named body. Supports explicit, rectangular, and circular point generation plus through, blind, counterbore, and true conical countersink cuts.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

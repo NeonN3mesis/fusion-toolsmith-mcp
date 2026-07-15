@@ -2426,6 +2426,141 @@ def run(context):
         self.assertFalse(created_inputs[0].tangent_chain)
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
+    def test_create_hole_pattern_countersink_uses_conical_loft_cut(self):
+        class MockCollection:
+            def __init__(self, items=None):
+                self._items = list(items or [])
+                self.count = len(self._items)
+            def item(self, index):
+                return self._items[index]
+            def add(self, item):
+                self._items.append(item)
+                self.count = len(self._items)
+
+        class MockCircleCollection:
+            def __init__(self):
+                self.radii = []
+            def addByCenterRadius(self, _center, radius):
+                self.radii.append(radius)
+
+        class MockSketch:
+            def __init__(self, plane):
+                self.plane = plane
+                self.name = ""
+                self.isLightBulbOn = True
+                self.sketchCurves = types.SimpleNamespace(sketchCircles=MockCircleCollection())
+                self.profiles = MockCollection([types.SimpleNamespace(sketch=self)])
+
+        class MockSketches:
+            def __init__(self):
+                self.created = []
+            def add(self, plane):
+                sketch = MockSketch(plane)
+                self.created.append(sketch)
+                return sketch
+
+        class MockConstructionPlaneInput:
+            def __init__(self):
+                self.base_plane = None
+                self.offset = None
+            def setByOffset(self, base_plane, offset):
+                self.base_plane = base_plane
+                self.offset = offset
+
+        class MockConstructionPlanes:
+            def __init__(self):
+                self.created = []
+            def createInput(self):
+                return MockConstructionPlaneInput()
+            def add(self, plane_input):
+                plane = types.SimpleNamespace(name="", input=plane_input, isLightBulbOn=True)
+                self.created.append(plane)
+                return plane
+
+        class MockLoftInput:
+            def __init__(self, operation):
+                self.operation = operation
+                self.loftSections = MockCollection()
+
+        class MockLoftFeatures:
+            def __init__(self):
+                self.inputs = []
+            def createInput(self, operation):
+                loft_input = MockLoftInput(operation)
+                self.inputs.append(loft_input)
+                return loft_input
+            def add(self, _loft_input):
+                return types.SimpleNamespace(name="")
+
+        class MockExtrudeInput:
+            def __init__(self, profile, operation):
+                self.profile = profile
+                self.operation = operation
+                self.distance = None
+            def setDistanceExtent(self, _is_symmetric, distance):
+                self.distance = distance
+
+        class MockExtrudeFeatures:
+            def __init__(self):
+                self.inputs = []
+            def createInput(self, profile, operation):
+                extrude_input = MockExtrudeInput(profile, operation)
+                self.inputs.append(extrude_input)
+                return extrude_input
+            def add(self, _extrude_input):
+                return types.SimpleNamespace(name="")
+
+        class MockUnits:
+            defaultLengthUnits = "mm"
+            def evaluateExpression(self, expression, _units):
+                text = str(expression).strip().split()[0]
+                return float(text)
+
+        sketches = MockSketches()
+        construction_planes = MockConstructionPlanes()
+        loft_features = MockLoftFeatures()
+        extrude_features = MockExtrudeFeatures()
+        root = types.SimpleNamespace(
+            name="Root",
+            xYConstructionPlane=types.SimpleNamespace(name="xy"),
+            xZConstructionPlane=types.SimpleNamespace(name="xz"),
+            yZConstructionPlane=types.SimpleNamespace(name="yz"),
+            sketches=sketches,
+            constructionPlanes=construction_planes,
+            features=types.SimpleNamespace(
+                loftFeatures=loft_features,
+                extrudeFeatures=extrude_features,
+            ),
+            bRepBodies=[],
+            allOccurrences=[],
+        )
+        body = types.SimpleNamespace(name="Plate", parentComponent=root)
+        root.bRepBodies.append(body)
+        self.mock_design = types.SimpleNamespace(rootComponent=root, unitsManager=MockUnits())
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("create_hole_pattern", {
+            "target_body_name": "Plate",
+            "name": "CSK",
+            "hole_type": "countersink",
+            "hole_diameter": "4 mm",
+            "cut_depth": "8 mm",
+            "countersink_diameter": "8 mm",
+            "countersink_depth": "2 mm",
+            "points": [["1 mm", "2 mm"]],
+        })
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["holeType"], "countersink")
+        self.assertEqual(res["result"]["countersinkGeometry"], "conical_loft_cut")
+        self.assertEqual(res["result"]["featureNames"], ["CSK_1_Countersink", "CSK_1_Hole"])
+        self.assertEqual(res["result"]["constructionPlaneNames"], ["CSK_1_Countersink_OffsetPlane"])
+        self.assertEqual(res["result"]["warnings"], [])
+        self.assertEqual(loft_features.inputs[0].operation, sys.modules["adsk.fusion"].FeatureOperations.CutFeatureOperation)
+        self.assertEqual(loft_features.inputs[0].loftSections.count, 2)
+        self.assertEqual(construction_planes.created[0].input.offset, "2 mm")
+        self.assertEqual(extrude_features.inputs[0].distance, "8 mm")
+
     def test_inspect_sketch_returns_coordinate_mapping_and_curves(self):
         point = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
         vector = lambda x, y, z: types.SimpleNamespace(x=x, y=y, z=z)
