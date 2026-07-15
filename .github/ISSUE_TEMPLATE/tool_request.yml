@@ -1,0 +1,26 @@
+name: Tool Request
+description: Request a new structured Fusion Toolsmith MCP tool.
+title: "[Tool]: "
+labels: ["enhancement", "tool-request"]
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow
+      description: What Fusion workflow should this tool support?
+    validations:
+      required: true
+  - type: textarea
+    id: current_gap
+    attributes:
+      label: Current Gap
+      description: What requires raw scripting or manual Fusion work today?
+    validations:
+      required: true
+  - type: textarea
+    id: safer_contract
+    attributes:
+      label: Safer Tool Contract
+      description: What inputs, validation, and before/after checks should the tool require?
+    validations:
+      required: false

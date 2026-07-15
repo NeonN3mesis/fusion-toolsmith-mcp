@@ -50,6 +50,8 @@ The discovery file includes:
 
 ## Install From This Checkout
 
+Detailed installation and troubleshooting notes are in [docs/installation.md](docs/installation.md).
+
 Install the management CLI in editable mode:
 
 ```powershell
@@ -161,6 +163,8 @@ powershell -ExecutionPolicy Bypass -File scripts/test_fusion_mcp_inspection_fixt
 ```
 
 Useful starter prompts are in [examples/prompts.md](examples/prompts.md).
+
+Use [docs/demo-script.md](docs/demo-script.md) to record the short demo GIF/video for the README.
 
 ## CI And Releases
 

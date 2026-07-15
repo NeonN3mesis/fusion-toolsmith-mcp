@@ -1,0 +1,26 @@
+name: Fusion Workflow Request
+description: Ask for help turning a Fusion task into a Toolsmith workflow.
+title: "[Workflow]: "
+labels: ["workflow"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What are you trying to accomplish in Fusion 360?
+    validations:
+      required: true
+  - type: textarea
+    id: model_context
+    attributes:
+      label: Model Context
+      description: Describe the design, relevant sketches/features/parameters, and constraints.
+    validations:
+      required: false
+  - type: textarea
+    id: desired_agent_behavior
+    attributes:
+      label: Desired Agent Behavior
+      description: What should the agent inspect, avoid, validate, or export?
+    validations:
+      required: false

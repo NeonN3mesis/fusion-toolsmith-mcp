@@ -1,0 +1,44 @@
+name: Bug Report
+description: Report a reproducible Fusion Toolsmith MCP problem.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction Steps
+      description: Include the exact commands, prompts, or Fusion actions.
+      placeholder: |
+        1. Start FusionMCP
+        2. Run fusion-mcp test-live
+        3. Ask the agent to ...
+    validations:
+      required: true
+  - type: input
+    id: fusion_version
+    attributes:
+      label: Fusion 360 Version
+    validations:
+      required: false
+  - type: input
+    id: client
+    attributes:
+      label: MCP Client
+      placeholder: Codex, Claude Desktop, Cursor, custom client, etc.
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste redacted `fusion-mcp test-live`, `/health`, or `doctor` output.
+      render: text
+    validations:
+      required: false
