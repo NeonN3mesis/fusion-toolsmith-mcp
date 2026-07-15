@@ -62,6 +62,7 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "create_rounded_slot_cut",
     "create_hole_pattern",
     "create_counterbore_hole_pattern",
+    "mirror_features_or_bodies",
     "set_visibility",
 )
 
@@ -126,6 +127,7 @@ _TOOL_FIRST_POLICY = {
                 "create_rounded_slot_cut",
                 "create_hole_pattern",
                 "create_counterbore_hole_pattern",
+                "mirror_features_or_bodies",
                 "set_visibility",
                 "validate_model",
             ],

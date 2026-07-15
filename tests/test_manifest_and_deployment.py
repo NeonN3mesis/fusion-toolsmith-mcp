@@ -61,6 +61,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "create_rounded_slot_cut",
             "create_hole_pattern",
             "create_counterbore_hole_pattern",
+            "mirror_features_or_bodies",
             "set_visibility",
             "bearer_sse_url",
             "Authorization",

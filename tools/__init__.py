@@ -568,6 +568,27 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "mirror_features_or_bodies",
+            "description": "Mirror named bodies, named timeline features, or selected entities across a standard plane, named construction plane, or selected planar face.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name for the created mirror feature."},
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Body name or names to mirror."
+                    },
+                    "feature_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Timeline feature name or names to mirror."
+                    },
+                    "mirror_plane_name": {"type": "string", "default": "yz", "description": "Standard plane xy/xz/yz or named construction plane."},
+                    "use_selected_plane": {"type": "boolean", "default": False, "description": "Use the selected construction plane or planar face as the mirror plane."},
+                    "use_selected_entities": {"type": "boolean", "default": False, "description": "Mirror currently selected entities in addition to named bodies/features."}
+                }
+            }
+        },
+        {
             "name": "create_coil",
             "description": "Create a coil-like helical pipe feature in Fusion 360 and return design-state comparison.",
             "inputSchema": {

@@ -4,10 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Near-Term Tools
 
-- `mirror_features_or_bodies`
-  - Mirror selected or named bodies/features/sketch entities across standard origin planes, named construction planes, or selected planar faces.
-  - Return created names and before/after design-state comparison.
-
 - `pattern_feature`
   - Rectangular and circular patterning for bodies or features.
   - Support count, spacing/angle, axes, direction, and participant bodies where applicable.
@@ -48,3 +44,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `create_hole_pattern`
   - General hole-pattern cuts for explicit, rectangular, and circular point layouts.
   - Supports through, blind, counterbore, and countersink-intent cuts with structured result metadata.
+
+- `mirror_features_or_bodies`
+  - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.
+  - Returns created names and before/after design-state comparison.

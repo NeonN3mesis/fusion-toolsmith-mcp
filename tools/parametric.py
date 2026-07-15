@@ -256,6 +256,47 @@ def _find_body(root, body_name):
                 return body
     return None
 
+def _normalize_name_list(names):
+    if names is None:
+        return []
+    if isinstance(names, str):
+        return [names]
+    return [str(name) for name in names]
+
+def _collection_add(collection, entity):
+    try:
+        collection.add(entity)
+    except AttributeError:
+        collection.append(entity)
+
+def _collection_names(collection):
+    names = []
+    try:
+        count = collection.count
+        for index in range(count):
+            names.append(_safe_name(collection.item(index)))
+        return [name for name in names if name]
+    except Exception:
+        pass
+    for item in collection or []:
+        name = _safe_name(item)
+        if name:
+            names.append(name)
+    return names
+
+def _find_feature_entity(design, feature_name):
+    if not feature_name:
+        return None
+    timeline = getattr(design, "timeline", None)
+    if not timeline:
+        return None
+    for index in range(timeline.count):
+        item = timeline.item(index)
+        entity = getattr(item, "entity", None)
+        if getattr(entity, "name", None) == feature_name or getattr(item, "name", None) == feature_name:
+            return entity
+    return None
+
 def _set_participant_body(ext_input, body):
     if not body:
         return
@@ -789,6 +830,84 @@ def _safe_name(entity):
         return entity.name
     except Exception:
         return None
+
+@register_tool("mirror_features_or_bodies")
+def mirror_features_or_bodies(name="Mirror", body_names=None, feature_names=None, mirror_plane_name="yz", use_selected_plane=False, use_selected_entities=False):
+    design = get_active_design()
+    root = design.rootComponent
+    before = _capture_design_state()
+
+    mirror_plane = None
+    target_component = root
+    if use_selected_plane:
+        mirror_plane, selected_component = _selected_base_plane()
+        if not mirror_plane:
+            return {"error": "No selected construction plane or planar face found for mirror plane."}
+        target_component = selected_component or root
+    else:
+        mirror_plane, selected_component = _find_named_base_plane(root, mirror_plane_name)
+        if not mirror_plane:
+            return {"error": f"Mirror plane '{mirror_plane_name}' not found. Use xy, xz, yz, a named construction plane, or use_selected_plane=true."}
+        target_component = selected_component or root
+
+    entities = adsk.core.ObjectCollection.create()
+    resolved = {"bodies": [], "features": [], "selected": []}
+    missing = {"bodies": [], "features": []}
+
+    for body_name in _normalize_name_list(body_names):
+        body = _find_body(root, body_name)
+        if body:
+            _collection_add(entities, body)
+            resolved["bodies"].append(body_name)
+        else:
+            missing["bodies"].append(body_name)
+
+    for feature_name in _normalize_name_list(feature_names):
+        feature = _find_feature_entity(design, feature_name)
+        if feature:
+            _collection_add(entities, feature)
+            resolved["features"].append(feature_name)
+        else:
+            missing["features"].append(feature_name)
+
+    if use_selected_entities:
+        app = adsk.core.Application.get()
+        selections = getattr(getattr(app, "userInterface", None), "activeSelections", None)
+        selection_count = getattr(selections, "count", 0) if selections else 0
+        for index in range(selection_count):
+            entity = selections.item(index).entity
+            if entity == mirror_plane:
+                continue
+            _collection_add(entities, entity)
+            resolved["selected"].append(_safe_name(entity) or getattr(entity, "objectType", None) or f"selection[{index}]")
+
+    entity_count = getattr(entities, "count", len(entities) if hasattr(entities, "__len__") else 0)
+    if entity_count == 0:
+        return {"error": "No mirror input entities resolved. Provide body_names, feature_names, or use_selected_entities=true."}
+    if missing["bodies"] or missing["features"]:
+        return {"error": f"Mirror input entities were not found: bodies={missing['bodies']}, features={missing['features']}."}
+
+    mirror_features = target_component.features.mirrorFeatures
+    mirror_input = mirror_features.createInput(entities, mirror_plane)
+    try:
+        mirror_input.patternComputeOption = adsk.fusion.PatternComputeOptions.OptimizedPatternCompute
+    except Exception:
+        pass
+    mirror_feature = mirror_features.add(mirror_input)
+    mirror_feature.name = name
+
+    return {
+        "result": {
+            "message": f"Created mirror feature '{name}'.",
+            "featureName": mirror_feature.name,
+            "mirrorPlaneName": mirror_plane_name if not use_selected_plane else None,
+            "usedSelectedPlane": bool(use_selected_plane),
+            "resolvedInputs": resolved,
+            "resultBodies": _collection_names(getattr(mirror_feature, "bodies", None)),
+            "resultFeatures": _collection_names(getattr(mirror_feature, "resultFeatures", None)),
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
 
 @register_tool("create_coil")
 def create_coil(
