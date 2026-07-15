@@ -215,7 +215,7 @@ Use [docs/demo-script.md](docs/demo-script.md) to record the short demo GIF/vide
 
 ## CI And Releases
 
-GitHub Actions runs the unit suite and builds the add-in ZIP on pushes and pull requests.
+GitHub Actions runs the unit suite, checks the no-Fusion mock/schema surfaces, and builds the add-in ZIP on pushes and pull requests.
 
 To publish a GitHub release with the packaged add-in attached:
 

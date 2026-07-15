@@ -206,6 +206,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "fusion-toolsmith-mcp",
             "Fusion Toolsmith MCP",
             "README.md",
+            "Development Status :: 4 - Beta",
+            "Repository = \"https://github.com/NeonN3mesis/fusion-toolsmith-mcp\"",
             "fusion-mcp = \"fusion_mcp_cli.cli:main\"",
             "fusion_mcp_cli",
         ]:

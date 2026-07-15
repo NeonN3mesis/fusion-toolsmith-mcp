@@ -13,7 +13,7 @@ Initial public release of Fusion Toolsmith MCP.
 - Tool profiles for safer agent routing.
 - Redacted local tool-call journal.
 - Local Fusion API documentation search companion.
-- CLI helpers for install, config sync, live testing, profile listing, and package builds.
+- CLI helpers for install, config sync, live testing, profile listing, offline schema export, no-Fusion mock serving, and package builds.
 - GitHub Actions CI and release ZIP packaging.
 
 ### Install
