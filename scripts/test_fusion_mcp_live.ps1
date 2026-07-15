@@ -134,6 +134,7 @@ try {
         "inspect_design",
         "recommend_mcp_workflow",
         "extract_reference_dimensions",
+        "create_offset_plane",
         "create_rounded_rectangle_body",
         "create_rounded_slot_cut",
         "create_counterbore_hole_pattern",

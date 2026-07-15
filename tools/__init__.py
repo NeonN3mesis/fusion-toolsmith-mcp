@@ -601,6 +601,20 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "create_offset_plane",
+            "description": "Create a named construction plane offset from a standard plane, named construction plane, or currently selected planar face. Use before sketching features that need controlled depth or placement.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name for the new construction plane."},
+                    "base_plane_name": {"type": "string", "description": "Standard plane name xy/xz/yz or an existing construction plane name."},
+                    "offset": {"type": "string", "description": "Offset distance expression, e.g. '5 mm' or '-2 mm'."},
+                    "use_selected_plane": {"type": "boolean", "default": False, "description": "If true, offset from the currently selected construction plane or planar face."}
+                },
+                "required": ["offset"]
+            }
+        },
+        {
             "name": "clone_timeline_feature",
             "description": "Extract parameters and details of an existing timeline feature in the active design, creating a clean JSON recipe.",
             "inputSchema": {

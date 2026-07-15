@@ -562,6 +562,50 @@ def _point_on_plane(origin, u_dir, v_dir, normal, x, y, z):
     point.translateBy(n)
     return point
 
+@register_tool("create_offset_plane")
+def create_offset_plane(name="Offset Plane", base_plane_name="xy", offset="0 mm", use_selected_plane=False):
+    design = get_active_design()
+    root = design.rootComponent
+    before = _capture_design_state()
+
+    base_plane = None
+    target_component = None
+    if use_selected_plane:
+        base_plane, target_component = _selected_base_plane()
+        if not base_plane:
+            return {"error": "No selected construction plane or planar face found."}
+    else:
+        base_plane, target_component = _find_named_base_plane(root, base_plane_name)
+        if not base_plane:
+            return {"error": f"Base plane '{base_plane_name}' not found. Use xy, xz, yz, a named construction plane, or use_selected_plane=true."}
+
+    if not target_component:
+        target_component = root
+
+    planes = target_component.constructionPlanes
+    plane_input = planes.createInput()
+    plane_input.setByOffset(base_plane, adsk.core.ValueInput.createByString(str(offset)))
+    plane = planes.add(plane_input)
+    plane.name = name
+
+    return {
+        "result": {
+            "message": f"Created offset construction plane '{name}'.",
+            "planeName": plane.name,
+            "basePlaneName": base_plane_name if not use_selected_plane else None,
+            "usedSelectedPlane": bool(use_selected_plane),
+            "offset": offset,
+            "componentName": _safe_name(target_component),
+            "stateComparison": _compare_after_mutation(before),
+        }
+    }
+
+def _safe_name(entity):
+    try:
+        return entity.name
+    except Exception:
+        return None
+
 @register_tool("create_coil")
 def create_coil(
     name: str = "MCP_Coil",

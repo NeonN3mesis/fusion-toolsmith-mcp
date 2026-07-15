@@ -19,6 +19,8 @@ Generic Fusion MCP servers often expose a raw script bridge. Toolsmith adds a di
 
 Use Toolsmith when you want an agent to behave like a careful CAD assistant, not just a Python executor.
 
+See [docs/tooling-roadmap.md](docs/tooling-roadmap.md) for the general CAD tooling backlog.
+
 ## What It Is Good At
 
 - Inspecting existing designs before editing: sketches, features, parameters, projected geometry, selections, dependency reports, and coordinate mapping.

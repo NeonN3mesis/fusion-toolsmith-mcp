@@ -56,6 +56,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "doctor",
             "recommend_mcp_workflow",
             "extract_reference_dimensions",
+            "create_offset_plane",
             "create_rounded_rectangle_body",
             "create_rounded_slot_cut",
             "create_counterbore_hole_pattern",
@@ -143,6 +144,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "fusion://docs/fusion-api",
             "search_local_fusion_docs",
             "examples/prompts.md",
+            "docs/tooling-roadmap.md",
             "GitHub Actions",
             "LICENSE",
             "runOnStartup",
@@ -219,6 +221,20 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("inspection", payload["profiles"])
         self.assertIn("dangerous", payload["profiles"])
         self.assertIn("docs", payload["profiles"])
+
+    def test_tooling_roadmap_tracks_general_cad_gaps(self):
+        with open(os.path.join(ROOT, "docs", "tooling-roadmap.md"), "r", encoding="utf-8") as f:
+            roadmap = f.read()
+        for text in [
+            "create_hole_pattern",
+            "mirror_features_or_bodies",
+            "pattern_feature",
+            "create_rounded_pocket",
+            "shell_body",
+            "inspect_printability",
+            "capture_demo_sequence",
+        ]:
+            self.assertIn(text, roadmap)
 
 
 if __name__ == "__main__":
