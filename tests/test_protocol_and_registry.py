@@ -522,6 +522,44 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("script_intent", text)
         self.assertIn("mcp_tool_gap", text)
 
+    def test_domain_workflow_prompts_are_registered_and_tool_first(self):
+        prompt_names = {prompt["name"] for prompt in self.mcp_server.PROMPTS}
+        for prompt_name in [
+            "threaded_fastener_workflow",
+            "sheet_metal_enclosure_workflow",
+            "printability_review",
+            "physical_properties_review",
+        ]:
+            self.assertIn(prompt_name, prompt_names)
+
+        fastener = self.mcp_server.handle_prompt_get(
+            25,
+            "threaded_fastener_workflow",
+            {"diameter": "M4", "length": "16 mm"},
+        )
+        fastener_text = fastener["result"]["messages"][0]["content"]["text"]
+        self.assertIn("M4", fastener_text)
+        self.assertIn("16 mm", fastener_text)
+        self.assertIn("create_hole_pattern", fastener_text)
+        self.assertIn("inspect_printability", fastener_text)
+        self.assertIn("tool gap", fastener_text)
+
+        sheet_metal = self.mcp_server.handle_prompt_get(26, "sheet_metal_enclosure_workflow", {})
+        sheet_text = sheet_metal["result"]["messages"][0]["content"]["text"]
+        self.assertIn("get_physical_properties", sheet_text)
+        self.assertIn("do not invent flange, bend, unfold, or flat-pattern tools", sheet_text)
+
+        printability = self.mcp_server.handle_prompt_get(27, "printability_review", {})
+        printability_text = printability["result"]["messages"][0]["content"]["text"]
+        self.assertIn("get_physical_properties", printability_text)
+        self.assertIn("inspect_printability", printability_text)
+        self.assertIn("preflight_export", printability_text)
+
+        physical = self.mcp_server.handle_prompt_get(28, "physical_properties_review", {})
+        physical_text = physical["result"]["messages"][0]["content"]["text"]
+        self.assertIn("Call get_physical_properties", physical_text)
+        self.assertIn("read-only", physical_text)
+
     def test_tool_first_resource_returns_agent_policy(self):
         resource = self.tools.read_resource("fusion://agent/tool-first-workflow")
         self.assertEqual(resource["mandatoryFirstStep"], "doctor")

@@ -234,6 +234,29 @@ PROMPTS = [
         "name": "tool_first_workflow",
         "description": "Guide the agent to call doctor and use structured FusionMCP tools before falling back to raw scripts.",
         "arguments": []
+    },
+    {
+        "name": "threaded_fastener_workflow",
+        "description": "Guide the agent through a safe threaded-fastener modeling workflow using inspection, parameters, and structured feature tools.",
+        "arguments": [
+            {"name": "diameter", "description": "Nominal fastener diameter expression, for example M4 or 4 mm.", "required": False},
+            {"name": "length", "description": "Fastener length expression, for example 16 mm.", "required": False}
+        ]
+    },
+    {
+        "name": "sheet_metal_enclosure_workflow",
+        "description": "Guide the agent through a sheet-metal enclosure planning workflow without inventing unsupported sheet-metal operations.",
+        "arguments": []
+    },
+    {
+        "name": "printability_review",
+        "description": "Guide the agent through read-only printability, physical-property, and export-readiness checks.",
+        "arguments": []
+    },
+    {
+        "name": "physical_properties_review",
+        "description": "Guide the agent to report mass, volume, area, center of mass, materials, and body-level physical-property gaps.",
+        "arguments": []
     }
 ]
 
@@ -830,6 +853,38 @@ def handle_prompt_get(req_id, prompt_name, prompt_args):
             "extrude_feature, fillet_feature, chamfer_feature, preflight_model_change, validate_model, "
             "preflight_export, and export_asset. Only use run_fusion_script when no structured tool can safely "
             "perform the operation; provide script_intent and mcp_tool_gap."
+        )
+    elif prompt_name == "threaded_fastener_workflow":
+        diameter = prompt_args.get("diameter", "<diameter>")
+        length = prompt_args.get("length", "<length>")
+        text = (
+            f"Plan a threaded fastener with nominal diameter {diameter} and length {length}. Start with doctor, "
+            "inspect_design, and get_physical_properties if existing bodies are involved. Use parameters for "
+            "diameter, length, head size, pitch/thread representation, clearance, and tolerances. Prefer structured "
+            "sketch, extrude_feature, revolve_feature, create_hole_pattern, chamfer_feature, fillet_feature, and "
+            "inspect_printability tools. Do not fake real manufacturable threads unless the user explicitly accepts "
+            "cosmetic/thread-representation limitations; report any missing thread or CAM capability as a tool gap."
+        )
+    elif prompt_name == "sheet_metal_enclosure_workflow":
+        text = (
+            "Plan a sheet-metal enclosure workflow. Start with doctor, inspect_design, get_physical_properties, "
+            "get_timeline, and inspect_printability. Identify sheet thickness, bend radius, flange widths, reliefs, "
+            "fastener clearances, and flat-pattern/export requirements. Use current structured sketch/modeling tools "
+            "only for geometry they explicitly support, and do not invent flange, bend, unfold, or flat-pattern tools. "
+            "If true sheet-metal APIs are needed, stop and report the missing sheet-metal tool gap before using raw scripts."
+        )
+    elif prompt_name == "printability_review":
+        text = (
+            "Run a read-only printability review. Start with doctor and inspect_design, then call get_physical_properties "
+            "and inspect_printability with mesh analysis enabled. Report bounding boxes, mass/volume/area, material gaps, "
+            "thin walls, small holes, narrow slots, risky overhangs, and any warnings that still require slicer preview. "
+            "Do not mutate geometry or export until preflight_export is clean or the user accepts the remaining risk."
+        )
+    elif prompt_name == "physical_properties_review":
+        text = (
+            "Call get_physical_properties for all bodies. Summarize mass, volume, surface area, density, center of mass, "
+            "bounding boxes, physical materials, appearances, invisible bodies, non-solid bodies, and any bodies where "
+            "Fusion did not expose physicalProperties. Keep this review read-only."
         )
     else:
         return make_jsonrpc_error(req_id, -32602, f"Unknown prompt: {prompt_name}")

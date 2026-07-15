@@ -26,9 +26,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - Mock/simulation mode
   - Provide a deterministic no-Fusion mode for client integration tests, docs screenshots, and CI smoke coverage.
 
-- First-class MCP prompts
-  - Add focused workflow prompts for common CAD tasks such as threaded fasteners, sheet-metal enclosures, export readiness, and printability review.
-
 ## Implemented
 
 - `create_offset_plane`
@@ -116,3 +113,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `get_physical_properties`
   - Read-only body mass, volume, area, density, center-of-mass, bounding-box, material, and appearance report.
   - Supports single-body, entity-token, and all-body inspection without mutating the design.
+
+- First-class MCP prompts
+  - Adds workflow prompts for tool-first routing, export readiness, threaded fasteners, sheet-metal enclosure planning, printability review, and physical-property review.
+  - Prompt text routes agents toward structured tools and explicitly calls out unsupported CAD-domain gaps instead of encouraging invented raw-script behavior.

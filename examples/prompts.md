@@ -16,6 +16,10 @@ Inspect the available Fusion Toolsmith tool profiles and tell me which profile y
 List the tool profiles and choose the smallest profile set needed for a read-only review of this model.
 ```
 
+```text
+Use the physical_properties_review MCP prompt, then execute the read-only checks it recommends.
+```
+
 ## Inspection First
 
 ```text
@@ -67,6 +71,14 @@ Create a new feature only after inspecting the active component and checking lik
 ```
 
 ```text
+Use the threaded_fastener_workflow MCP prompt for an M4 x 16 mm fastener. Follow the structured-tool plan and report any thread-modeling limitations before creating geometry.
+```
+
+```text
+Use the sheet_metal_enclosure_workflow MCP prompt. Plan the enclosure and stop at the missing-tool gap if true flange, bend, unfold, or flat-pattern APIs are required.
+```
+
+```text
 Inspect the target body's faces and edges, then shell it with an explicit wall thickness. Use face indices for any open faces and compare design state before and after.
 ```
 
@@ -98,6 +110,10 @@ Inspect this sketch's constraints. If one constraint needs removal, use its insp
 
 ```text
 Preflight this model for a 3D-printable STL export. Do not export until the preflight report is clean or you explain the remaining risk.
+```
+
+```text
+Use the printability_review MCP prompt, run the read-only checks, and separate Toolsmith warnings from slicer-preview risks.
 ```
 
 ```text
