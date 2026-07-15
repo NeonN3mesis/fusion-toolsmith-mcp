@@ -2,12 +2,6 @@
 
 This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these tools domain-neutral: no product-specific dimensions, names, or workflows.
 
-## Validation And Presentation
-
-- `capture_demo_sequence`
-  - General presentation helper for named camera views, staged visibility, screenshots, and before/after capture steps.
-  - Must remain generic and independent of any one project or model category.
-
 ## Implemented
 
 - `create_offset_plane`
@@ -50,3 +44,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `inspect_printability`
   - General read-only FDM sanity report: bounding boxes, thin/tiny/narrow feature candidates, small rounded-hole candidates, and risky downward-face/overhang candidates.
   - Reports warnings and limitations only; does not mutate geometry or claim slicer-level validation.
+
+- `capture_demo_sequence`
+  - General presentation helper for named camera views, staged visibility, screenshots, and before/after capture steps.
+  - Captures still PNG frames for external video assembly and remains independent of any one project or model category.

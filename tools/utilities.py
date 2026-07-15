@@ -60,6 +60,8 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "preflight_export",
     "export_asset",
     "create_2d_drawing",
+    "capture_view",
+    "capture_demo_sequence",
     "create_offset_plane",
     "create_construction_point",
     "create_construction_axis",
@@ -149,7 +151,7 @@ _TOOL_FIRST_POLICY = {
         },
         "export": {
             "firstTools": ["doctor", "inspect_design", "preflight_export"],
-            "preferredTools": ["export_asset", "create_2d_drawing"],
+            "preferredTools": ["export_asset", "create_2d_drawing", "capture_view", "capture_demo_sequence"],
         },
         "mcp_runtime_troubleshooting": {
             "firstTools": ["doctor", "get_runtime_diagnostics"],
@@ -877,6 +879,172 @@ def capture_view(view_name="iso"):
     
     viewport.saveAsImageFile(file_path, 1920, 1080)
     return {"result": f"Screenshot saved to {file_path}"}
+
+
+def _safe_filename(value):
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(value or "step"))
+    return cleaned.strip("_") or "step"
+
+
+def _entity_visibility(entity):
+    if hasattr(entity, "isLightBulbOn"):
+        return "isLightBulbOn", _safe_value(lambda: entity.isLightBulbOn)
+    if hasattr(entity, "isVisible"):
+        return "isVisible", _safe_value(lambda: entity.isVisible)
+    return None, None
+
+
+def _visibility_snapshot(root):
+    snapshot = []
+    for component in _all_components(root):
+        for collection_name, collection_getter in (
+            ("body", lambda component=component: component.bRepBodies),
+            ("sketch", lambda component=component: component.sketches),
+            ("constructionPlane", lambda component=component: component.constructionPlanes),
+        ):
+            for entity in _collection_items(_safe_value(collection_getter)):
+                attr, value = _entity_visibility(entity)
+                if attr:
+                    snapshot.append({
+                        "entity": entity,
+                        "attr": attr,
+                        "value": value,
+                        "kind": collection_name,
+                        "name": _safe_value(lambda entity=entity: entity.name),
+                    })
+    return snapshot
+
+
+def _restore_visibility(snapshot):
+    restored = []
+    for item in snapshot:
+        entity = item.get("entity")
+        attr = item.get("attr")
+        if entity is None or not attr:
+            continue
+        try:
+            setattr(entity, attr, item.get("value"))
+            restored.append({"kind": item.get("kind"), "name": item.get("name")})
+        except Exception:
+            continue
+    return restored
+
+
+def _capture_view_to_file(view_name, output_dir, filename, width, height):
+    os.makedirs(output_dir, exist_ok=True)
+    app = adsk.core.Application.get()
+    viewport = app.activeViewport
+    camera_result = set_camera(view_name)
+    if "error" in camera_result:
+        return None, camera_result
+    file_path = os.path.join(output_dir, filename)
+    viewport.saveAsImageFile(file_path, int(width), int(height))
+    return file_path, camera_result
+
+
+@register_tool("capture_demo_sequence")
+def capture_demo_sequence(steps=None, output_dir=None, view_names=None, image_width=1920, image_height=1080, restore_visibility=True, hide_all_sketches=False, hide_all_construction_planes=False):
+    """
+    Generic demo capture helper for staged visibility and named camera views.
+
+    This captures still frames for later video editing. It does not encode video
+    and does not contain model-specific dimensions or project assumptions.
+    """
+    try:
+        import tempfile
+        design = get_active_design()
+        root = design.rootComponent
+        before = _design_state_snapshot(include_selections=True)
+        visibility_before = _visibility_snapshot(root)
+        capture_dir = output_dir or os.path.join(tempfile.gettempdir(), f"fusion_demo_sequence_{uuid.uuid4().hex[:8]}")
+
+        if steps is None:
+            names = view_names or ["iso"]
+            steps = [{"name": str(name), "view_name": str(name), "capture": True} for name in names]
+        if not isinstance(steps, list) or not steps:
+            return {"error": "steps must be a non-empty array, or omit steps and provide optional view_names."}
+
+        results = []
+        for index, step in enumerate(steps, start=1):
+            if not isinstance(step, dict):
+                return {"error": f"step {index} must be an object."}
+            step_name = step.get("name") or f"step_{index:02d}"
+            step_visibility = None
+            visibility_requested = any(
+                key in step for key in (
+                    "body_names",
+                    "sketch_names",
+                    "construction_plane_names",
+                    "visible",
+                    "hide_all_sketches",
+                    "hide_all_construction_planes",
+                )
+            )
+            if visibility_requested or hide_all_sketches or hide_all_construction_planes:
+                step_visibility = set_visibility(
+                    body_names=step.get("body_names"),
+                    sketch_names=step.get("sketch_names"),
+                    construction_plane_names=step.get("construction_plane_names"),
+                    visible=step.get("visible", True),
+                    hide_all_sketches=bool(step.get("hide_all_sketches", hide_all_sketches)),
+                    hide_all_construction_planes=bool(step.get("hide_all_construction_planes", hide_all_construction_planes)),
+                    clear_selection=bool(step.get("clear_selection", True)),
+                )
+
+            captured_path = None
+            camera_result = None
+            if step.get("capture", True):
+                view_name = step.get("view_name") or step.get("orientation") or "iso"
+                filename = f"{index:02d}_{_safe_filename(step_name)}_{_safe_filename(view_name)}.png"
+                captured_path, camera_result = _capture_view_to_file(
+                    view_name,
+                    capture_dir,
+                    filename,
+                    step.get("image_width", image_width),
+                    step.get("image_height", image_height),
+                )
+                if not captured_path:
+                    restored = _restore_visibility(visibility_before) if restore_visibility else []
+                    return {
+                        "error": f"Failed to capture step '{step_name}': {camera_result.get('error') if camera_result else 'unknown camera error'}",
+                        "restoredVisibility": restored,
+                    }
+
+            results.append({
+                "index": index,
+                "name": step_name,
+                "viewName": step.get("view_name") or step.get("orientation") or "iso",
+                "filePath": captured_path,
+                "note": step.get("note"),
+                "visibility": step_visibility,
+                "camera": camera_result,
+            })
+
+        after_steps = _design_state_snapshot(include_selections=True)
+        restored = []
+        if restore_visibility:
+            restored = _restore_visibility(visibility_before)
+        after_restore = _design_state_snapshot(include_selections=True)
+
+        return {
+            "result": {
+                "outputDir": capture_dir,
+                "frames": results,
+                "frameCount": len([frame for frame in results if frame.get("filePath")]),
+                "restoreVisibility": bool(restore_visibility),
+                "restoredVisibility": restored,
+                "stateComparisonAfterSteps": compare_design_state(before, after_steps).get("result"),
+                "stateComparisonAfterRestore": compare_design_state(before, after_restore).get("result"),
+                "notes": [
+                    "This tool captures still PNG frames only; use a video editor or ffmpeg to assemble video.",
+                    "Steps are generic camera/visibility staging instructions and contain no project-specific assumptions.",
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error capturing demo sequence: {e}\n{err}")
+        return {"error": f"Failed to capture demo sequence: {str(e)}"}
 
 
 def _timeline_health_report(design):

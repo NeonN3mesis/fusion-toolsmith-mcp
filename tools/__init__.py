@@ -1041,6 +1041,49 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "capture_demo_sequence",
+            "description": "Capture a generic sequence of staged PNG frames using named camera views and optional per-step visibility changes. Restores visibility by default and reports before/after design-state comparisons.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "description": "Optional ordered capture steps. Omit to capture the view_names list or a single iso frame.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "view_name": {"type": "string", "enum": ["top", "bottom", "left", "right", "front", "back", "iso"]},
+                                "orientation": {"type": "string", "enum": ["top", "bottom", "left", "right", "front", "back", "iso"]},
+                                "capture": {"type": "boolean", "default": True},
+                                "body_names": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                                "sketch_names": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                                "construction_plane_names": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                                "visible": {"type": "boolean", "default": True},
+                                "hide_all_sketches": {"type": "boolean"},
+                                "hide_all_construction_planes": {"type": "boolean"},
+                                "clear_selection": {"type": "boolean", "default": True},
+                                "image_width": {"type": "integer"},
+                                "image_height": {"type": "integer"},
+                                "note": {"type": "string"}
+                            }
+                        }
+                    },
+                    "view_names": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["top", "bottom", "left", "right", "front", "back", "iso"]},
+                        "description": "Convenience list used when steps is omitted."
+                    },
+                    "output_dir": {"type": "string", "description": "Directory where PNG frames should be written. Defaults to a temp directory."},
+                    "image_width": {"type": "integer", "default": 1920},
+                    "image_height": {"type": "integer", "default": 1080},
+                    "restore_visibility": {"type": "boolean", "default": True},
+                    "hide_all_sketches": {"type": "boolean", "default": False},
+                    "hide_all_construction_planes": {"type": "boolean", "default": False}
+                }
+            }
+        },
+        {
             "name": "validate_model",
             "description": "Check for constraints, broken references, timeline warnings, and naming conventions. Instructions: Run this before finishing a task to ensure the model remains in a healthy, parametric state.",
             "inputSchema": {"type": "object", "properties": {}}

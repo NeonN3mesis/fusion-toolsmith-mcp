@@ -148,7 +148,8 @@ try {
         "mirror_features_or_bodies",
         "pattern_feature",
         "shell_body",
-        "set_visibility"
+        "set_visibility",
+        "capture_demo_sequence"
     )
     $missingTools = @($requiredTools | Where-Object { $toolNames -notcontains $_ })
     if ($toolsResponse.id -ne 2 -or $missingTools.Count -gt 0) {

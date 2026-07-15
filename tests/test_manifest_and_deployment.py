@@ -71,6 +71,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "pattern_feature",
             "shell_body",
             "set_visibility",
+            "capture_demo_sequence",
             "bearer_sse_url",
             "Authorization",
             "TaskManager is not running",

@@ -1394,6 +1394,7 @@ def run(context):
         self.assertIn("mirror_features_or_bodies", tool_names)
         self.assertIn("pattern_feature", tool_names)
         self.assertIn("set_visibility", tool_names)
+        self.assertIn("capture_demo_sequence", tool_names)
         self.assertIn("revert_active_document", tool_names)
         self.assertIn("get_runtime_diagnostics", tool_names)
         self.assertIn("doctor", tool_names)
@@ -1691,6 +1692,85 @@ def run(context):
         self.assertIn("tiny_edge_features", codes)
         self.assertIn("small_hole_or_pin_candidate", codes)
         self.assertIn("risky_overhang_or_lip_candidate", codes)
+
+    def test_capture_demo_sequence_writes_frames_and_restores_visibility(self):
+        class FakeViewport:
+            def __init__(self):
+                self.camera = types.SimpleNamespace(viewOrientation=None)
+                self.fit_called = False
+                self.saved = []
+
+            def fit(self):
+                self.fit_called = True
+
+            def saveAsImageFile(self, path, width, height):
+                self.saved.append((path, width, height))
+                with open(path, "wb") as f:
+                    f.write(b"fake-png")
+
+        body = types.SimpleNamespace(
+            name="BodyA",
+            isVisible=True,
+            isLightBulbOn=True,
+            isSolid=True,
+            entityToken="body-token",
+            boundingBox=None,
+            physicalProperties=None,
+        )
+        sketch = types.SimpleNamespace(
+            name="SketchA",
+            isVisible=True,
+            isLightBulbOn=True,
+            isFullyConstrained=True,
+            boundingBox=None,
+            sketchDimensions=[],
+            geometricConstraints=[],
+            sketchPoints=[],
+            sketchCurves=types.SimpleNamespace(),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[body],
+            sketches=[sketch],
+            constructionPlanes=[],
+            occurrences=[],
+            allOccurrences=[],
+        )
+        _fake_app.activeViewport = FakeViewport()
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+            designType="parametric",
+            userParameters=[],
+            allParameters=[],
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+        )
+        _fake_app.activeDocument = types.SimpleNamespace(name="DemoDoc", isModified=False)
+        _fake_app.documents = [_fake_app.activeDocument]
+        output_dir = os.path.join(self.temp_dir.name, "frames")
+
+        res = self.tools.execute_tool("capture_demo_sequence", {
+            "output_dir": output_dir,
+            "image_width": 320,
+            "image_height": 180,
+            "steps": [
+                {
+                    "name": "hide_body",
+                    "view_name": "front",
+                    "body_names": ["BodyA"],
+                    "visible": False,
+                }
+            ],
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertEqual(result["frameCount"], 1)
+        self.assertTrue(os.path.exists(result["frames"][0]["filePath"]))
+        self.assertEqual(_fake_app.activeViewport.saved[0][1:], (320, 180))
+        self.assertTrue(_fake_app.activeViewport.fit_called)
+        self.assertTrue(body.isLightBulbOn)
+        self.assertTrue(result["restoreVisibility"])
 
     def test_compare_design_state_reports_unintended_changes(self):
         before = {

@@ -79,7 +79,9 @@
       "tools": [
         "preflight_export",
         "export_asset",
-        "create_2d_drawing"
+        "create_2d_drawing",
+        "capture_view",
+        "capture_demo_sequence"
       ]
     },
     "docs": {
