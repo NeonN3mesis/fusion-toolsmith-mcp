@@ -56,6 +56,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "server.mcp_server",
             "tools",
             "mcp_primitives",
+            "_try_stop_runtime_modules",
+            "stopped without loaded runtime modules",
         ]:
             self.assertIn(text, addin_entrypoint)
 

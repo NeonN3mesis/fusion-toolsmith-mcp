@@ -16,6 +16,10 @@ mcp_server_module = None
 task_manager_module = None
 
 
+def _addin_root():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def _runtime_prefixes():
     prefixes = ["server", "tools", "mcp_primitives"]
     package = __package__
@@ -35,7 +39,7 @@ def _clear_runtime_modules():
 
 
 def _ensure_addin_root_on_path():
-    addin_root = os.path.dirname(os.path.abspath(__file__))
+    addin_root = _addin_root()
     if addin_root and addin_root not in sys.path:
         sys.path.insert(0, addin_root)
     return addin_root
@@ -75,6 +79,33 @@ def stop_task_manager():
     _, manager_module = _load_runtime_modules(force_reload=False)
     return manager_module.stop_task_manager()
 
+
+def _try_stop_runtime_modules():
+    stopped_any = False
+    errors = []
+    server_module = mcp_server_module
+    manager_module = task_manager_module
+    if server_module is None or manager_module is None:
+        try:
+            server_module, manager_module = _load_runtime_modules(force_reload=False)
+        except Exception as exc:
+            return stopped_any, [f"runtime modules unavailable during stop: {exc}"]
+
+    if server_module:
+        try:
+            server_module.stop_server()
+            stopped_any = True
+        except Exception as exc:
+            errors.append(f"stop_server failed: {exc}")
+    if manager_module:
+        try:
+            manager_module.stop_task_manager()
+            stopped_any = True
+        except Exception as exc:
+            errors.append(f"stop_task_manager failed: {exc}")
+    return stopped_any, errors
+
+
 def run(context):
     global app, ui, backgroundThread
     try:
@@ -106,20 +137,20 @@ def stop(context):
     try:
         if app:
             app.log("Stopping Fusion MCP Add-In")
-        server_module, manager_module = _load_runtime_modules(force_reload=False)
-
-        # Stop HTTP server and clean up sockets/files
-        server_module.stop_server()
-
-        # Stop TaskManager custom event handler
-        manager_module.stop_task_manager()
+        stopped_runtime, stop_errors = _try_stop_runtime_modules()
+        for stop_error in stop_errors:
+            if app:
+                app.log(f"Fusion MCP Add-In stop warning: {stop_error}")
 
         if backgroundThread and backgroundThread.is_alive():
             backgroundThread.join(timeout=2.0)
         backgroundThread = None
 
         if app:
-            app.log("Fusion MCP Add-In stopped successfully.")
+            if stopped_runtime:
+                app.log("Fusion MCP Add-In stopped successfully.")
+            else:
+                app.log("Fusion MCP Add-In stopped without loaded runtime modules.")
     except Exception as e:
         if ui:
             ui.messageBox(f'Failed to stop Fusion MCP Add-In cleanly:\n{str(e)}\n{traceback.format_exc()}')
