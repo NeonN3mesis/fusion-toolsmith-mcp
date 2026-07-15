@@ -619,6 +619,26 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("modeling", resource["profiles"])
         self.assertIn("tool_first_workflow", resource["prompts"])
         self.assertGreater(resource["counts"]["tools"], 0)
+        self.assertEqual(resource["toolAnnotations"]["coverage"], resource["counts"]["tools"])
+        self.assertIn("readOnlyHint", resource["toolAnnotations"]["fields"])
+
+    def test_tool_schemas_include_mcp_risk_annotations(self):
+        schemas = {schema["name"]: schema for schema in self.tools.get_tool_schemas()}
+
+        for name, schema in schemas.items():
+            annotations = schema.get("annotations")
+            self.assertIsInstance(annotations, dict, name)
+            for key in ("title", "readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
+                self.assertIn(key, annotations, name)
+
+        self.assertTrue(schemas["inspect_design"]["annotations"]["readOnlyHint"])
+        self.assertFalse(schemas["inspect_design"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["set_parameter"]["annotations"]["idempotentHint"])
+        self.assertFalse(schemas["create_box"]["annotations"]["idempotentHint"])
+        self.assertFalse(schemas["create_box"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["run_fusion_script"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["clear_change_journal"]["annotations"]["destructiveHint"])
+        self.assertFalse(schemas["search_local_fusion_docs"]["annotations"]["openWorldHint"])
 
     def test_list_appearances_reports_design_and_library_matches(self):
         design_appearance = types.SimpleNamespace(

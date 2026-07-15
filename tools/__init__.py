@@ -10,6 +10,101 @@ import traceback
 tools_registry = {}
 resources_registry = {}
 
+_DESTRUCTIVE_TOOLS = {
+    "clear_change_journal",
+    "delete_sketch_constraint",
+    "delete_sketch_dimension",
+    "delete_timeline_feature",
+    "suppress_timeline_feature",
+    "undo_last_action",
+    "revert_active_document",
+    "run_fusion_script",
+}
+
+_NON_IDEMPOTENT_MUTATION_PREFIXES = (
+    "add_",
+    "clone_",
+    "combine_",
+    "convert_",
+    "create_",
+    "draw_",
+    "extrude_",
+    "fillet_",
+    "chamfer_",
+    "loft_",
+    "mirror_",
+    "pattern_",
+    "project_",
+    "reorganize_",
+    "revolve_",
+    "shell_",
+    "sweep_",
+)
+
+_READ_ONLY_TOOL_NAMES = {
+    "assess_change_impact",
+    "capture_design_state",
+    "compare_design_state",
+    "doctor",
+    "extract_reference_dimensions",
+    "get_assembly_joints",
+    "get_assembly_references",
+    "get_assembly_tree",
+    "get_best_practices",
+    "get_body_edges",
+    "get_body_faces",
+    "get_change_journal",
+    "get_current_selection",
+    "get_dependency_graph",
+    "get_feature_dependencies",
+    "get_feature_parameters",
+    "get_fusion_api_help",
+    "get_mcp_workflow_guide",
+    "get_parameter",
+    "get_parameter_usage",
+    "get_physical_properties",
+    "get_projected_geometry_sources",
+    "get_runtime_diagnostics",
+    "get_sketch_dimensions",
+    "get_sketch_parameters",
+    "get_timeline",
+    "git_status",
+    "inspect_body_style",
+    "inspect_design",
+    "inspect_feature",
+    "inspect_printability",
+    "inspect_sketch",
+    "list_appearances",
+    "list_documents",
+    "map_coordinates",
+    "measure_entity",
+    "plan_parameterization",
+    "preflight_export",
+    "preflight_model_change",
+    "query_selection",
+    "recommend_mcp_workflow",
+    "search_fusion_api_documentation",
+    "search_local_fusion_docs",
+    "validate_model",
+}
+
+_IDEMPOTENT_MUTATION_TOOLS = {
+    "apply_appearance",
+    "edit_sketch_dimension",
+    "export_asset",
+    "export_parameters_csv",
+    "import_parameters_csv",
+    "modify_parameters",
+    "offset_face_or_press_pull",
+    "set_active_document",
+    "set_camera",
+    "set_parameter",
+    "set_timeline_marker",
+    "set_visibility",
+}
+
+_USER_INTERACTION_TOOLS = {"prompt_user"}
+
 def register_tool(name):
     def decorator(func):
         tools_registry[name] = func
@@ -21,6 +116,38 @@ def register_resource(pattern):
         resources_registry[pattern] = func
         return func
     return decorator
+
+def _tool_title(name):
+    return str(name).replace("_", " ").title()
+
+def _tool_annotations(name):
+    read_only = name in _READ_ONLY_TOOL_NAMES
+    destructive = name in _DESTRUCTIVE_TOOLS
+    idempotent = read_only or name in _IDEMPOTENT_MUTATION_TOOLS
+    if any(name.startswith(prefix) for prefix in _NON_IDEMPOTENT_MUTATION_PREFIXES):
+        idempotent = False
+    if name in _USER_INTERACTION_TOOLS:
+        idempotent = False
+    return {
+        "title": _tool_title(name),
+        "readOnlyHint": bool(read_only),
+        "destructiveHint": bool(destructive),
+        "idempotentHint": bool(idempotent),
+        "openWorldHint": False,
+    }
+
+def _with_tool_annotations(schemas):
+    annotated = []
+    for schema in schemas:
+        item = dict(schema)
+        name = item.get("name")
+        if name:
+            existing = dict(item.get("annotations") or {})
+            annotations = _tool_annotations(name)
+            annotations.update(existing)
+            item["annotations"] = annotations
+        annotated.append(item)
+    return annotated
 
 @register_resource("fusion://agent/tool-profiles")
 def read_tool_profiles():
@@ -96,11 +223,16 @@ def read_server_capabilities():
             "profiles": len(profile_data.get("profiles", {})),
             "prompts": len(prompts),
         },
+        "toolAnnotations": {
+            "coverage": sum(1 for tool in tool_schemas if tool.get("annotations")),
+            "fields": ["title", "readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"],
+        },
         "prompts": prompts,
         "profiles": sorted(profile_data.get("profiles", {}).keys()),
         "notableCapabilities": [
             "structured CAD tools before raw scripts",
             "machine-readable tool profiles",
+            "MCP tool annotations for client approval and risk UI",
             "read-only inspection and physical-property reports",
             "preflighted model changes and exports",
             "local redacted change journal",
@@ -109,7 +241,7 @@ def read_server_capabilities():
     }
 
 def get_tool_schemas():
-    return [
+    schemas = [
         {
             "name": "inspect_design",
             "description": "Summarize the current design state (components, bodies, sketches, timeline, parameters, units, warnings). Instructions: Always use this tool when starting a task or after losing context. Understand the current units (e.g., 'cm' vs 'mm') before making changes. Review the timeline for warnings and identify the root component.",
@@ -1748,6 +1880,7 @@ def get_tool_schemas():
             }
         }
     ]
+    return _with_tool_annotations(schemas)
 
 def get_resources_schemas():
     return [

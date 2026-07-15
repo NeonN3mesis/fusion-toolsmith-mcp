@@ -122,3 +122,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - Server capability/adoption metadata
   - `fusion://agent/server-capabilities` summarizes supported transports, discovery keys, safety gates, profiles, prompts, and capability counts.
   - `/health` advertises both legacy SSE and Streamable HTTP compatibility while keeping credentials out of the health payload.
+
+- MCP tool risk annotations
+  - Every advertised tool includes MCP `annotations` hints for read-only, destructive, idempotent, and open-world behavior.
+  - Clients can use these hints for approval prompts and tool filtering; they are advisory metadata, not a replacement for Toolsmith's runtime guardrails.
