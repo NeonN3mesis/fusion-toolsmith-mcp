@@ -1,7 +1,8 @@
 param(
     [string]$AddInsRoot = "$env:APPDATA\Autodesk\Autodesk Fusion 360\API\AddIns",
     [string]$AddInName = "FusionMCP",
-    [string]$LegacyAddInName = "Fusion MCP Addin"
+    [string]$LegacyAddInName = "Fusion MCP Addin",
+    [switch]$KeepLegacyAddIn
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,19 +40,25 @@ foreach ($dir in $requiredDirs) {
 
 New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
 
-$legacyManifest = Join-Path (Join-Path $AddInsRoot $LegacyAddInName) "$LegacyAddInName.manifest"
-if (Test-Path -LiteralPath $legacyManifest -PathType Leaf) {
-    $legacyBackup = "$legacyManifest.bak"
-    if (-not (Test-Path -LiteralPath $legacyBackup -PathType Leaf)) {
-        Copy-Item -LiteralPath $legacyManifest -Destination $legacyBackup -Force
+$legacyRoot = Join-Path $AddInsRoot $LegacyAddInName
+if (-not $KeepLegacyAddIn -and (Test-Path -LiteralPath $legacyRoot -PathType Container)) {
+    $resolvedAddInsRoot = (Resolve-Path -LiteralPath $AddInsRoot).Path
+    $resolvedLegacyRoot = (Resolve-Path -LiteralPath $legacyRoot).Path
+    if (-not $resolvedLegacyRoot.StartsWith($resolvedAddInsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to move legacy add-in outside AddIns root: $resolvedLegacyRoot"
     }
 
-    $legacyText = Get-Content -LiteralPath $legacyManifest -Raw
-    if ($legacyText -match '"runOnStartup"\s*:\s*true') {
-        $legacyText = [regex]::Replace($legacyText, '"runOnStartup"\s*:\s*true', '"runOnStartup": false', 1)
-        Set-Content -LiteralPath $legacyManifest -Value $legacyText -Encoding UTF8
-        Write-Host "Disabled runOnStartup for legacy add-in: $LegacyAddInName"
+    $disabledRoot = Join-Path (Split-Path -Parent $AddInsRoot) "AddInsDisabled"
+    New-Item -ItemType Directory -Force -Path $disabledRoot | Out-Null
+    $legacyTargetBase = Join-Path $disabledRoot "$LegacyAddInName.disabled-legacy"
+    $legacyTarget = $legacyTargetBase
+    $suffix = 1
+    while (Test-Path -LiteralPath $legacyTarget) {
+        $suffix++
+        $legacyTarget = "$legacyTargetBase-$suffix"
     }
+    Move-Item -LiteralPath $legacyRoot -Destination $legacyTarget
+    Write-Host "Moved legacy Fusion MCP add-in outside Fusion scan path: $legacyTarget"
 }
 
 foreach ($file in $requiredFiles) {

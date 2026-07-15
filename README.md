@@ -66,6 +66,8 @@ Install or refresh the Fusion add-in files:
 fusion-mcp install-addin
 ```
 
+If the old prototype add-in folder `Fusion MCP Addin` is present, the installer moves it to `AddInsDisabled` so it cannot keep claiming port `9100` or serve stale tools. Use `--keep-legacy-addin` only if you are intentionally testing that older add-in.
+
 Build a distributable add-in ZIP:
 
 ```powershell

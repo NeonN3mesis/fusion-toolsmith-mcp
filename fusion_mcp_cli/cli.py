@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 ADDIN_NAME = "FusionMCP"
+LEGACY_ADDIN_NAME = "Fusion MCP Addin"
 SERVER_NAME = "autodesk-fusion-mcp"
 REQUIRED_FILES = (
     "__init__.py",
@@ -33,6 +34,10 @@ def default_addins_root():
     if not appdata:
         raise RuntimeError("APPDATA is not set; pass --addins-root explicitly.")
     return Path(appdata) / "Autodesk" / "Autodesk Fusion 360" / "API" / "AddIns"
+
+
+def disabled_addins_root(addins_root):
+    return Path(addins_root).parent / "AddInsDisabled"
 
 
 def discovery_path():
@@ -70,6 +75,28 @@ def validate_addin_payload(source):
             raise RuntimeError(f"Required directory missing: {path}")
 
 
+def quarantine_legacy_addin(addins_root, legacy_name=LEGACY_ADDIN_NAME):
+    addins_root = Path(addins_root).resolve()
+    legacy_path = (addins_root / legacy_name).resolve()
+    if not legacy_path.exists():
+        return None
+    if not legacy_path.is_dir():
+        raise RuntimeError(f"Legacy add-in path exists but is not a directory: {legacy_path}")
+    if addins_root not in legacy_path.parents:
+        raise RuntimeError(f"Refusing to move legacy add-in outside AddIns root: {legacy_path}")
+
+    disabled_root = disabled_addins_root(addins_root)
+    disabled_root.mkdir(parents=True, exist_ok=True)
+    base_target = disabled_root / f"{legacy_name}.disabled-legacy"
+    target = base_target
+    suffix = 1
+    while target.exists():
+        suffix += 1
+        target = disabled_root / f"{legacy_name}.disabled-legacy-{suffix}"
+    shutil.move(str(legacy_path), str(target))
+    return target
+
+
 def iter_addin_payload(source):
     for name in REQUIRED_FILES:
         yield source / name, Path(name)
@@ -89,6 +116,10 @@ def command_install_addin(args):
     target = addins_root / args.addin_name
     validate_addin_payload(source)
     target.mkdir(parents=True, exist_ok=True)
+    if not args.keep_legacy_addin:
+        quarantined = quarantine_legacy_addin(addins_root, args.legacy_addin_name)
+        if quarantined:
+            print(f"Moved legacy Fusion MCP add-in outside Fusion scan path: {quarantined}")
     for name in REQUIRED_FILES:
         shutil.copy2(source / name, target / name)
     for name in REQUIRED_DIRS:
@@ -228,6 +259,8 @@ def build_parser():
     install = subparsers.add_parser("install-addin")
     install.add_argument("--addins-root")
     install.add_argument("--addin-name", default=ADDIN_NAME)
+    install.add_argument("--legacy-addin-name", default=LEGACY_ADDIN_NAME)
+    install.add_argument("--keep-legacy-addin", action="store_true")
     install.set_defaults(func=command_install_addin)
 
     package = subparsers.add_parser("package-addin")

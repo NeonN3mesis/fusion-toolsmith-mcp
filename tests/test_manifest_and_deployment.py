@@ -32,7 +32,9 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "tool_profiles.json",
             "__pycache__",
             "LegacyAddInName",
-            "runOnStartup",
+            "KeepLegacyAddIn",
+            "AddInsDisabled",
+            "disabled-legacy",
         ]:
             self.assertIn(name, script)
 
@@ -282,6 +284,29 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         ]:
             self.assertIn(name, names)
         self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
+
+    def test_cli_install_quarantines_legacy_addin(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            addins_root = os.path.join(temp_dir, "API", "AddIns")
+            legacy_root = os.path.join(addins_root, "Fusion MCP Addin")
+            os.makedirs(legacy_root)
+            with open(os.path.join(legacy_root, "Fusion MCP Addin.manifest"), "w", encoding="utf-8") as f:
+                f.write("{}")
+
+            completed = subprocess.run(
+                [sys.executable, "-m", "fusion_mcp_cli", "install-addin", "--addins-root", addins_root],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertFalse(os.path.exists(legacy_root))
+            self.assertTrue(os.path.isdir(os.path.join(addins_root, "FusionMCP")))
+            disabled_root = os.path.join(temp_dir, "API", "AddInsDisabled")
+            self.assertTrue(os.path.isdir(os.path.join(disabled_root, "Fusion MCP Addin.disabled-legacy")))
+            self.assertIn("Moved legacy Fusion MCP add-in outside Fusion scan path", completed.stdout)
 
     def test_cli_list_profiles_outputs_shared_profile_file(self):
         completed = subprocess.run(

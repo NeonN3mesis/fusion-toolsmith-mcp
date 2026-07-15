@@ -18,6 +18,8 @@ python -m pip install -e .
 fusion-mcp install-addin
 ```
 
+`fusion-mcp install-addin` also moves the old prototype folder named `Fusion MCP Addin` to `AddInsDisabled` when it exists. That prevents the legacy add-in from starting instead of `FusionMCP` or serving an old tool list on port `9100`.
+
 Start the add-in in Fusion 360:
 
 ```text
@@ -70,6 +72,10 @@ fusion-mcp print-client-config
 Prefer `bearer_sse_url` plus `authorization_header` when your client supports request headers.
 
 ## Troubleshooting
+
+### Live Smoke Still Shows Missing New Tools
+
+Stop and run the `FusionMCP` add-in again, or restart Fusion 360. Fusion can keep Python modules loaded in memory after files are replaced, so a file refresh alone does not prove the running server is current.
 
 ### `fusion-mcp` Is Not Recognized
 
