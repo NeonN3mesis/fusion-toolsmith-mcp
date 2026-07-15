@@ -48,6 +48,8 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         with open(os.path.join(ROOT, "FusionMCP.py"), "r", encoding="utf-8") as f:
             addin_entrypoint = f.read()
         for text in [
+            "os.path.dirname(os.path.abspath(__file__))",
+            "sys.path.insert(0, addin_root)",
             "importlib.invalidate_caches()",
             "_clear_runtime_modules()",
             "force_reload=True",

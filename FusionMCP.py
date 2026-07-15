@@ -5,6 +5,7 @@ Clean Entry Point
 
 import adsk.core, adsk.fusion, traceback
 import importlib
+import os
 import sys
 import threading
 
@@ -33,15 +34,23 @@ def _clear_runtime_modules():
             sys.modules.pop(name, None)
 
 
+def _ensure_addin_root_on_path():
+    addin_root = os.path.dirname(os.path.abspath(__file__))
+    if addin_root and addin_root not in sys.path:
+        sys.path.insert(0, addin_root)
+    return addin_root
+
+
 def _load_runtime_modules(force_reload=False):
     global mcp_server_module, task_manager_module
     if force_reload:
         _clear_runtime_modules()
+    _ensure_addin_root_on_path()
     importlib.invalidate_caches()
-    try:
+    if __package__:
         mcp_server_module = importlib.import_module(".server.mcp_server", __package__)
         task_manager_module = importlib.import_module(".server.task_manager", __package__)
-    except (ImportError, TypeError):
+    else:
         mcp_server_module = importlib.import_module("server.mcp_server")
         task_manager_module = importlib.import_module("server.task_manager")
     return mcp_server_module, task_manager_module
