@@ -167,6 +167,51 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertTrue(callable(tools_module.get_tool_schemas))
         self.assertIn("inspect_design", {tool["name"] for tool in tools_module.get_tool_schemas()})
 
+    def test_get_assembly_references_reports_origins_and_occurrences(self):
+        def ref(name):
+            return types.SimpleNamespace(name=name, entityToken=f"{name}-token", objectType="Ref")
+
+        child_component = types.SimpleNamespace(
+            name="Child",
+            xConstructionAxis=ref("Child X"),
+            yConstructionAxis=ref("Child Y"),
+            zConstructionAxis=ref("Child Z"),
+            xYConstructionPlane=ref("Child XY"),
+            xZConstructionPlane=ref("Child XZ"),
+            yZConstructionPlane=ref("Child YZ"),
+            originConstructionPoint=ref("Child Origin"),
+            constructionAxes=[ref("Child Axis")],
+            constructionPlanes=[],
+            constructionPoints=[ref("Child Point")],
+        )
+        transform = types.SimpleNamespace(asArray=lambda: [1, 0, 0, 0])
+        occurrence = types.SimpleNamespace(name="Child:1", component=child_component, transform=transform)
+        root = types.SimpleNamespace(
+            name="Root",
+            xConstructionAxis=ref("Root X"),
+            yConstructionAxis=ref("Root Y"),
+            zConstructionAxis=ref("Root Z"),
+            xYConstructionPlane=ref("Root XY"),
+            xZConstructionPlane=ref("Root XZ"),
+            yZConstructionPlane=ref("Root YZ"),
+            originConstructionPoint=ref("Root Origin"),
+            constructionAxes=[],
+            constructionPlanes=[],
+            constructionPoints=[],
+            allOccurrences=[occurrence],
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("get_assembly_references", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(res["result"]["componentCount"], 2)
+        self.assertEqual(res["result"]["components"][0]["origin"]["xAxis"]["name"], "Root X")
+        self.assertEqual(res["result"]["components"][1]["constructionPoints"][0]["name"], "Child Point")
+        self.assertEqual(res["result"]["occurrences"][0]["componentName"], "Child")
+
     def test_server_uses_fixed_default_port(self):
         self.assertEqual(self.mcp_server.DEFAULT_PORT, 9100)
         self.assertTrue(callable(self.mcp_server.is_port_available))
@@ -381,6 +426,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("search_local_fusion_docs", resource["profiles"]["docs"]["tools"])
         self.assertIn("run_fusion_script", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("get_assembly_references", resource["profiles"]["inspection"]["tools"])
         self.assertIn("revolve_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("loft_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("sweep_feature", resource["profiles"]["modeling"]["tools"])
@@ -1417,6 +1463,7 @@ def run(context):
         self.assertIn("create_construction_axis", tool_names)
         self.assertIn("get_body_edges", tool_names)
         self.assertIn("get_body_faces", tool_names)
+        self.assertIn("get_assembly_references", tool_names)
         self.assertIn("offset_face_or_press_pull", tool_names)
         self.assertIn("extrude_feature", tool_names)
         self.assertIn("revolve_feature", tool_names)
@@ -3985,6 +4032,78 @@ def run(context):
     def test_combine_bodies_requires_explicit_schema_operation(self):
         combine_schema = next(tool for tool in self.tools.get_tool_schemas() if tool["name"] == "combine_bodies")
         self.assertIn("operation", combine_schema["inputSchema"]["required"])
+
+    def test_create_construction_point_targets_named_component(self):
+        class MockSketchPoints:
+            def add(self, point):
+                return types.SimpleNamespace(name="", geometry=point)
+
+        class MockSketches:
+            def __init__(self):
+                self.created = []
+            def add(self, plane):
+                sketch = types.SimpleNamespace(
+                    name="",
+                    isLightBulbOn=True,
+                    sketchPoints=MockSketchPoints(),
+                    plane=plane,
+                )
+                self.created.append(sketch)
+                return sketch
+
+        class MockPointInput:
+            def __init__(self):
+                self.source = None
+            def setByPoint(self, source):
+                self.source = source
+
+        class MockConstructionPoints:
+            def __init__(self):
+                self.inputs = []
+            def createInput(self):
+                point_input = MockPointInput()
+                self.inputs.append(point_input)
+                return point_input
+            def add(self, point_input):
+                return types.SimpleNamespace(name="", input=point_input)
+
+        class MockUnits:
+            defaultLengthUnits = "mm"
+            def evaluateExpression(self, expression, _units):
+                return float(str(expression).split()[0])
+
+        target = types.SimpleNamespace(
+            name="TargetComp",
+            xYConstructionPlane=types.SimpleNamespace(name="Target XY"),
+            xZConstructionPlane=types.SimpleNamespace(name="Target XZ"),
+            yZConstructionPlane=types.SimpleNamespace(name="Target YZ"),
+            sketches=MockSketches(),
+            constructionPoints=MockConstructionPoints(),
+        )
+        occurrence = types.SimpleNamespace(component=target)
+        root = types.SimpleNamespace(
+            name="Root",
+            allOccurrences=[occurrence],
+            xYConstructionPlane=types.SimpleNamespace(name="Root XY"),
+            xZConstructionPlane=types.SimpleNamespace(name="Root XZ"),
+            yZConstructionPlane=types.SimpleNamespace(name="Root YZ"),
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root, unitsManager=MockUnits())
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("create_construction_point", {
+            "name": "AnchorPoint",
+            "mode": "coordinates",
+            "x": "1 mm",
+            "y": "2 mm",
+            "target_component_name": "TargetComp",
+        })
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["pointName"], "AnchorPoint")
+        self.assertEqual(res["result"]["componentName"], "TargetComp")
+        self.assertEqual(target.sketches.created[0].plane.name, "Target XY")
+        self.assertEqual(target.constructionPoints.inputs[0].source.name, "AnchorPoint_SketchPoint")
 
     def test_combine_bodies_rejects_missing_operation_at_runtime(self):
         mock_target = types.SimpleNamespace(name="TargetBody")

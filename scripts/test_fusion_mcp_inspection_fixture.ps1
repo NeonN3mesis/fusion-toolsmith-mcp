@@ -199,6 +199,7 @@ try {
         "get_dependency_graph",
         "assess_change_impact",
         "plan_parameterization",
+        "get_assembly_references",
         "doctor",
         "recommend_mcp_workflow",
         "get_runtime_diagnostics",

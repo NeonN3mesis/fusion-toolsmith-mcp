@@ -44,6 +44,7 @@ _DEFAULT_RUNTIME_REQUIRED_TOOLS = (
     "inspect_sketch",
     "inspect_feature",
     "get_body_faces",
+    "get_assembly_references",
     "offset_face_or_press_pull",
     "revolve_feature",
     "loft_feature",
@@ -91,6 +92,7 @@ _TOOL_FIRST_POLICY = {
         "inspect_or_review": {
             "firstTools": ["doctor", "inspect_design", "get_assembly_tree"],
             "preferredTools": [
+                "get_assembly_references",
                 "extract_reference_dimensions",
                 "inspect_sketch",
                 "inspect_feature",
@@ -124,6 +126,7 @@ _TOOL_FIRST_POLICY = {
                 "inspect_printability",
                 "inspect_sketch",
                 "inspect_feature",
+                "get_assembly_references",
                 "get_body_faces",
                 "assess_change_impact",
                 "map_coordinates",

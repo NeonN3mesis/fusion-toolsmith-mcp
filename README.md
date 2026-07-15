@@ -143,12 +143,12 @@ fusion://agent/tool-profiles
 Use these mental profiles when exposing tools to agents or documenting workflows:
 
 - `core`: readiness, runtime diagnostics, workflow routing, and change-journal tools.
-- `inspection`: design snapshots, printability checks, sketch/feature/parameter/dependency inspection, selection queries, body face/edge targeting, timeline/tree inspection, and mutation preflight.
-- `modeling`: structured sketches, constraints, projection, extrude/revolve/loft/sweep/fillet/chamfer/shell, offset face, combine, primitives, construction geometry, rounded cuts/pockets, hole patterns, mirror/pattern, appearance, mesh conversion, and component organization.
+- `inspection`: design snapshots, printability checks, sketch/feature/parameter/dependency inspection, selection queries, body face/edge targeting, assembly reference inspection, timeline/tree inspection, and mutation preflight.
+- `modeling`: structured sketches, constraints, projection, extrude/revolve/loft/sweep/fillet/chamfer/shell, offset face, combine, primitives, component-targeted construction geometry, rounded cuts/pockets, hole patterns, mirror/pattern, appearance, mesh conversion, and component organization.
 - `parameters`: user/model parameter reads and edits, parameterization planning, sketch dimension editing, and parameter CSV import/export.
 - `export`: preflight-gated STEP/STL/PDF export plus still-frame capture helpers.
 - `presentation`: viewport camera, visibility staging, user prompts, screenshots, and `capture_demo_sequence` still-frame sequences.
-- `document`: document listing, assembly tree, timeline reads, timeline marker movement, and feature recipe cloning.
+- `document`: document listing, assembly tree/reference reads, timeline reads, timeline marker movement, and feature recipe cloning.
 - `docs`: local Fusion API, workflow, and best-practices lookup.
 - `dangerous`: raw scripting, clear journal, document activation/revert, undo, delete, and suppress tools. Use only after structured tools are insufficient.
 
@@ -157,7 +157,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 | Area | What Toolsmith exposes |
 | --- | --- |
 | Runtime safety | `doctor`, runtime diagnostics, fixed-port health, bearer auth, change journal, structured-tool routing |
-| Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, `inspect_printability` heuristics |
+| Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference reports, `inspect_printability` heuristics |
 | Safe modeling | typed sketching, extrudes, revolves, lofts, sweeps, fillets, chamfers, shelling, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry |
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |
 | Export and presentation | preflighted STL/STEP/PDF export, screenshots, staged visibility, still-frame demo sequences |

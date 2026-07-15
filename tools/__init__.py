@@ -892,7 +892,8 @@ def get_tool_schemas():
                     "name": {"type": "string", "description": "Name for the new construction plane."},
                     "base_plane_name": {"type": "string", "description": "Standard plane name xy/xz/yz or an existing construction plane name."},
                     "offset": {"type": "string", "description": "Offset distance expression, e.g. '5 mm' or '-2 mm'."},
-                    "use_selected_plane": {"type": "boolean", "default": False, "description": "If true, offset from the currently selected construction plane or planar face."}
+                    "use_selected_plane": {"type": "boolean", "default": False, "description": "If true, offset from the currently selected construction plane or planar face."},
+                    "target_component_name": {"type": "string", "description": "Optional component name to create the construction plane in."}
                 },
                 "required": ["offset"]
             }
@@ -910,7 +911,8 @@ def get_tool_schemas():
                     "y": {"type": "string", "default": "0 mm", "description": "Second sketch-plane coordinate when mode=coordinates."},
                     "point_name": {"type": "string", "description": "Existing construction/sketch point name when mode=named."},
                     "use_selected_point": {"type": "boolean", "default": False},
-                    "hide_reference_sketch": {"type": "boolean", "default": True}
+                    "hide_reference_sketch": {"type": "boolean", "default": True},
+                    "target_component_name": {"type": "string", "description": "Optional component name to create the construction point in."}
                 }
             }
         },
@@ -940,7 +942,8 @@ def get_tool_schemas():
                     },
                     "base_plane_name": {"type": "string", "default": "xy"},
                     "use_selected_line": {"type": "boolean", "default": False},
-                    "hide_reference_sketch": {"type": "boolean", "default": True}
+                    "hide_reference_sketch": {"type": "boolean", "default": True},
+                    "target_component_name": {"type": "string", "description": "Optional component name to create the construction axis in."}
                 }
             }
         },
@@ -1391,6 +1394,16 @@ def get_tool_schemas():
                 "type": "object", 
                 "properties": {
                     "max_depth": {"type": "integer", "default": 1}
+                }
+            }
+        },
+        {
+            "name": "get_assembly_references",
+            "description": "Read-only report of component origins, standard axes/planes, construction axes/planes/points, and occurrence transforms for repeatable assembly placement.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_all_components": {"type": "boolean", "default": True}
                 }
             }
         },

@@ -140,6 +140,7 @@ try {
         "get_body_faces",
         "get_body_edges",
         "get_assembly_tree",
+        "get_assembly_references",
         "get_timeline",
         "measure_entity",
         "validate_model",

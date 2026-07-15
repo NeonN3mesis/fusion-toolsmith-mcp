@@ -4,8 +4,8 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Next Tool Gaps
 
-- Assembly joints and origin helpers
-  - Inspect and create basic joint/origin/construction references for repeatable component placement.
+- Assembly joints
+  - Create and inspect basic joints for repeatable component placement once the structured joint API surface is validated.
 
 - Material and appearance workflows
   - Expand appearance assignment into reusable material/appearance inspection, assignment, and reporting workflows.
@@ -39,6 +39,10 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `sweep_feature`
   - Create solid sweep features from a named sketch profile and an explicit indexed curve in a named path sketch.
   - Requires an explicit operation and returns path targeting, result bodies, participants, warnings, inspection, and before/after design-state comparison.
+
+- `get_assembly_references`
+  - Read-only report of component origins, standard axes/planes, construction axes/planes/points, and occurrence transforms.
+  - Complements component-targeted `create_construction_point`, `create_construction_axis`, and `create_offset_plane` for repeatable placement references.
 
 - `mirror_features_or_bodies`
   - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.

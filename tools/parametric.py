@@ -883,11 +883,19 @@ def create_hole_pattern(
 
 def _all_components(root):
     components = [root]
-    for occ in root.allOccurrences:
+    for occ in getattr(root, "allOccurrences", []) or []:
         comp = occ.component
         if comp not in components:
             components.append(comp)
     return components
+
+def _find_component(root, component_name):
+    if not component_name:
+        return root
+    for component in _all_components(root):
+        if getattr(component, "name", None) == component_name:
+            return component
+    return None
 
 def _find_named_base_plane(root, name):
     if not name:
@@ -1061,11 +1069,13 @@ def _point_on_plane(origin, u_dir, v_dir, normal, x, y, z):
     return point
 
 @register_tool("create_construction_point")
-def create_construction_point(name="Construction Point", mode="coordinates", base_plane_name="xy", x="0 mm", y="0 mm", point_name=None, use_selected_point=False, hide_reference_sketch=True):
+def create_construction_point(name="Construction Point", mode="coordinates", base_plane_name="xy", x="0 mm", y="0 mm", point_name=None, use_selected_point=False, hide_reference_sketch=True, target_component_name=None):
     design = get_active_design()
     root = design.rootComponent
     before = _capture_design_state()
-    target_component = root
+    target_component = _find_component(root, target_component_name)
+    if not target_component:
+        return {"error": f"Target component '{target_component_name}' not found."}
     source_entity = None
     reference_sketch_name = None
 
@@ -1083,9 +1093,8 @@ def create_construction_point(name="Construction Point", mode="coordinates", bas
     elif point_mode == "coordinates":
         x_value = _real_length(design, x)
         y_value = _real_length(design, y)
-        source_entity, sketch = _create_reference_sketch_point(root, base_plane_name, x_value, y_value, name, hide_reference_sketch)
+        source_entity, sketch = _create_reference_sketch_point(target_component, base_plane_name, x_value, y_value, name, hide_reference_sketch)
         reference_sketch_name = _safe_name(sketch)
-        target_component = root
     else:
         return {"error": "mode must be coordinates, named, or selected."}
 
@@ -1101,6 +1110,7 @@ def create_construction_point(name="Construction Point", mode="coordinates", bas
             "pointName": point.name,
             "mode": point_mode,
             "componentName": _safe_name(target_component),
+            "targetComponentName": target_component_name,
             "referenceSketchName": reference_sketch_name,
             "sourceName": point_name if point_mode == "named" else _safe_name(source_entity),
             "stateComparison": _compare_after_mutation(before),
@@ -1109,12 +1119,14 @@ def create_construction_point(name="Construction Point", mode="coordinates", bas
 
 
 @register_tool("create_construction_axis")
-def create_construction_axis(name="Construction Axis", mode="two_points", point_name_one=None, point_name_two=None, point_one=None, point_two=None, base_plane_name="xy", use_selected_line=False, hide_reference_sketch=True):
+def create_construction_axis(name="Construction Axis", mode="two_points", point_name_one=None, point_name_two=None, point_one=None, point_two=None, base_plane_name="xy", use_selected_line=False, hide_reference_sketch=True, target_component_name=None):
     design = get_active_design()
     root = design.rootComponent
     before = _capture_design_state()
     axis_mode = (mode or "two_points").lower()
-    target_component = root
+    target_component = _find_component(root, target_component_name)
+    if not target_component:
+        return {"error": f"Target component '{target_component_name}' not found."}
     reference_sketches = []
 
     axes = target_component.constructionAxes
@@ -1167,13 +1179,14 @@ def create_construction_axis(name="Construction Axis", mode="two_points", point_
             "axisName": axis.name,
             "mode": axis_mode,
             "componentName": _safe_name(target_component),
+            "targetComponentName": target_component_name,
             "referenceSketchNames": reference_sketches,
             "stateComparison": _compare_after_mutation(before),
         }
     }
 
 @register_tool("create_offset_plane")
-def create_offset_plane(name="Offset Plane", base_plane_name="xy", offset="0 mm", use_selected_plane=False):
+def create_offset_plane(name="Offset Plane", base_plane_name="xy", offset="0 mm", use_selected_plane=False, target_component_name=None):
     design = get_active_design()
     root = design.rootComponent
     before = _capture_design_state()
@@ -1185,9 +1198,13 @@ def create_offset_plane(name="Offset Plane", base_plane_name="xy", offset="0 mm"
         if not base_plane:
             return {"error": "No selected construction plane or planar face found."}
     else:
-        base_plane, target_component = _find_named_base_plane(root, base_plane_name)
+        target_component = _find_component(root, target_component_name)
+        if not target_component:
+            return {"error": f"Target component '{target_component_name}' not found."}
+        base_plane, selected_component = _find_named_base_plane(target_component, base_plane_name)
         if not base_plane:
             return {"error": f"Base plane '{base_plane_name}' not found. Use xy, xz, yz, a named construction plane, or use_selected_plane=true."}
+        target_component = selected_component or target_component
 
     if not target_component:
         target_component = root
@@ -1206,6 +1223,7 @@ def create_offset_plane(name="Offset Plane", base_plane_name="xy", offset="0 mm"
             "usedSelectedPlane": bool(use_selected_plane),
             "offset": offset,
             "componentName": _safe_name(target_component),
+            "targetComponentName": target_component_name,
             "stateComparison": _compare_after_mutation(before),
         }
     }

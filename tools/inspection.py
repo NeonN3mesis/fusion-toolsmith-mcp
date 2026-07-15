@@ -1050,6 +1050,69 @@ def get_assembly_tree(max_depth=1):
         
     return {"result": traverse(design.rootComponent, 1)}
 
+def _entity_ref(entity):
+    return {
+        "name": _safe_value(lambda: entity.name),
+        "entityToken": _safe_value(lambda: entity.entityToken),
+        "objectType": _safe_value(lambda: entity.objectType),
+    }
+
+def _component_reference_report(component):
+    return {
+        "componentName": _safe_value(lambda: component.name),
+        "origin": {
+            "xAxis": _entity_ref(_safe_value(lambda: component.xConstructionAxis)),
+            "yAxis": _entity_ref(_safe_value(lambda: component.yConstructionAxis)),
+            "zAxis": _entity_ref(_safe_value(lambda: component.zConstructionAxis)),
+            "xyPlane": _entity_ref(_safe_value(lambda: component.xYConstructionPlane)),
+            "xzPlane": _entity_ref(_safe_value(lambda: component.xZConstructionPlane)),
+            "yzPlane": _entity_ref(_safe_value(lambda: component.yZConstructionPlane)),
+            "originPoint": _entity_ref(_safe_value(lambda: component.originConstructionPoint)),
+        },
+        "constructionAxes": [_entity_ref(axis) for axis in _collection_items(_safe_value(lambda: component.constructionAxes))],
+        "constructionPlanes": [_plane_to_dict(plane, index) for index, plane in enumerate(_collection_items(_safe_value(lambda: component.constructionPlanes)))],
+        "constructionPoints": [_entity_ref(point) for point in _collection_items(_safe_value(lambda: component.constructionPoints))],
+    }
+
+@register_tool("get_assembly_references")
+def get_assembly_references(include_all_components=True):
+    """
+    Return origin and construction references for repeatable assembly placement.
+
+    This is intentionally read-only. Use it before creating construction
+    references, mirrors, patterns, or future joint-related operations.
+    """
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        components = [root]
+        if include_all_components:
+            for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+                component = _safe_value(lambda occ=occ: occ.component)
+                if component and component not in components:
+                    components.append(component)
+        return {
+            "result": {
+                "readOnly": True,
+                "componentCount": len(components),
+                "components": [_component_reference_report(component) for component in components],
+                "occurrences": [
+                    {
+                        "name": _safe_value(lambda occ=occ: occ.name),
+                        "componentName": _safe_value(lambda occ=occ: occ.component.name),
+                        "transform": _safe_value(lambda occ=occ: occ.transform.asArray()),
+                    }
+                    for occ in _collection_items(_safe_value(lambda: root.allOccurrences))
+                ],
+                "warnings": [
+                    "This tool reports assembly and origin references only; it does not create joints or move components.",
+                    "Use component-targeted construction references before creating or aligning repeated assembly features.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect assembly references: {str(e)}"}
+
 # Resource Readers
 @register_resource("fusion://design/parameters")
 def read_parameters():
