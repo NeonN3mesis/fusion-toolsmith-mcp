@@ -144,7 +144,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 
 - `core`: readiness, runtime diagnostics, workflow routing, and change-journal tools.
 - `inspection`: design snapshots, printability checks, sketch/feature/parameter/dependency inspection, selection queries, body face/edge targeting, timeline/tree inspection, and mutation preflight.
-- `modeling`: structured sketches, constraints, projection, extrude/fillet/chamfer/shell, offset face, combine, primitives, construction geometry, rounded cuts/pockets, hole patterns, mirror/pattern, appearance, mesh conversion, and component organization.
+- `modeling`: structured sketches, constraints, projection, extrude/revolve/fillet/chamfer/shell, offset face, combine, primitives, construction geometry, rounded cuts/pockets, hole patterns, mirror/pattern, appearance, mesh conversion, and component organization.
 - `parameters`: user/model parameter reads and edits, parameterization planning, sketch dimension editing, and parameter CSV import/export.
 - `export`: preflight-gated STEP/STL/PDF export plus still-frame capture helpers.
 - `presentation`: viewport camera, visibility staging, user prompts, screenshots, and `capture_demo_sequence` still-frame sequences.
@@ -158,7 +158,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 | --- | --- |
 | Runtime safety | `doctor`, runtime diagnostics, fixed-port health, bearer auth, change journal, structured-tool routing |
 | Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, `inspect_printability` heuristics |
-| Safe modeling | typed sketching, extrudes, fillets, chamfers, shelling, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry |
+| Safe modeling | typed sketching, extrudes, revolves, fillets, chamfers, shelling, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry |
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |
 | Export and presentation | preflighted STL/STEP/PDF export, screenshots, staged visibility, still-frame demo sequences |
 | Dangerous tools | raw scripts, undo/revert, timeline deletion/suppression, and document activation are isolated from normal workflows |

@@ -432,6 +432,33 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "revolve_feature",
+            "description": "Create a revolve from a named sketch profile around a standard, named, or selected axis with explicit NewBody/Join/Cut/Intersect operation and built-in before/after design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "Sketch containing the profile to revolve."},
+                    "profile_index": {"type": "integer", "default": 0, "description": "0-based profile index in the sketch."},
+                    "axis_name": {"type": "string", "default": "z", "description": "Revolve axis: x, y, z, or a named construction axis."},
+                    "use_selected_axis": {"type": "boolean", "default": False, "description": "If true, use the currently selected construction axis or linear BRep edge."},
+                    "angle": {"type": "string", "default": "360 deg", "description": "Fusion angle expression, e.g. '360 deg' or '180 deg'."},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["NewBody", "Join", "Cut", "Intersect", "new_body", "join", "cut", "intersect"],
+                        "description": "Required explicit feature operation. Do not guess."
+                    },
+                    "name": {"type": "string", "description": "Optional name for the created revolve feature."},
+                    "body_name": {"type": "string", "description": "Optional name for the first result body."},
+                    "participant_body_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit participant bodies for Join/Cut/Intersect operations."
+                    }
+                },
+                "required": ["sketch_name", "operation"]
+            }
+        },
+        {
             "name": "fillet_feature",
             "description": "Create a constant-radius fillet on explicit edge indices of a named body with built-in before/after design-state comparison. Inspect or select edges before choosing indices.",
             "inputSchema": {

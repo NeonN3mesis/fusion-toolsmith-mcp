@@ -114,6 +114,53 @@ def _edge_collection(edges):
         collection.add(edge)
     return collection
 
+def _all_components(root):
+    components = [root]
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        if component and component not in components:
+            components.append(component)
+    return components
+
+
+def _find_named_axis(root, name):
+    if not name:
+        return None, None
+    key = str(name).replace(" ", "").lower()
+    standard = {
+        "x": getattr(root, "xConstructionAxis", None),
+        "xaxis": getattr(root, "xConstructionAxis", None),
+        "xconstructionaxis": getattr(root, "xConstructionAxis", None),
+        "y": getattr(root, "yConstructionAxis", None),
+        "yaxis": getattr(root, "yConstructionAxis", None),
+        "yconstructionaxis": getattr(root, "yConstructionAxis", None),
+        "z": getattr(root, "zConstructionAxis", None),
+        "zaxis": getattr(root, "zConstructionAxis", None),
+        "zconstructionaxis": getattr(root, "zConstructionAxis", None),
+    }
+    if key in standard and standard[key]:
+        return standard[key], root
+    for component in _all_components(root):
+        for axis in _collection_items(_safe_value(lambda component=component: component.constructionAxes)):
+            if _safe_value(lambda axis=axis: axis.name) == name:
+                return axis, component
+    return None, None
+
+
+def _selected_axis():
+    app = adsk.core.Application.get()
+    selections = _safe_value(lambda: app.userInterface.activeSelections)
+    if not selections or _safe_value(lambda: selections.count, 0) == 0:
+        return None, None
+    entity = _safe_value(lambda: selections.item(0).entity)
+    axis = adsk.fusion.ConstructionAxis.cast(entity)
+    if axis:
+        return axis, _safe_value(lambda: axis.parentComponent)
+    edge = adsk.fusion.BRepEdge.cast(entity)
+    if edge:
+        return edge, _safe_value(lambda: edge.body.parentComponent)
+    return None, None
+
 
 def _edge_refs(edges):
     return [
@@ -444,6 +491,79 @@ def extrude_feature(sketch_name, distance, operation, name=None, profile_index=0
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error creating extrude feature: {e}\n{err}")
         return {"error": f"Failed to create extrude feature: {str(e)}"}
+
+
+@register_tool("revolve_feature")
+def revolve_feature(sketch_name, axis_name="z", operation=None, angle="360 deg", name=None, profile_index=0, body_name=None, participant_body_names=None, use_selected_axis=False):
+    """
+    Create a revolve feature from a named sketch profile around an explicit axis.
+
+    The operation is required for the same reason as extrude_feature: revolve
+    features can create, join, cut, or intersect geometry, and guessing can
+    damage an existing model.
+    """
+    try:
+        if not operation:
+            return {"error": "operation is required and must be one of NewBody, Join, Cut, or Intersect."}
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            return {"error": f"Sketch '{sketch_name}' not found."}
+
+        design = get_active_design()
+        root = design.rootComponent
+        if use_selected_axis:
+            axis, axis_component = _selected_axis()
+            if not axis:
+                return {"error": "No selected construction axis or linear BRep edge found."}
+        else:
+            axis, axis_component = _find_named_axis(root, axis_name)
+            if not axis:
+                return {"error": f"Revolve axis '{axis_name}' not found. Use x, y, z, a named construction axis, or use_selected_axis=true."}
+
+        before = _design_state_snapshot(include_selections=False)
+        profile = _profile_by_index(sketch, profile_index)
+        op = _feature_operation(operation)
+        component = _safe_value(lambda: sketch.parentComponent) or axis_component or root
+        revolves = _safe_value(lambda: component.features.revolveFeatures)
+        if not revolves:
+            return {"error": "This Fusion runtime does not expose revolveFeatures for API-created revolve features."}
+        revolve_input = revolves.createInput(profile, axis, op)
+        participants = _set_participant_bodies(revolve_input, participant_body_names)
+        revolve_input.setAngleExtent(False, adsk.core.ValueInput.createByString(str(angle)))
+        revolve = revolves.add(revolve_input)
+        if name:
+            revolve.name = name
+
+        result_body_names = []
+        bodies = _safe_value(lambda: revolve.bodies)
+        for index, body in enumerate(_collection_items(bodies)):
+            if body_name:
+                body.name = body_name if index == 0 else f"{body_name}_{index}"
+            result_body_names.append(_safe_value(lambda body=body: body.name))
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        feature_name = _safe_value(lambda: revolve.name) or name
+        inspected = inspect_feature(feature_name).get("result") if feature_name else None
+        return {
+            "result": {
+                "featureName": feature_name,
+                "sketchName": sketch.name,
+                "profileIndex": int(profile_index),
+                "axisName": _safe_value(lambda: axis.name) or axis_name,
+                "operation": _operation_label(op),
+                "angle": angle,
+                "useSelectedAxis": bool(use_selected_axis),
+                "participantBodies": participants or _body_names(_safe_value(lambda: revolve.participantBodies)),
+                "resultBodies": result_body_names,
+                "feature": inspected,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating revolve feature: {e}\n{err}")
+        return {"error": f"Failed to create revolve feature: {str(e)}"}
 
 
 @register_tool("fillet_feature")

@@ -4,9 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Next Tool Gaps
 
-- Revolve tool
-  - Create revolve features from named sketch profiles and explicit axes, with operation, angle, and before/after state comparison.
-
 - Loft tool
   - Create lofted solid/surface features from named profiles or selected profiles with clear section ordering and continuity warnings.
 
@@ -36,6 +33,10 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `create_hole_pattern`
   - General hole-pattern cuts for explicit, rectangular, and circular point layouts.
   - Supports through, blind, counterbore, and true conical countersink cuts with structured result metadata.
+
+- `revolve_feature`
+  - Create revolve features from named sketch profiles and explicit standard, named, or selected axes.
+  - Requires an explicit operation and returns angle, result bodies, participants, inspection, and before/after design-state comparison.
 
 - `mirror_features_or_bodies`
   - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.

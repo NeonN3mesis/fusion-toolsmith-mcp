@@ -124,6 +124,7 @@ def _install_adsk_stub():
         "SketchEntity",
         "Sketch",
         "ConstructionPlane",
+        "ConstructionAxis",
         "ExtrudeFeature",
         "FilletFeature",
         "ChamferFeature",
@@ -380,6 +381,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("search_local_fusion_docs", resource["profiles"]["docs"]["tools"])
         self.assertIn("run_fusion_script", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("revolve_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
         self.assertIn("list_documents", resource["profiles"]["document"]["tools"])
         advertised = {schema["name"] for schema in self.tools.get_tool_schemas()}
@@ -1415,6 +1417,7 @@ def run(context):
         self.assertIn("get_body_faces", tool_names)
         self.assertIn("offset_face_or_press_pull", tool_names)
         self.assertIn("extrude_feature", tool_names)
+        self.assertIn("revolve_feature", tool_names)
         self.assertIn("fillet_feature", tool_names)
         self.assertIn("chamfer_feature", tool_names)
         self.assertIn("shell_body", tool_names)
@@ -2222,6 +2225,107 @@ def run(context):
         self.assertEqual(res["result"]["operation"], "NewBody")
         self.assertEqual(res["result"]["resultBodies"], ["BodyA"])
         self.assertEqual(created_inputs[0].distance, "5 mm")
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_revolve_feature_creates_named_body_and_state_diff(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+
+        class MockCollection:
+            def __init__(self, items):
+                self._items = items
+                self.count = len(items)
+            def item(self, index):
+                return self._items[index]
+
+        profile = types.SimpleNamespace(name="Profile0")
+        axis = types.SimpleNamespace(name="Z Axis")
+        result_body = types.SimpleNamespace(name="Body0")
+        participant_body = types.SimpleNamespace(name="ParticipantBody")
+        created_inputs = []
+
+        class MockParticipantBodies:
+            def __init__(self):
+                self.items = []
+            def add(self, body):
+                self.items.append(body)
+
+        class MockRevolveInput:
+            def __init__(self, profile_arg, axis_arg, operation_arg):
+                self.profile = profile_arg
+                self.axis = axis_arg
+                self.operation = operation_arg
+                self.participantBodies = MockParticipantBodies()
+                self.angle = None
+            def setAngleExtent(self, _is_symmetric, angle):
+                self.angle = angle
+
+        class MockRevolves:
+            def createInput(self, profile_arg, axis_arg, operation_arg):
+                input_obj = MockRevolveInput(profile_arg, axis_arg, operation_arg)
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                self.last_input = input_obj
+                return types.SimpleNamespace(
+                    name="",
+                    bodies=MockCollection([result_body]),
+                    participantBodies=MockCollection(input_obj.participantBodies.items),
+                )
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(revolveFeatures=MockRevolves()),
+        )
+        sketch = types.SimpleNamespace(
+            name="SketchA",
+            parentComponent=component,
+            profiles=MockCollection([profile]),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            sketches=[sketch],
+            bRepBodies=[participant_body],
+            allOccurrences=[],
+            zConstructionAxis=axis,
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1, "unhealthyTimelineItems": 0}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {
+            "result": {"featureName": feature_name, "operation": "NewBody"}
+        }
+        try:
+            res = self.tools.execute_tool("revolve_feature", {
+                "sketch_name": "SketchA",
+                "axis_name": "z",
+                "angle": "180 deg",
+                "operation": "NewBody",
+                "name": "RevolveA",
+                "body_name": "RevolvedBody",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["featureName"], "RevolveA")
+        self.assertEqual(res["result"]["operation"], "NewBody")
+        self.assertEqual(res["result"]["angle"], "180 deg")
+        self.assertEqual(res["result"]["axisName"], "Z Axis")
+        self.assertEqual(res["result"]["resultBodies"], ["RevolvedBody"])
+        self.assertEqual(created_inputs[0].profile, profile)
+        self.assertEqual(created_inputs[0].axis, axis)
+        self.assertEqual(created_inputs[0].angle, "180 deg")
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
     def test_fillet_feature_requires_edge_indices(self):

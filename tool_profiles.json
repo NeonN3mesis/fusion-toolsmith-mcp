@@ -49,6 +49,7 @@
         "project_geometry",
         "create_sketch_offset",
         "extrude_feature",
+        "revolve_feature",
         "fillet_feature",
         "chamfer_feature",
         "shell_body",
