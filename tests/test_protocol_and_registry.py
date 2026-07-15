@@ -373,11 +373,20 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("core", resource["profiles"])
         self.assertIn("dangerous", resource["profiles"])
         self.assertIn("docs", resource["profiles"])
+        self.assertIn("presentation", resource["profiles"])
+        self.assertIn("document", resource["profiles"])
         self.assertIn("doctor", resource["profiles"]["core"]["tools"])
         self.assertIn("get_change_journal", resource["profiles"]["core"]["tools"])
         self.assertIn("search_local_fusion_docs", resource["profiles"]["docs"]["tools"])
         self.assertIn("run_fusion_script", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
+        self.assertIn("list_documents", resource["profiles"]["document"]["tools"])
+        advertised = {schema["name"] for schema in self.tools.get_tool_schemas()}
+        profiled = set()
+        for profile in resource["profiles"].values():
+            profiled.update(profile["tools"])
+        self.assertEqual(sorted(advertised - profiled), [])
         for profile in resource["profiles"].values():
             self.assertEqual(profile["missingFromSchema"], [])
             self.assertEqual(profile["missingFromRegistry"], [])

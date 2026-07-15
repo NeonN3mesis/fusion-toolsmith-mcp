@@ -7,6 +7,7 @@
         "doctor",
         "get_runtime_diagnostics",
         "get_change_journal",
+        "git_status",
         "recommend_mcp_workflow",
         "get_best_practices"
       ]
@@ -24,10 +25,17 @@
         "get_projected_geometry_sources",
         "get_feature_dependencies",
         "get_dependency_graph",
+        "assess_change_impact",
+        "preflight_model_change",
         "query_selection",
         "get_current_selection",
         "map_coordinates",
-        "get_body_faces"
+        "get_body_faces",
+        "get_body_edges",
+        "get_assembly_tree",
+        "get_timeline",
+        "measure_entity",
+        "validate_model"
       ]
     },
     "modeling": {
@@ -37,13 +45,16 @@
         "draw_line",
         "draw_rectangle",
         "draw_circle",
+        "add_sketch_constraint",
         "project_geometry",
+        "create_sketch_offset",
         "extrude_feature",
         "fillet_feature",
         "chamfer_feature",
         "shell_body",
         "offset_face_or_press_pull",
         "combine_bodies",
+        "create_parametric_feature",
         "create_box",
         "create_cylinder",
         "create_coil",
@@ -57,6 +68,9 @@
         "create_counterbore_hole_pattern",
         "mirror_features_or_bodies",
         "pattern_feature",
+        "apply_appearance",
+        "convert_mesh_to_solid",
+        "reorganize_body_to_component",
         "set_visibility"
       ]
     },
@@ -71,7 +85,9 @@
         "get_sketch_parameters",
         "get_feature_parameters",
         "get_sketch_dimensions",
-        "edit_sketch_dimension"
+        "edit_sketch_dimension",
+        "import_parameters_csv",
+        "export_parameters_csv"
       ]
     },
     "export": {
@@ -82,6 +98,26 @@
         "create_2d_drawing",
         "capture_view",
         "capture_demo_sequence"
+      ]
+    },
+    "presentation": {
+      "description": "Viewport, visibility, and still-frame capture helpers for demos, review, and documentation.",
+      "tools": [
+        "capture_view",
+        "capture_demo_sequence",
+        "set_camera",
+        "set_visibility",
+        "prompt_user"
+      ]
+    },
+    "document": {
+      "description": "Document, assembly tree, timeline, and feature-copy helpers. Use destructive actions only through the dangerous profile.",
+      "tools": [
+        "list_documents",
+        "get_assembly_tree",
+        "get_timeline",
+        "set_timeline_marker",
+        "clone_timeline_feature"
       ]
     },
     "docs": {
@@ -104,7 +140,8 @@
         "suppress_timeline_feature",
         "undo_last_action",
         "revert_active_document",
-        "set_active_document"
+        "set_active_document",
+        "set_timeline_marker"
       ]
     }
   }

@@ -54,6 +54,18 @@ Show:
 Prompt:
 
 ```text
+Capture a generic still-frame demo sequence of the new model from iso, front, and top views. Hide construction sketches during capture and restore visibility afterward.
+```
+
+Show:
+
+- the agent uses `capture_demo_sequence`
+- the output is a set of PNG still frames, not an encoded video
+- visibility is restored after the capture sequence
+
+Prompt:
+
+```text
 Plan a parameter-safe change to the new demo model. Do not edit yet. Include downstream impact.
 ```
 
@@ -92,4 +104,4 @@ Save the final GIF or MP4 under:
 docs/assets/fusion-toolsmith-demo.gif
 ```
 
-Then add it near the top of `README.md`.
+Use the still frames from `capture_demo_sequence` as the source material for the GIF or MP4, then add the finished asset near the top of `README.md`.

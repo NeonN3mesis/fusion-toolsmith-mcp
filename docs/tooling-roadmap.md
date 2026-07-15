@@ -2,6 +2,35 @@
 
 This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these tools domain-neutral: no product-specific dimensions, names, or workflows.
 
+## Next Tool Gaps
+
+- True conical countersink support
+  - Replace the current cylindrical countersink-intent relief with actual conical geometry when Fusion API support and target geometry allow it.
+
+- Revolve tool
+  - Create revolve features from named sketch profiles and explicit axes, with operation, angle, and before/after state comparison.
+
+- Loft tool
+  - Create lofted solid/surface features from named profiles or selected profiles with clear section ordering and continuity warnings.
+
+- Sweep/path tool
+  - Create sweep features from a named profile and path, including basic path validation and result-body reporting.
+
+- Assembly joints and origin helpers
+  - Inspect and create basic joint/origin/construction references for repeatable component placement.
+
+- Material and appearance workflows
+  - Expand appearance assignment into reusable material/appearance inspection, assignment, and reporting workflows.
+
+- Stronger sketch constraint editing
+  - Add more complete constraint creation/editing and safer constraint conflict reporting.
+
+- Entity-token targeting for more mutating tools
+  - Let mutating tools target stable entity tokens when Fusion exposes them, not only names, indices, or current selection.
+
+- Deeper slicer-grade printability
+  - Move beyond heuristic warnings toward mesh/slicer-aware checks while keeping the tool read-only.
+
 ## Implemented
 
 - `create_offset_plane`

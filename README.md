@@ -142,13 +142,26 @@ fusion://agent/tool-profiles
 
 Use these mental profiles when exposing tools to agents or documenting workflows:
 
-- `core`: `doctor`, `get_runtime_diagnostics`, `get_change_journal`, `recommend_mcp_workflow`, `get_best_practices`.
-- `inspection`: `inspect_design`, `capture_design_state`, `compare_design_state`, `extract_reference_dimensions`, `inspect_sketch`, `inspect_feature`, `get_dependency_graph`, `query_selection`.
-- `modeling`: `create_sketch`, `draw_line`, `draw_rectangle`, `draw_circle`, `project_geometry`, `extrude_feature`, `fillet_feature`, `chamfer_feature`, `combine_bodies`, `create_rounded_rectangle_body`, `create_rounded_slot_cut`, `create_counterbore_hole_pattern`, `set_visibility`.
-- `parameters`: `get_parameter`, `set_parameter`, `modify_parameters`, `plan_parameterization`, `get_parameter_usage`.
-- `export`: `preflight_export`, `export_asset`, `create_2d_drawing`.
-- `docs`: `search_local_fusion_docs`, `get_fusion_api_help`, `search_fusion_api_documentation`, `get_mcp_workflow_guide`, `get_best_practices`.
-- `dangerous`: `run_fusion_script`, `clear_change_journal`, document activation/revert tools, delete/suppress tools. Use only after structured tools are insufficient.
+- `core`: readiness, runtime diagnostics, workflow routing, and change-journal tools.
+- `inspection`: design snapshots, printability checks, sketch/feature/parameter/dependency inspection, selection queries, body face/edge targeting, timeline/tree inspection, and mutation preflight.
+- `modeling`: structured sketches, constraints, projection, extrude/fillet/chamfer/shell, offset face, combine, primitives, construction geometry, rounded cuts/pockets, hole patterns, mirror/pattern, appearance, mesh conversion, and component organization.
+- `parameters`: user/model parameter reads and edits, parameterization planning, sketch dimension editing, and parameter CSV import/export.
+- `export`: preflight-gated STEP/STL/PDF export plus still-frame capture helpers.
+- `presentation`: viewport camera, visibility staging, user prompts, screenshots, and `capture_demo_sequence` still-frame sequences.
+- `document`: document listing, assembly tree, timeline reads, timeline marker movement, and feature recipe cloning.
+- `docs`: local Fusion API, workflow, and best-practices lookup.
+- `dangerous`: raw scripting, clear journal, document activation/revert, undo, delete, and suppress tools. Use only after structured tools are insufficient.
+
+## Feature Matrix
+
+| Area | What Toolsmith exposes |
+| --- | --- |
+| Runtime safety | `doctor`, runtime diagnostics, fixed-port health, bearer auth, change journal, structured-tool routing |
+| Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, `inspect_printability` heuristics |
+| Safe modeling | typed sketching, extrudes, fillets, chamfers, shelling, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry |
+| Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |
+| Export and presentation | preflighted STL/STEP/PDF export, screenshots, staged visibility, still-frame demo sequences |
+| Dangerous tools | raw scripts, undo/revert, timeline deletion/suppression, and document activation are isolated from normal workflows |
 
 ## Development
 

@@ -93,6 +93,48 @@ function Invoke-McpTool {
     return Convert-ToolText -ToolResponse $json
 }
 
+function Invoke-McpToolAllowError {
+    param(
+        [string]$Uri,
+        [string]$SessionId,
+        [int]$Id,
+        [string]$Name,
+        [hashtable]$Arguments,
+        [int]$TimeoutSec,
+        [hashtable]$ExtraHeaders
+    )
+
+    if ($null -eq $Arguments) {
+        $Arguments = @{}
+    }
+
+    $body = New-JsonRpcPayload -Id $Id -Method "tools/call" -Params @{
+        name = $Name
+        arguments = $Arguments
+    }
+    $response = Invoke-McpRequest -Uri $Uri -SessionId $SessionId -Body $body -TimeoutSec $TimeoutSec -ExtraHeaders $ExtraHeaders
+    $json = $response.Content | ConvertFrom-Json
+    $rawText = $json.result.content[0].text
+    if ($json.result.isError) {
+        return @{
+            isError = $true
+            errorText = $rawText
+        }
+    }
+    try {
+        return @{
+            isError = $false
+            value = ($rawText | ConvertFrom-Json)
+        }
+    }
+    catch {
+        return @{
+            isError = $false
+            value = $rawText
+        }
+    }
+}
+
 function Assert-True {
     param(
         [bool]$Condition,
@@ -320,6 +362,132 @@ def run(context):
     Assert-True -Condition ($dependencies.result.bestEffort -eq $true) -Message "get_feature_dependencies did not identify bestEffort output."
     Assert-True -Condition (@($dependencies.result.directInputs).Count -ge 1) -Message "get_feature_dependencies did not report direct inputs."
 
+    $pointA = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 9 -Name "create_construction_point" -Arguments @{
+        name = "Fixture_AxisPointA"
+        mode = "coordinates"
+        base_plane_name = "xy"
+        x = "0 mm"
+        y = "0 mm"
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    Assert-True -Condition ($pointA.result.pointName -eq "Fixture_AxisPointA") -Message "create_construction_point did not create Fixture_AxisPointA."
+
+    $pointB = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 10 -Name "create_construction_point" -Arguments @{
+        name = "Fixture_AxisPointB"
+        mode = "coordinates"
+        base_plane_name = "xy"
+        x = "20 mm"
+        y = "0 mm"
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    Assert-True -Condition ($pointB.result.pointName -eq "Fixture_AxisPointB") -Message "create_construction_point did not create Fixture_AxisPointB."
+
+    $axis = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 11 -Name "create_construction_axis" -Arguments @{
+        name = "Fixture_PatternAxis"
+        mode = "two_points"
+        point_name_one = "Fixture_AxisPointA"
+        point_name_two = "Fixture_AxisPointB"
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    Assert-True -Condition ($axis.result.axisName -eq "Fixture_PatternAxis") -Message "create_construction_axis did not create Fixture_PatternAxis."
+
+    $shellSeed = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 12 -Name "create_rounded_rectangle_body" -Arguments @{
+        name = "Fixture_ShellBody"
+        base_plane = "xy"
+        width = "18 mm"
+        height = "12 mm"
+        thickness = "6 mm"
+        corner_radius = "1 mm"
+        x_offset = "-35 mm"
+        y_offset = "0 mm"
+        operation = "new_body"
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    Assert-True -Condition ($shellSeed.result.bodyName -eq "Fixture_ShellBody") -Message "create_rounded_rectangle_body did not create Fixture_ShellBody."
+
+    $shellResult = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 13 -Name "shell_body" -Arguments @{
+        body_name = "Fixture_ShellBody"
+        thickness = "1 mm"
+        name = "Fixture_ShellFeature"
+        thickness_side = "inside"
+    } -TimeoutSec ([Math]::Max($TimeoutSec, 20)) -ExtraHeaders $authHeaders
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$shellResult.result.featureName)) -Message "shell_body did not create a shell feature."
+
+    $offsetSeed = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 14 -Name "create_rounded_rectangle_body" -Arguments @{
+        name = "Fixture_OffsetBody"
+        base_plane = "xy"
+        width = "16 mm"
+        height = "10 mm"
+        thickness = "4 mm"
+        corner_radius = "1 mm"
+        x_offset = "0 mm"
+        y_offset = "28 mm"
+        operation = "new_body"
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    Assert-True -Condition ($offsetSeed.result.bodyName -eq "Fixture_OffsetBody") -Message "create_rounded_rectangle_body did not create Fixture_OffsetBody."
+
+    $offsetFaces = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 15 -Name "get_body_faces" -Arguments @{
+        body_name = "Fixture_OffsetBody"
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    $offsetFace = @($offsetFaces.result.faces | Sort-Object -Property area -Descending | Select-Object -First 1)
+    Assert-True -Condition ($null -ne $offsetFace.index) -Message "get_body_faces did not return a target face for Fixture_OffsetBody."
+
+    $offsetResult = Invoke-McpToolAllowError -Uri $mcpUri -SessionId $sessionId -Id 16 -Name "offset_face_or_press_pull" -Arguments @{
+        body_name = "Fixture_OffsetBody"
+        face_indices = @([int]$offsetFace.index)
+        distance = "0.5 mm"
+        name = "Fixture_OffsetFaceFeature"
+    } -TimeoutSec ([Math]::Max($TimeoutSec, 20)) -ExtraHeaders $authHeaders
+    if ($offsetResult.isError) {
+        Assert-True -Condition ($offsetResult.errorText -like "*offsetFacesFeatures*") -Message "offset_face_or_press_pull failed unexpectedly: $($offsetResult.errorText)"
+        Write-Warning "offset_face_or_press_pull returned the expected runtime unsupported response: $($offsetResult.errorText)"
+    }
+    else {
+        Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$offsetResult.value.result.featureName)) -Message "offset_face_or_press_pull did not create an Offset Face feature."
+    }
+
+    $patternSeed = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 17 -Name "create_rounded_rectangle_body" -Arguments @{
+        name = "Fixture_PatternSeed"
+        base_plane = "xy"
+        width = "6 mm"
+        height = "6 mm"
+        thickness = "3 mm"
+        corner_radius = "0.5 mm"
+        x_offset = "35 mm"
+        y_offset = "0 mm"
+        operation = "new_body"
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    Assert-True -Condition ($patternSeed.result.bodyName -eq "Fixture_PatternSeed") -Message "create_rounded_rectangle_body did not create Fixture_PatternSeed."
+
+    $patternResult = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 18 -Name "pattern_feature" -Arguments @{
+        name = "Fixture_RectangularPattern"
+        pattern_type = "rectangular"
+        body_names = @("Fixture_PatternSeed")
+        direction_one_axis = "x"
+        quantity_one = 2
+        distance_one = "12 mm"
+    } -TimeoutSec ([Math]::Max($TimeoutSec, 20)) -ExtraHeaders $authHeaders
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$patternResult.result.featureName)) -Message "pattern_feature did not create Fixture_RectangularPattern."
+
+    $mirrorResult = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 19 -Name "mirror_features_or_bodies" -Arguments @{
+        name = "Fixture_MirrorFeature"
+        body_names = @("Fixture_PatternSeed")
+        mirror_plane_name = "yz"
+    } -TimeoutSec ([Math]::Max($TimeoutSec, 20)) -ExtraHeaders $authHeaders
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace([string]$mirrorResult.result.featureName)) -Message "mirror_features_or_bodies did not create Fixture_MirrorFeature."
+
+    $printability = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 20 -Name "inspect_printability" -Arguments @{
+        body_names = @("Fixture_BaseBody", "Fixture_OffsetBody", "Fixture_ShellBody")
+    } -TimeoutSec $TimeoutSec -ExtraHeaders $authHeaders
+    Assert-True -Condition ($printability.result.readOnly -eq $true) -Message "inspect_printability did not report readOnly=true."
+
+    $demoOutput = Join-Path $env:TEMP "fusion_mcp_fixture_frames"
+    $demoCapture = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 21 -Name "capture_demo_sequence" -Arguments @{
+        output_dir = $demoOutput
+        image_width = 640
+        image_height = 360
+        view_names = @("iso", "front")
+        hide_all_sketches = $true
+        restore_visibility = $true
+    } -TimeoutSec ([Math]::Max($TimeoutSec, 30)) -ExtraHeaders $authHeaders
+    Assert-True -Condition ($demoCapture.result.frameCount -ge 2) -Message "capture_demo_sequence did not capture expected frames."
+
     if (-not $KeepFixtureDocument -and -not $SkipFixtureCreation) {
         $cleanupScript = @'
 def run(context):
@@ -330,7 +498,7 @@ def run(context):
         print("closing " + doc.name)
         doc.close(False)
 '@
-        $cleanupResult = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 9 -Name "run_fusion_script" -Arguments @{
+        $cleanupResult = Invoke-McpTool -Uri $mcpUri -SessionId $sessionId -Id 30 -Name "run_fusion_script" -Arguments @{
             script = $cleanupScript
             script_intent = "Close the temporary inspection fixture document after smoke testing."
             mcp_tool_gap = "The fixture cleanup needs direct document close behavior; it is not a modeling operation."
