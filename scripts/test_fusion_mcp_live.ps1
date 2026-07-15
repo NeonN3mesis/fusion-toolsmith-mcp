@@ -130,8 +130,18 @@ try {
     $toolsEvent = Read-SseEvent -Reader $reader -DeadlineMs ($TimeoutSec * 1000)
     $toolsResponse = $toolsEvent.data | ConvertFrom-Json
     $toolNames = @($toolsResponse.result.tools | ForEach-Object { $_.name })
-    if ($toolsResponse.id -ne 2 -or -not ($toolNames -contains "inspect_design") -or -not ($toolNames -contains "recommend_mcp_workflow")) {
-        throw "tools/list did not return expected tools."
+    $requiredTools = @(
+        "inspect_design",
+        "recommend_mcp_workflow",
+        "extract_reference_dimensions",
+        "create_rounded_rectangle_body",
+        "create_rounded_slot_cut",
+        "create_counterbore_hole_pattern",
+        "set_visibility"
+    )
+    $missingTools = @($requiredTools | Where-Object { $toolNames -notcontains $_ })
+    if ($toolsResponse.id -ne 2 -or $missingTools.Count -gt 0) {
+        throw "tools/list did not return expected tools. Missing: $($missingTools -join ', ')"
     }
 
     $inspectBody = @{

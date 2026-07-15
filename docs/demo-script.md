@@ -35,7 +35,8 @@ Inspect the active Pixel Slate wall-mount design. Summarize components, bodies, 
 Show:
 
 - the agent uses inspection tools before mutation
-- the result mentions actual model structure and real dimensions such as tablet size, clearance, wall thickness, and lip width
+- the agent calls `extract_reference_dimensions` after `inspect_design`
+- the result mentions actual model structure and real dimensions such as tablet size, clearance, wall thickness, lip width, and USB-C port openings
 
 Prompt:
 
@@ -46,7 +47,9 @@ Create a separate new demo document that recreates the wall-mount workflow from 
 Show:
 
 - the source design remains open and unmodified
-- the new document contains a tablet reference, frame rails, retaining lips, screw details, and cable opening
+- the new document contains a tablet reference, frame rails, bottom/side retaining lips, screw details, and mirrored cable openings
+- the agent uses structured tools such as `create_rounded_rectangle_body`, `create_rounded_slot_cut`, and `create_counterbore_hole_pattern`
+- the agent uses `set_visibility` to hide construction sketches and stage the finished view
 
 Prompt:
 

@@ -55,6 +55,11 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "inspect_design",
             "doctor",
             "recommend_mcp_workflow",
+            "extract_reference_dimensions",
+            "create_rounded_rectangle_body",
+            "create_rounded_slot_cut",
+            "create_counterbore_hole_pattern",
+            "set_visibility",
             "bearer_sse_url",
             "Authorization",
             "TaskManager is not running",
@@ -159,6 +164,19 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("sync-config", completed.stdout)
         self.assertIn("doctor", completed.stdout)
         self.assertIn("list-profiles", completed.stdout)
+
+    def test_cli_module_help_loads_without_fusion(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "fusion_mcp_cli.cli", "--help"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("install-addin", completed.stdout)
+        self.assertIn("test-live", completed.stdout)
 
     def test_cli_package_addin_builds_clean_zip_payload(self):
         with tempfile.TemporaryDirectory() as temp_dir:
