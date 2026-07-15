@@ -146,6 +146,86 @@ def _find_body_by_name(body_name):
     return None
 
 
+def _normalize_tokens(tokens):
+    if tokens is None:
+        return []
+    if isinstance(tokens, str):
+        return [tokens]
+    return [str(token) for token in tokens if token is not None]
+
+
+def _find_entity_by_token(entity_token):
+    if not entity_token:
+        return None
+    design = get_active_design()
+    found = _safe_value(lambda: design.findEntityByToken(entity_token))
+    if not found:
+        return None
+    if isinstance(found, (list, tuple)):
+        return found[0] if found else None
+    if hasattr(found, "count") and hasattr(found, "item"):
+        return found.item(0) if found.count else None
+    return found
+
+
+def _find_body_by_token(body_entity_token):
+    entity = _find_entity_by_token(body_entity_token)
+    if not entity:
+        return None
+    body = adsk.fusion.BRepBody.cast(entity)
+    if body:
+        return body
+    if _safe_value(lambda: entity.objectType, "").lower().endswith("brepbody"):
+        return entity
+    if hasattr(entity, "faces") or hasattr(entity, "edges"):
+        return entity
+    return None
+
+
+def _body_from_name_or_token(body_name=None, body_entity_token=None):
+    if body_entity_token:
+        body = _find_body_by_token(body_entity_token)
+        if not body:
+            raise ValueError(f"Body entity token '{body_entity_token}' did not resolve to a BRep body.")
+        return body
+    if body_name:
+        body = _find_body_by_name(body_name)
+        if not body:
+            raise ValueError(f"Body '{body_name}' not found.")
+        return body
+    return None
+
+
+def _entity_kind(entity):
+    object_type = (_safe_value(lambda: entity.objectType) or "").lower()
+    if "brepedge" in object_type:
+        return "edge"
+    if "brepface" in object_type:
+        return "face"
+    if "brepbody" in object_type:
+        return "body"
+    if hasattr(entity, "length") and hasattr(entity, "body"):
+        return "edge"
+    if hasattr(entity, "area") and hasattr(entity, "body"):
+        return "face"
+    if hasattr(entity, "faces") or hasattr(entity, "edges"):
+        return "body"
+    return None
+
+
+def _entities_by_tokens(entity_tokens, expected_kind):
+    entities = []
+    for token in _normalize_tokens(entity_tokens):
+        entity = _find_entity_by_token(token)
+        if not entity:
+            raise ValueError(f"Entity token '{token}' did not resolve to a Fusion entity.")
+        kind = _entity_kind(entity)
+        if kind != expected_kind:
+            raise ValueError(f"Entity token '{token}' resolved to {kind or 'unknown'}, expected {expected_kind}.")
+        entities.append(entity)
+    return entities
+
+
 def _body_edges_by_indices(body, edge_indices=None):
     edges = _safe_value(lambda: body.edges)
     count = _safe_value(lambda: edges.count, 0) or 0
@@ -158,6 +238,31 @@ def _body_edges_by_indices(body, edge_indices=None):
             raise ValueError(f"edge index {index} is out of range for body '{body.name}' with {count} edges.")
         selected.append(edges.item(index))
     return selected
+
+
+def _resolve_edges(body_name=None, edge_indices=None, edge_entity_tokens=None, body_entity_token=None):
+    edges = _entities_by_tokens(edge_entity_tokens, "edge")
+    if edges:
+        body = _safe_value(lambda: edges[0].body)
+        if body_entity_token or body_name:
+            requested_body = _body_from_name_or_token(body_name, body_entity_token)
+            if body and requested_body and body != requested_body:
+                raise ValueError("Resolved edge tokens do not belong to the requested body.")
+            body = requested_body or body
+        if not body:
+            raise ValueError("Edge tokens resolved, but their parent body could not be determined. Provide body_name or body_entity_token.")
+        for edge in edges:
+            edge_body = _safe_value(lambda edge=edge: edge.body)
+            if edge_body and edge_body != body:
+                raise ValueError("All edge tokens must belong to the same body.")
+        return body, edges, "entity_tokens"
+
+    if edge_indices is None or len(edge_indices) == 0:
+        raise ValueError("edge_indices is required unless edge_entity_tokens are provided. Use get_body_edges first to choose explicit edges.")
+    body = _body_from_name_or_token(body_name, body_entity_token)
+    if not body:
+        raise ValueError("body_name or body_entity_token is required unless edge_entity_tokens are provided.")
+    return body, _body_edges_by_indices(body, edge_indices), "indices"
 
 
 def _edge_collection(edges):
@@ -292,6 +397,31 @@ def _body_faces_by_indices(body, face_indices=None):
     return selected
 
 
+def _resolve_faces(body_name=None, face_indices=None, face_entity_tokens=None, body_entity_token=None):
+    faces = _entities_by_tokens(face_entity_tokens, "face")
+    if faces:
+        body = _safe_value(lambda: faces[0].body)
+        if body_entity_token or body_name:
+            requested_body = _body_from_name_or_token(body_name, body_entity_token)
+            if body and requested_body and body != requested_body:
+                raise ValueError("Resolved face tokens do not belong to the requested body.")
+            body = requested_body or body
+        if not body:
+            raise ValueError("Face tokens resolved, but their parent body could not be determined. Provide body_name or body_entity_token.")
+        for face in faces:
+            face_body = _safe_value(lambda face=face: face.body)
+            if face_body and face_body != body:
+                raise ValueError("All face tokens must belong to the same body.")
+        return body, faces, "entity_tokens"
+
+    if face_indices is None or len(face_indices) == 0:
+        raise ValueError("face_indices is required unless face_entity_tokens are provided. Use get_body_faces first to choose explicit faces.")
+    body = _body_from_name_or_token(body_name, body_entity_token)
+    if not body:
+        raise ValueError("body_name or body_entity_token is required unless face_entity_tokens are provided.")
+    return body, _body_faces_by_indices(body, face_indices), "indices"
+
+
 def _face_body_index(body, face):
     faces = _safe_value(lambda: body.faces)
     count = _safe_value(lambda: faces.count, 0) or 0
@@ -407,7 +537,7 @@ def get_body_faces(body_name, face_indices=None):
 
 
 @register_tool("offset_face_or_press_pull")
-def offset_face_or_press_pull(body_name=None, face_indices=None, distance=None, name=None, use_selection=False):
+def offset_face_or_press_pull(body_name=None, face_indices=None, distance=None, name=None, use_selection=False, body_entity_token=None, face_entity_tokens=None):
     """
     Create a controlled Offset Face feature on explicit or selected BRep faces.
 
@@ -420,19 +550,18 @@ def offset_face_or_press_pull(body_name=None, face_indices=None, distance=None, 
             return {"error": "distance is required, e.g. '1 mm' or '-0.5 mm'."}
 
         body = None
+        targeting = "selection" if use_selection else "indices"
         if use_selection:
             faces = _selected_brep_faces()
             if not faces:
                 return {"error": "No selected BRep faces found."}
         else:
-            if not body_name:
-                return {"error": "body_name is required unless use_selection=true."}
-            if face_indices is None or len(face_indices) == 0:
-                return {"error": "face_indices is required. Use get_body_faces first to choose explicit face indices."}
-            body = _find_body_by_name(body_name)
-            if not body:
-                return {"error": f"Body '{body_name}' not found."}
-            faces = _body_faces_by_indices(body, face_indices)
+            body, faces, targeting = _resolve_faces(
+                body_name=body_name,
+                face_indices=face_indices,
+                face_entity_tokens=face_entity_tokens,
+                body_entity_token=body_entity_token,
+            )
 
         if not _same_component_faces(faces):
             return {"error": "All offset faces must belong to the same component."}
@@ -474,6 +603,7 @@ def offset_face_or_press_pull(body_name=None, face_indices=None, distance=None, 
                 ],
                 "distance": distance,
                 "useSelection": bool(use_selection),
+                "targeting": targeting,
                 "warnings": [
                     "This tool creates a Fusion Offset Face feature only; it does not emulate Press Pull for edges or sketch profiles.",
                     "Positive distance follows the selected face normal; negative distance offsets the opposite direction.",
@@ -760,7 +890,7 @@ def sweep_feature(profile_sketch_name, path_sketch_name, operation=None, name=No
 
 
 @register_tool("fillet_feature")
-def fillet_feature(body_name, edge_indices, radius, name=None, tangent_chain=True):
+def fillet_feature(body_name=None, edge_indices=None, radius=None, name=None, tangent_chain=True, body_entity_token=None, edge_entity_tokens=None):
     """
     Create a constant-radius fillet on selected edges of a named body.
 
@@ -768,14 +898,16 @@ def fillet_feature(body_name, edge_indices, radius, name=None, tangent_chain=Tru
     Use inspect/selection tools first when edge identity is uncertain.
     """
     try:
-        if edge_indices is None or len(edge_indices) == 0:
-            return {"error": "edge_indices is required. Inspect the body or use selection before choosing edges."}
-        body = _find_body_by_name(body_name)
-        if not body:
-            return {"error": f"Body '{body_name}' not found."}
+        if not radius:
+            return {"error": "radius is required, e.g. '1 mm'."}
 
+        body, edges, targeting = _resolve_edges(
+            body_name=body_name,
+            edge_indices=edge_indices,
+            edge_entity_tokens=edge_entity_tokens,
+            body_entity_token=body_entity_token,
+        )
         before = _design_state_snapshot(include_selections=False)
-        edges = _body_edges_by_indices(body, edge_indices)
         edge_collection = _edge_collection(edges)
         component = _safe_value(lambda: body.parentComponent) or get_active_design().rootComponent
         fillets = component.features.filletFeatures
@@ -794,10 +926,14 @@ def fillet_feature(body_name, edge_indices, radius, name=None, tangent_chain=Tru
             "result": {
                 "featureName": feature_name,
                 "bodyName": body.name,
-                "edgeIndices": [int(index) for index in edge_indices],
+                "edgeIndices": [
+                    _edge_body_index(body, edge)
+                    for edge in edges
+                ],
                 "edges": _edge_refs(edges),
                 "radius": radius,
                 "tangentChain": bool(tangent_chain),
+                "targeting": targeting,
                 "feature": inspected,
                 "stateComparison": comparison,
             }
@@ -809,7 +945,7 @@ def fillet_feature(body_name, edge_indices, radius, name=None, tangent_chain=Tru
 
 
 @register_tool("chamfer_feature")
-def chamfer_feature(body_name, edge_indices, distance, name=None, tangent_chain=True):
+def chamfer_feature(body_name=None, edge_indices=None, distance=None, name=None, tangent_chain=True, body_entity_token=None, edge_entity_tokens=None):
     """
     Create an equal-distance chamfer on selected edges of a named body.
 
@@ -817,14 +953,16 @@ def chamfer_feature(body_name, edge_indices, distance, name=None, tangent_chain=
     wrong edge is easy to miss visually and hard to diagnose after export.
     """
     try:
-        if edge_indices is None or len(edge_indices) == 0:
-            return {"error": "edge_indices is required. Inspect the body or use selection before choosing edges."}
-        body = _find_body_by_name(body_name)
-        if not body:
-            return {"error": f"Body '{body_name}' not found."}
+        if not distance:
+            return {"error": "distance is required, e.g. '1 mm'."}
 
+        body, edges, targeting = _resolve_edges(
+            body_name=body_name,
+            edge_indices=edge_indices,
+            edge_entity_tokens=edge_entity_tokens,
+            body_entity_token=body_entity_token,
+        )
         before = _design_state_snapshot(include_selections=False)
-        edges = _body_edges_by_indices(body, edge_indices)
         edge_collection = _edge_collection(edges)
         component = _safe_value(lambda: body.parentComponent) or get_active_design().rootComponent
         chamfers = component.features.chamferFeatures
@@ -842,11 +980,15 @@ def chamfer_feature(body_name, edge_indices, distance, name=None, tangent_chain=
             "result": {
                 "featureName": feature_name,
                 "bodyName": body.name,
-                "edgeIndices": [int(index) for index in edge_indices],
+                "edgeIndices": [
+                    _edge_body_index(body, edge)
+                    for edge in edges
+                ],
                 "edges": _edge_refs(edges),
                 "distance": distance,
                 "chamferType": "EqualDistance",
                 "tangentChain": bool(tangent_chain),
+                "targeting": targeting,
                 "feature": inspected,
                 "stateComparison": comparison,
             }
@@ -858,7 +1000,7 @@ def chamfer_feature(body_name, edge_indices, distance, name=None, tangent_chain=
 
 
 @register_tool("shell_body")
-def shell_body(body_name, thickness, open_face_indices=None, name=None, thickness_side="inside", outside_thickness=None, tangent_chain=True):
+def shell_body(body_name=None, thickness=None, open_face_indices=None, name=None, thickness_side="inside", outside_thickness=None, tangent_chain=True, body_entity_token=None, open_face_entity_tokens=None):
     """
     Shell a named solid body with explicit wall thickness.
 
@@ -868,15 +1010,29 @@ def shell_body(body_name, thickness, open_face_indices=None, name=None, thicknes
     try:
         if not thickness:
             return {"error": "thickness is required, e.g. '2 mm'."}
-        body = _find_body_by_name(body_name)
+        body = _body_from_name_or_token(body_name, body_entity_token)
+        if not body and open_face_entity_tokens:
+            body, _faces, _targeting = _resolve_faces(face_entity_tokens=open_face_entity_tokens)
         if not body:
-            return {"error": f"Body '{body_name}' not found."}
+            return {"error": "body_name or body_entity_token is required unless open_face_entity_tokens are provided."}
 
         before = _design_state_snapshot(include_selections=False)
         input_entities = adsk.core.ObjectCollection.create()
         opened_faces = []
-        if open_face_indices:
+        targeting = "body"
+        if open_face_entity_tokens:
+            resolved_body, opened_faces, targeting = _resolve_faces(
+                body_name=body_name,
+                face_indices=open_face_indices,
+                face_entity_tokens=open_face_entity_tokens,
+                body_entity_token=body_entity_token,
+            )
+            body = resolved_body or body
+            for face in opened_faces:
+                input_entities.add(face)
+        elif open_face_indices:
             opened_faces = _body_faces_by_indices(body, open_face_indices)
+            targeting = "indices"
             for face in opened_faces:
                 input_entities.add(face)
         else:
@@ -910,12 +1066,16 @@ def shell_body(body_name, thickness, open_face_indices=None, name=None, thicknes
                 "thickness": thickness,
                 "outsideThickness": outside_thickness,
                 "thicknessSide": thickness_side,
-                "openFaceIndices": [int(index) for index in (open_face_indices or [])],
+                "openFaceIndices": [
+                    _face_body_index(body, face)
+                    for face in opened_faces
+                ],
                 "openedFaces": [
                     _face_ref(body, face, _face_body_index(body, face))
                     for face in opened_faces
                 ],
                 "tangentChain": bool(tangent_chain),
+                "targeting": targeting,
                 "feature": inspected,
                 "stateComparison": comparison,
             }

@@ -393,11 +393,17 @@ def get_tool_schemas():
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "body_name": {"type": "string", "description": "Name of the body whose faces should be offset. Required unless use_selection=true."},
+                    "body_name": {"type": "string", "description": "Name of the body whose faces should be offset. Required unless use_selection=true, body_entity_token is supplied, or face_entity_tokens infer the body."},
+                    "body_entity_token": {"type": "string", "description": "Optional Fusion entity token for the target BRep body."},
                     "face_indices": {
                         "type": "array",
                         "items": {"type": "integer"},
                         "description": "Explicit 0-based face indices on the body. Use get_body_faces first."
+                    },
+                    "face_entity_tokens": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional Fusion entity tokens for exact BRep face targeting, usually from get_body_faces."
                     },
                     "distance": {"type": "string", "description": "Fusion distance expression, e.g. '1 mm' or '-0.5 mm'. Positive follows the face normal."},
                     "name": {"type": "string", "description": "Optional name for the created Offset Face feature."},
@@ -522,61 +528,79 @@ def get_tool_schemas():
         },
         {
             "name": "fillet_feature",
-            "description": "Create a constant-radius fillet on explicit edge indices of a named body with built-in before/after design-state comparison. Inspect or select edges before choosing indices.",
+            "description": "Create a constant-radius fillet on explicit edge indices or edge entity tokens with built-in before/after design-state comparison. Inspect edges before choosing targets.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "body_name": {"type": "string", "description": "Name of the body whose edges should be filleted."},
+                    "body_entity_token": {"type": "string", "description": "Optional Fusion entity token for the target BRep body."},
                     "edge_indices": {
                         "type": "array",
                         "items": {"type": "integer"},
-                        "description": "Required explicit 0-based edge indices on the body."
+                        "description": "Explicit 0-based edge indices on the body. Required unless edge_entity_tokens are supplied."
+                    },
+                    "edge_entity_tokens": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional Fusion entity tokens for exact BRep edge targeting, usually from get_body_edges."
                     },
                     "radius": {"type": "string", "description": "Fusion radius expression, e.g. '1 mm'."},
                     "name": {"type": "string", "description": "Optional name for the created fillet feature."},
                     "tangent_chain": {"type": "boolean", "default": True}
                 },
-                "required": ["body_name", "edge_indices", "radius"]
+                "required": ["radius"]
             }
         },
         {
             "name": "chamfer_feature",
-            "description": "Create an equal-distance chamfer on explicit edge indices of a named body with built-in before/after design-state comparison. Inspect or select edges before choosing indices.",
+            "description": "Create an equal-distance chamfer on explicit edge indices or edge entity tokens with built-in before/after design-state comparison. Inspect edges before choosing targets.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "body_name": {"type": "string", "description": "Name of the body whose edges should be chamfered."},
+                    "body_entity_token": {"type": "string", "description": "Optional Fusion entity token for the target BRep body."},
                     "edge_indices": {
                         "type": "array",
                         "items": {"type": "integer"},
-                        "description": "Required explicit 0-based edge indices on the body."
+                        "description": "Explicit 0-based edge indices on the body. Required unless edge_entity_tokens are supplied."
+                    },
+                    "edge_entity_tokens": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional Fusion entity tokens for exact BRep edge targeting, usually from get_body_edges."
                     },
                     "distance": {"type": "string", "description": "Fusion chamfer distance expression, e.g. '1 mm'."},
                     "name": {"type": "string", "description": "Optional name for the created chamfer feature."},
                     "tangent_chain": {"type": "boolean", "default": True}
                 },
-                "required": ["body_name", "edge_indices", "distance"]
+                "required": ["distance"]
             }
         },
         {
             "name": "shell_body",
-            "description": "Shell a named body with explicit wall thickness and optional open face indices. Use get_body_faces first when opening specific faces.",
+            "description": "Shell a named or entity-token-targeted body with explicit wall thickness and optional indexed or token-targeted open faces. Use get_body_faces first when opening specific faces.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "body_name": {"type": "string", "description": "Name of the body to shell."},
+                    "body_entity_token": {"type": "string", "description": "Optional Fusion entity token for the BRep body to shell."},
                     "thickness": {"type": "string", "description": "Inside or default shell thickness, e.g. '2 mm'."},
                     "open_face_indices": {
                         "type": "array",
                         "items": {"type": "integer"},
                         "description": "Optional 0-based face indices to remove/open while shelling."
                     },
+                    "open_face_entity_tokens": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional Fusion entity tokens for exact open-face targeting, usually from get_body_faces."
+                    },
                     "name": {"type": "string", "description": "Optional name for the created shell feature."},
                     "thickness_side": {"type": "string", "enum": ["inside", "outside", "both"], "default": "inside"},
                     "outside_thickness": {"type": "string", "description": "Outside thickness for outside or both mode. Defaults to thickness."},
                     "tangent_chain": {"type": "boolean", "default": True}
                 },
-                "required": ["body_name", "thickness"]
+                "required": ["thickness"]
             }
         },
 

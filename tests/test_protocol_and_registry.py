@@ -2780,6 +2780,80 @@ def run(context):
         self.assertFalse(created_inputs[0].edge_sets[0][2])
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
+    def test_fillet_feature_accepts_edge_entity_tokens(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+
+        class MockObjectCollection(list):
+            @property
+            def count(self):
+                return len(self)
+            def add(self, item):
+                self.append(item)
+
+        original_object_collection = sys.modules["adsk.core"].ObjectCollection
+        sys.modules["adsk.core"].ObjectCollection = types.SimpleNamespace(create=lambda: MockObjectCollection())
+
+        created_inputs = []
+        class MockFilletInput:
+            def __init__(self):
+                self.edge_sets = []
+            def addConstantRadiusEdgeSet(self, edges, radius, tangent_chain):
+                self.edge_sets.append((list(edges), radius, tangent_chain))
+
+        class MockFillets:
+            def createInput(self):
+                input_obj = MockFilletInput()
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                return types.SimpleNamespace(name="")
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(filletFeatures=MockFillets()),
+        )
+        body = types.SimpleNamespace(name="BodyA", parentComponent=component)
+        edge = types.SimpleNamespace(
+            name="EdgeToken",
+            entityToken="edge-token",
+            length=1.0,
+            objectType="BRepEdge",
+            body=body,
+        )
+        body.edges = types.SimpleNamespace(count=1, item=lambda index: edge)
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(bRepBodies=[body], allOccurrences=[]),
+            findEntityByToken=lambda token: edge if token == "edge-token" else None,
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {"result": {"featureName": feature_name}}
+        try:
+            res = self.tools.execute_tool("fillet_feature", {
+                "edge_entity_tokens": ["edge-token"],
+                "radius": "1 mm",
+                "name": "FilletToken",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+            sys.modules["adsk.core"].ObjectCollection = original_object_collection
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["targeting"], "entity_tokens")
+        self.assertEqual(res["result"]["edgeIndices"], [0])
+        self.assertEqual(created_inputs[0].edge_sets[0][0], [edge])
+
     def test_chamfer_feature_requires_edge_indices(self):
         res = self.tools.execute_tool("chamfer_feature", {
             "body_name": "BodyA",
@@ -2881,6 +2955,219 @@ def run(context):
         self.assertEqual(created_inputs[0].distance, "1 mm")
         self.assertFalse(created_inputs[0].tangent_chain)
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_chamfer_feature_accepts_edge_entity_tokens(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+
+        class MockObjectCollection(list):
+            @property
+            def count(self):
+                return len(self)
+            def add(self, item):
+                self.append(item)
+
+        original_object_collection = sys.modules["adsk.core"].ObjectCollection
+        sys.modules["adsk.core"].ObjectCollection = types.SimpleNamespace(create=lambda: MockObjectCollection())
+
+        created_inputs = []
+        class MockChamferInput:
+            def __init__(self, edges, tangent_chain):
+                self.edges = list(edges)
+                self.tangent_chain = tangent_chain
+                self.distance = None
+            def setToEqualDistance(self, distance):
+                self.distance = distance
+
+        class MockChamfers:
+            def createInput(self, edges, tangent_chain):
+                input_obj = MockChamferInput(edges, tangent_chain)
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                return types.SimpleNamespace(name="")
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(chamferFeatures=MockChamfers()),
+        )
+        body = types.SimpleNamespace(name="BodyA", parentComponent=component)
+        edge = types.SimpleNamespace(
+            name="EdgeToken",
+            entityToken="edge-token",
+            length=1.0,
+            objectType="BRepEdge",
+            body=body,
+        )
+        body.edges = types.SimpleNamespace(count=1, item=lambda index: edge)
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(bRepBodies=[body], allOccurrences=[]),
+            findEntityByToken=lambda token: edge if token == "edge-token" else None,
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {"result": {"featureName": feature_name}}
+        try:
+            res = self.tools.execute_tool("chamfer_feature", {
+                "edge_entity_tokens": ["edge-token"],
+                "distance": "1 mm",
+                "name": "ChamferToken",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+            sys.modules["adsk.core"].ObjectCollection = original_object_collection
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["targeting"], "entity_tokens")
+        self.assertEqual(res["result"]["edgeIndices"], [0])
+        self.assertEqual(created_inputs[0].edges, [edge])
+
+    def test_offset_face_accepts_face_entity_tokens(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+        created_inputs = []
+
+        class MockOffsetFaces:
+            def createInput(self, faces, distance):
+                input_obj = types.SimpleNamespace(faces=list(faces), distance=distance)
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                return types.SimpleNamespace(name="")
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(offsetFacesFeatures=MockOffsetFaces()),
+        )
+        body = types.SimpleNamespace(name="BodyA", parentComponent=component)
+        face = types.SimpleNamespace(
+            name="FaceToken",
+            entityToken="face-token",
+            area=10.0,
+            objectType="BRepFace",
+            body=body,
+        )
+        body.faces = types.SimpleNamespace(count=1, item=lambda index: face)
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(bRepBodies=[body], allOccurrences=[]),
+            findEntityByToken=lambda token: face if token == "face-token" else None,
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {"result": {"featureName": feature_name}}
+        try:
+            res = self.tools.execute_tool("offset_face_or_press_pull", {
+                "face_entity_tokens": ["face-token"],
+                "distance": "1 mm",
+                "name": "OffsetToken",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["targeting"], "entity_tokens")
+        self.assertEqual(res["result"]["faceIndices"], [0])
+        self.assertEqual(created_inputs[0].faces, [face])
+
+    def test_shell_body_accepts_body_and_open_face_entity_tokens(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+
+        class MockObjectCollection(list):
+            @property
+            def count(self):
+                return len(self)
+            def add(self, item):
+                self.append(item)
+
+        original_object_collection = sys.modules["adsk.core"].ObjectCollection
+        sys.modules["adsk.core"].ObjectCollection = types.SimpleNamespace(create=lambda: MockObjectCollection())
+        created_inputs = []
+
+        class MockShells:
+            def createInput(self, input_entities, tangent_chain):
+                input_obj = types.SimpleNamespace(
+                    input_entities=list(input_entities),
+                    tangent_chain=tangent_chain,
+                    insideThickness=None,
+                    outsideThickness=None,
+                )
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                return types.SimpleNamespace(name="")
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(shellFeatures=MockShells()),
+        )
+        body = types.SimpleNamespace(
+            name="BodyA",
+            objectType="BRepBody",
+            entityToken="body-token",
+            parentComponent=component,
+        )
+        face = types.SimpleNamespace(
+            name="FaceToken",
+            entityToken="face-token",
+            area=10.0,
+            objectType="BRepFace",
+            body=body,
+        )
+        body.faces = types.SimpleNamespace(count=1, item=lambda index: face)
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=types.SimpleNamespace(bRepBodies=[body], allOccurrences=[]),
+            findEntityByToken=lambda token: {"body-token": body, "face-token": face}.get(token),
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {"result": {"featureName": feature_name}}
+        try:
+            res = self.tools.execute_tool("shell_body", {
+                "body_entity_token": "body-token",
+                "open_face_entity_tokens": ["face-token"],
+                "thickness": "2 mm",
+                "name": "ShellToken",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+            sys.modules["adsk.core"].ObjectCollection = original_object_collection
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["targeting"], "entity_tokens")
+        self.assertEqual(res["result"]["openFaceIndices"], [0])
+        self.assertEqual(created_inputs[0].input_entities, [face])
+        self.assertEqual(created_inputs[0].insideThickness, "2 mm")
 
     def test_create_hole_pattern_countersink_uses_conical_loft_cut(self):
         class MockCollection:

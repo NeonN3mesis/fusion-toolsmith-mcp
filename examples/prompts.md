@@ -63,6 +63,10 @@ Inspect the target body's faces and edges, then shell it with an explicit wall t
 ```
 
 ```text
+Inspect the target body's edges and faces, then use entity tokens rather than names or indices for any fillet, chamfer, shell open-face, or offset-face operation where tokens are available.
+```
+
+```text
 Create named construction points and an axis for a repeatable pattern setup, then use the structured pattern tools instead of raw scripting.
 ```
 

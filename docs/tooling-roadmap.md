@@ -7,9 +7,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - Assembly joints
   - Create and inspect basic joints for repeatable component placement once the structured joint API surface is validated.
 
-- Entity-token targeting for more mutating tools
-  - Let mutating tools target stable entity tokens when Fusion exposes them, not only names, indices, or current selection.
-
 - Deeper slicer-grade printability
   - Move beyond heuristic warnings toward mesh/slicer-aware checks while keeping the tool read-only.
 
@@ -69,6 +66,12 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `offset_face_or_press_pull`
   - Create a controlled Offset Face feature on explicit body face indices or selected BRep faces.
   - Includes before/after state comparison and warnings that it covers face-offset behavior only, not arbitrary Press Pull edge/profile routing.
+
+- Entity-token targeting for mutating tools
+  - `fillet_feature` and `chamfer_feature` accept `edge_entity_tokens` from `get_body_edges`.
+  - `shell_body` accepts `body_entity_token` and `open_face_entity_tokens` from `get_body_faces`.
+  - `offset_face_or_press_pull` accepts `body_entity_token` and `face_entity_tokens` for exact face targeting.
+  - Existing name/index targeting remains supported for compatibility.
 
 - `create_construction_point`
   - Create named construction points from coordinates, named point entities, or selected point-like geometry.
