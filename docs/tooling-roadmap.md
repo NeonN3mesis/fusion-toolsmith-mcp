@@ -4,9 +4,6 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 
 ## Next Tool Gaps
 
-- Loft tool
-  - Create lofted solid/surface features from named profiles or selected profiles with clear section ordering and continuity warnings.
-
 - Sweep/path tool
   - Create sweep features from a named profile and path, including basic path validation and result-body reporting.
 
@@ -37,6 +34,10 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - `revolve_feature`
   - Create revolve features from named sketch profiles and explicit standard, named, or selected axes.
   - Requires an explicit operation and returns angle, result bodies, participants, inspection, and before/after design-state comparison.
+
+- `loft_feature`
+  - Create solid loft features from ordered named sketch profiles.
+  - Requires an explicit operation and returns section order, result bodies, participants, warnings, inspection, and before/after design-state comparison.
 
 - `mirror_features_or_bodies`
   - Mirror named bodies, named timeline features, or selected entities across standard planes, named construction planes, or selected planar faces.

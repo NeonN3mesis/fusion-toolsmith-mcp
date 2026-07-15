@@ -153,6 +153,7 @@ try {
         "create_sketch_offset",
         "create_parametric_feature",
         "revolve_feature",
+        "loft_feature",
         "create_rounded_rectangle_body",
         "create_rounded_slot_cut",
         "create_rounded_pocket",

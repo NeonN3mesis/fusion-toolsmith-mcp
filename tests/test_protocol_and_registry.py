@@ -382,6 +382,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("run_fusion_script", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("revolve_feature", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("loft_feature", resource["profiles"]["modeling"]["tools"])
         self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
         self.assertIn("list_documents", resource["profiles"]["document"]["tools"])
         advertised = {schema["name"] for schema in self.tools.get_tool_schemas()}
@@ -1418,6 +1419,7 @@ def run(context):
         self.assertIn("offset_face_or_press_pull", tool_names)
         self.assertIn("extrude_feature", tool_names)
         self.assertIn("revolve_feature", tool_names)
+        self.assertIn("loft_feature", tool_names)
         self.assertIn("fillet_feature", tool_names)
         self.assertIn("chamfer_feature", tool_names)
         self.assertIn("shell_body", tool_names)
@@ -2326,6 +2328,110 @@ def run(context):
         self.assertEqual(created_inputs[0].profile, profile)
         self.assertEqual(created_inputs[0].axis, axis)
         self.assertEqual(created_inputs[0].angle, "180 deg")
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_loft_feature_creates_ordered_profile_sections(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+        original_inspect = features_module.inspect_feature
+
+        class MockCollection:
+            def __init__(self, items=None):
+                self._items = list(items or [])
+                self.count = len(self._items)
+            def item(self, index):
+                return self._items[index]
+            def add(self, item):
+                self._items.append(item)
+                self.count = len(self._items)
+
+        profile_a = types.SimpleNamespace(name="ProfileA")
+        profile_b = types.SimpleNamespace(name="ProfileB")
+        result_body = types.SimpleNamespace(name="Body0")
+        created_inputs = []
+
+        class MockParticipantBodies:
+            def __init__(self):
+                self.items = []
+            def add(self, body):
+                self.items.append(body)
+
+        class MockLoftInput:
+            def __init__(self, operation_arg):
+                self.operation = operation_arg
+                self.loftSections = MockCollection()
+                self.participantBodies = MockParticipantBodies()
+
+        class MockLofts:
+            def createInput(self, operation_arg):
+                input_obj = MockLoftInput(operation_arg)
+                created_inputs.append(input_obj)
+                return input_obj
+            def add(self, input_obj):
+                self.last_input = input_obj
+                return types.SimpleNamespace(
+                    name="",
+                    bodies=MockCollection([result_body]),
+                    participantBodies=MockCollection(input_obj.participantBodies.items),
+                )
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(loftFeatures=MockLofts()),
+        )
+        sketch_a = types.SimpleNamespace(
+            name="SectionA",
+            parentComponent=component,
+            profiles=MockCollection([profile_a]),
+        )
+        sketch_b = types.SimpleNamespace(
+            name="SectionB",
+            parentComponent=component,
+            profiles=MockCollection([profile_b]),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            sketches=[sketch_a, sketch_b],
+            bRepBodies=[],
+            allOccurrences=[],
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        features_module._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"timelineItems": 0 if not created_inputs else 1, "unhealthyTimelineItems": 0}
+        }
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        features_module.inspect_feature = lambda feature_name: {
+            "result": {"featureName": feature_name, "operation": "NewBody"}
+        }
+        try:
+            res = self.tools.execute_tool("loft_feature", {
+                "sections": [
+                    {"sketch_name": "SectionA", "profile_index": 0},
+                    {"sketch_name": "SectionB", "profile_index": 0},
+                ],
+                "operation": "NewBody",
+                "name": "LoftA",
+                "body_name": "LoftBody",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+            features_module.inspect_feature = original_inspect
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["featureName"], "LoftA")
+        self.assertEqual(res["result"]["operation"], "NewBody")
+        self.assertEqual(res["result"]["resultBodies"], ["LoftBody"])
+        self.assertEqual(res["result"]["sections"], [
+            {"sketchName": "SectionA", "profileIndex": 0},
+            {"sketchName": "SectionB", "profileIndex": 0},
+        ])
+        self.assertEqual(created_inputs[0].loftSections._items, [profile_a, profile_b])
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
 
     def test_fillet_feature_requires_edge_indices(self):

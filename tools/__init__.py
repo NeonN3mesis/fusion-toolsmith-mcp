@@ -459,6 +459,41 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "loft_feature",
+            "description": "Create a solid loft from an ordered list of named sketch profiles with explicit NewBody/Join/Cut/Intersect operation and built-in before/after design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sections": {
+                        "type": "array",
+                        "minItems": 2,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "sketch_name": {"type": "string", "description": "Sketch containing this loft section profile."},
+                                "profile_index": {"type": "integer", "default": 0, "description": "0-based profile index in the sketch."}
+                            },
+                            "required": ["sketch_name"]
+                        },
+                        "description": "Ordered loft sections. The first item is the first profile; order matters."
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["NewBody", "Join", "Cut", "Intersect", "new_body", "join", "cut", "intersect"],
+                        "description": "Required explicit feature operation. Do not guess."
+                    },
+                    "name": {"type": "string", "description": "Optional name for the created loft feature."},
+                    "body_name": {"type": "string", "description": "Optional name for the first result body."},
+                    "participant_body_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit participant bodies for Join/Cut/Intersect operations."
+                    }
+                },
+                "required": ["sections", "operation"]
+            }
+        },
+        {
             "name": "fillet_feature",
             "description": "Create a constant-radius fillet on explicit edge indices of a named body with built-in before/after design-state comparison. Inspect or select edges before choosing indices.",
             "inputSchema": {

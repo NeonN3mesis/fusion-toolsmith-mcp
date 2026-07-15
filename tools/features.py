@@ -54,6 +54,28 @@ def _profile_by_index(sketch, profile_index):
     return profiles.item(index)
 
 
+def _profiles_from_sections(sections):
+    if not isinstance(sections, list) or len(sections) < 2:
+        raise ValueError("sections must contain at least two items with sketch_name and optional profile_index.")
+    resolved = []
+    for index, section in enumerate(sections):
+        if not isinstance(section, dict):
+            raise ValueError(f"sections[{index}] must be an object with sketch_name and optional profile_index.")
+        sketch_name = section.get("sketch_name")
+        if not sketch_name:
+            raise ValueError(f"sections[{index}].sketch_name is required.")
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            raise ValueError(f"Sketch '{sketch_name}' not found.")
+        profile_index = int(section.get("profile_index", 0))
+        resolved.append({
+            "sketch": sketch,
+            "profile": _profile_by_index(sketch, profile_index),
+            "profileIndex": profile_index,
+        })
+    return resolved
+
+
 def _set_participant_bodies(ext_input, body_names):
     if not body_names:
         return []
@@ -564,6 +586,74 @@ def revolve_feature(sketch_name, axis_name="z", operation=None, angle="360 deg",
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error creating revolve feature: {e}\n{err}")
         return {"error": f"Failed to create revolve feature: {str(e)}"}
+
+
+@register_tool("loft_feature")
+def loft_feature(sections, operation=None, name=None, body_name=None, participant_body_names=None):
+    """
+    Create a solid loft from an ordered list of named sketch profiles.
+
+    Section ordering is deliberately explicit. Rails, centerlines, and surface
+    lofts are separate behavior and should not be inferred by this first solid
+    loft tool.
+    """
+    try:
+        if not operation:
+            return {"error": "operation is required and must be one of NewBody, Join, Cut, or Intersect."}
+
+        resolved_sections = _profiles_from_sections(sections)
+        first_sketch = resolved_sections[0]["sketch"]
+        component = _safe_value(lambda: first_sketch.parentComponent) or get_active_design().rootComponent
+        lofts = _safe_value(lambda: component.features.loftFeatures)
+        if not lofts:
+            return {"error": "This Fusion runtime does not expose loftFeatures for API-created loft features."}
+
+        before = _design_state_snapshot(include_selections=False)
+        op = _feature_operation(operation)
+        loft_input = lofts.createInput(op)
+        for section in resolved_sections:
+            loft_input.loftSections.add(section["profile"])
+        participants = _set_participant_bodies(loft_input, participant_body_names)
+        loft = lofts.add(loft_input)
+        if name:
+            loft.name = name
+
+        result_body_names = []
+        bodies = _safe_value(lambda: loft.bodies)
+        for index, body in enumerate(_collection_items(bodies)):
+            if body_name:
+                body.name = body_name if index == 0 else f"{body_name}_{index}"
+            result_body_names.append(_safe_value(lambda body=body: body.name))
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result")
+        feature_name = _safe_value(lambda: loft.name) or name
+        inspected = inspect_feature(feature_name).get("result") if feature_name else None
+        return {
+            "result": {
+                "featureName": feature_name,
+                "sections": [
+                    {
+                        "sketchName": section["sketch"].name,
+                        "profileIndex": section["profileIndex"],
+                    }
+                    for section in resolved_sections
+                ],
+                "operation": _operation_label(op),
+                "participantBodies": participants or _body_names(_safe_value(lambda: loft.participantBodies)),
+                "resultBodies": result_body_names,
+                "warnings": [
+                    "Loft sections are consumed in the supplied order.",
+                    "This tool creates solid/profile lofts only; rails, centerlines, and surface lofts are not yet implemented.",
+                ],
+                "feature": inspected,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating loft feature: {e}\n{err}")
+        return {"error": f"Failed to create loft feature: {str(e)}"}
 
 
 @register_tool("fillet_feature")
