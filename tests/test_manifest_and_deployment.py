@@ -217,6 +217,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "fusion-mcp package-addin",
             "fusion-mcp test-live",
             "fusion-mcp print-client-config",
+            "fusion-mcp dump-schemas",
             "Tool Profiles",
             "Feature Matrix",
             "presentation",
@@ -257,6 +258,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("sync-config", completed.stdout)
         self.assertIn("doctor", completed.stdout)
         self.assertIn("list-profiles", completed.stdout)
+        self.assertIn("dump-schemas", completed.stdout)
 
     def test_cli_module_help_loads_without_fusion(self):
         completed = subprocess.run(
@@ -270,6 +272,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("install-addin", completed.stdout)
         self.assertIn("test-live", completed.stdout)
+        self.assertIn("dump-schemas", completed.stdout)
 
     def test_cli_doctor_checks_required_live_tools(self):
         with open(os.path.join(ROOT, "fusion_mcp_cli", "cli.py"), "r", encoding="utf-8") as f:
@@ -351,6 +354,51 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("presentation", payload["profiles"])
         self.assertIn("document", payload["profiles"])
 
+    def test_cli_dump_schemas_outputs_offline_mcp_surface(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "fusion_mcp_cli", "dump-schemas"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertIn("server", payload)
+        self.assertIn("instructions", payload["server"])
+        self.assertIn("tools", payload)
+        self.assertIn("resources", payload)
+        self.assertIn("resourceTemplates", payload)
+        self.assertIn("prompts", payload)
+        self.assertIn("profiles", payload)
+        self.assertIn("serverCapabilities", payload)
+        tool_by_name = {tool["name"]: tool for tool in payload["tools"]}
+        self.assertIn("inspect_design", tool_by_name)
+        self.assertTrue(tool_by_name["inspect_design"]["annotations"]["readOnlyHint"])
+        resource_by_uri = {resource["uri"]: resource for resource in payload["resources"]}
+        self.assertIn("fusion://agent/server-capabilities", resource_by_uri)
+        self.assertIn("annotations", resource_by_uri["fusion://agent/server-capabilities"])
+        self.assertTrue(any(prompt["name"] == "tool_first_workflow" for prompt in payload["prompts"]))
+
+    def test_cli_dump_schemas_can_write_output_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = os.path.join(temp_dir, "schemas.json")
+            completed = subprocess.run(
+                [sys.executable, "-m", "fusion_mcp_cli", "dump-schemas", "--output", output],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue(os.path.isfile(output))
+            with open(output, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        self.assertIn("serverCapabilities", payload)
+        self.assertIn("Wrote FusionMCP MCP schemas", completed.stdout)
+
     def test_tooling_roadmap_tracks_general_cad_gaps(self):
         with open(os.path.join(ROOT, "docs", "tooling-roadmap.md"), "r", encoding="utf-8") as f:
             roadmap = f.read()
@@ -366,6 +414,7 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "Initialize-time agent instructions",
             "MCP tool risk annotations",
             "MCP resource ranking annotations",
+            "Offline MCP schema export",
         ]:
             self.assertIn(text, roadmap)
 

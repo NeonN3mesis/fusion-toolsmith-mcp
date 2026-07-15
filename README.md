@@ -123,6 +123,12 @@ Print both legacy and bearer-style client snippets:
 fusion-mcp print-client-config
 ```
 
+Export the offline MCP schema bundle without launching Fusion:
+
+```powershell
+fusion-mcp dump-schemas --output dist\mcp-schemas.json
+```
+
 For Antigravity/Gemini-style config, FusionMCP auto-syncs this file on add-in startup:
 
 ```text
@@ -171,7 +177,7 @@ Use these mental profiles when exposing tools to agents or documenting workflows
 
 | Area | What Toolsmith exposes |
 | --- | --- |
-| Runtime safety | `doctor`, initialize instructions, runtime diagnostics, fixed-port health, Streamable HTTP/SSE metadata, bearer auth, MCP read-only/destructive/idempotent tool annotations, resource ranking annotations, change journal, structured-tool routing |
+| Runtime safety | `doctor`, initialize instructions, offline schema export, runtime diagnostics, fixed-port health, Streamable HTTP/SSE metadata, bearer auth, MCP read-only/destructive/idempotent tool annotations, resource ranking annotations, change journal, structured-tool routing |
 | Inspection | design snapshots, sketch/feature/dependency inspection, body face/edge targeting, assembly origin/reference/joint reports, physical-property reports, material/appearance reports, mesh-aware `inspect_printability` warnings |
 | Safe modeling | typed sketching, guarded sketch constraint creation/deletion, extrudes, revolves, lofts, sweeps, token-targeted fillets/chamfers/shells, `offset_face_or_press_pull`, holes, pockets, mirrors, patterns, construction geometry, rigid point-to-point joints |
 | Parameters | user/model parameter reads, safe edits, parameterization planning, dimension editing, CSV import/export |

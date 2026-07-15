@@ -134,3 +134,7 @@ This is the general CAD tooling backlog for Fusion Toolsmith MCP. Keep these too
 - MCP resource ranking annotations
   - Every advertised resource and resource template includes assistant audience and priority metadata.
   - Agent workflow resources rank highest, live design resources rank above runtime journals, and local docs remain available without crowding out model context.
+
+- Offline MCP schema export
+  - `fusion-mcp dump-schemas` emits initialize metadata, tools, resources, resource templates, prompts, profiles, and server capabilities without launching Fusion.
+  - Useful for GitHub review, client integration tests, and docs generation.
