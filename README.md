@@ -96,6 +96,8 @@ Run the live smoke test:
 fusion-mcp test-live
 ```
 
+`fusion-mcp doctor` also checks the advertised tool registry. If required tools are missing after an install, it returns nonzero and recommends reloading the Fusion add-in.
+
 Or use the PowerShell script directly:
 
 ```powershell

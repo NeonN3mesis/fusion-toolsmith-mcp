@@ -23,6 +23,57 @@ REQUIRED_FILES = (
     "tool_profiles.json",
 )
 REQUIRED_DIRS = ("server", "tools", "mcp_primitives")
+REQUIRED_LIVE_TOOLS = (
+    "inspect_design",
+    "recommend_mcp_workflow",
+    "extract_reference_dimensions",
+    "inspect_printability",
+    "get_body_faces",
+    "get_body_edges",
+    "get_assembly_tree",
+    "get_assembly_references",
+    "get_assembly_joints",
+    "list_appearances",
+    "inspect_body_style",
+    "get_timeline",
+    "measure_entity",
+    "validate_model",
+    "assess_change_impact",
+    "preflight_model_change",
+    "offset_face_or_press_pull",
+    "create_offset_plane",
+    "create_construction_point",
+    "create_construction_axis",
+    "create_rigid_joint",
+    "add_sketch_constraint",
+    "delete_sketch_constraint",
+    "create_sketch_offset",
+    "create_parametric_feature",
+    "revolve_feature",
+    "loft_feature",
+    "sweep_feature",
+    "create_rounded_rectangle_body",
+    "create_rounded_slot_cut",
+    "create_rounded_pocket",
+    "create_hole_pattern",
+    "create_counterbore_hole_pattern",
+    "mirror_features_or_bodies",
+    "pattern_feature",
+    "apply_appearance",
+    "convert_mesh_to_solid",
+    "reorganize_body_to_component",
+    "import_parameters_csv",
+    "export_parameters_csv",
+    "capture_view",
+    "set_camera",
+    "shell_body",
+    "set_visibility",
+    "capture_demo_sequence",
+    "prompt_user",
+    "list_documents",
+    "set_timeline_marker",
+    "clone_timeline_feature",
+)
 
 
 def repo_root():
@@ -187,24 +238,51 @@ def command_doctor(args):
         health = json.loads(response.read().decode("utf-8"))
     print(json.dumps({"health": health}, indent=2))
 
-    body = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {},
-    }).encode("utf-8")
-    request = urllib.request.Request(url, data=body, method="POST")
-    request.add_header("Content-Type", "application/json")
-    if bearer_url and auth_header:
-        request.add_header("Authorization", auth_header)
-    session_id = None
-    try:
-        with urllib.request.urlopen(request, timeout=args.timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-            session_id = response.headers.get("Mcp-Session-Id")
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"Initialize failed with HTTP {exc.code}: {exc.read().decode('utf-8', errors='replace')}")
+    def post_jsonrpc(req_id, method, params=None, session_id=None):
+        body = json.dumps({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": method,
+            "params": params or {},
+        }).encode("utf-8")
+        request = urllib.request.Request(url, data=body, method="POST")
+        request.add_header("Content-Type", "application/json")
+        if bearer_url and auth_header:
+            request.add_header("Authorization", auth_header)
+        if session_id:
+            request.add_header("Mcp-Session-Id", session_id)
+        try:
+            with urllib.request.urlopen(request, timeout=args.timeout) as response:
+                return json.loads(response.read().decode("utf-8")), response.headers.get("Mcp-Session-Id")
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"{method} failed with HTTP {exc.code}: {exc.read().decode('utf-8', errors='replace')}")
+
+    payload, session_id = post_jsonrpc(1, "initialize")
     print(json.dumps({"initialize": payload, "sessionId": session_id}, indent=2))
+    missing_required_tools = []
+    if session_id:
+        tools_payload, _ = post_jsonrpc(2, "tools/list", session_id=session_id)
+        if tools_payload.get("error"):
+            raise RuntimeError(f"tools/list failed: {json.dumps(tools_payload['error'])}")
+        tool_names = sorted({
+            tool.get("name")
+            for tool in tools_payload.get("result", {}).get("tools", [])
+            if tool.get("name")
+        })
+        required = list(REQUIRED_LIVE_TOOLS)
+        missing_required_tools = [name for name in required if name not in tool_names]
+        tools_report = {
+            "count": len(tool_names),
+            "requiredCount": len(required),
+            "missingRequiredTools": missing_required_tools,
+            "restartRecommended": bool(missing_required_tools),
+        }
+        if missing_required_tools:
+            tools_report["action"] = (
+                "Stop and run the FusionMCP add-in again from Fusion 360 Utilities > Add-Ins, "
+                "or restart Fusion so it reloads Python modules."
+            )
+        print(json.dumps({"tools": tools_report}, indent=2))
     if session_id:
         delete_request = urllib.request.Request(url, method="DELETE")
         delete_request.add_header("Mcp-Session-Id", session_id)
@@ -214,7 +292,7 @@ def command_doctor(args):
             urllib.request.urlopen(delete_request, timeout=args.timeout).close()
         except Exception:
             pass
-    return 0
+    return 1 if missing_required_tools else 0
 
 
 def command_print_config(args):

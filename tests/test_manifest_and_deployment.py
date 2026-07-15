@@ -261,6 +261,19 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("install-addin", completed.stdout)
         self.assertIn("test-live", completed.stdout)
 
+    def test_cli_doctor_checks_required_live_tools(self):
+        with open(os.path.join(ROOT, "fusion_mcp_cli", "cli.py"), "r", encoding="utf-8") as f:
+            cli = f.read()
+        for text in [
+            "REQUIRED_LIVE_TOOLS",
+            "tools/list",
+            "missingRequiredTools",
+            "restartRecommended",
+            "Stop and run the FusionMCP add-in again",
+            "return 1 if missing_required_tools else 0",
+        ]:
+            self.assertIn(text, cli)
+
     def test_cli_package_addin_builds_clean_zip_payload(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = os.path.join(temp_dir, "FusionMCP-addin.zip")

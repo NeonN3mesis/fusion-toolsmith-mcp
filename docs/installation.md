@@ -48,6 +48,14 @@ Utilities > Add-Ins > Scripts and Add-Ins > Add-Ins > FusionMCP > Run
 fusion-mcp test-live
 ```
 
+For a faster readiness check:
+
+```powershell
+fusion-mcp doctor
+```
+
+`doctor` returns nonzero when the live server is reachable but the advertised tool registry is stale or missing required tools.
+
 Or check health directly:
 
 ```powershell
