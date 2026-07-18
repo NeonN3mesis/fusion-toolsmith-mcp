@@ -407,17 +407,42 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         ]:
             self.assertIn(text, pyproject)
 
-    def test_readme_documents_install_verify_and_profiles(self):
+    def test_readme_links_install_verify_and_detailed_docs(self):
         with open(os.path.join(ROOT, "README.md"), "r", encoding="utf-8") as f:
             readme = f.read()
         for text in [
             "fusion-mcp install-addin",
-            "fusion-mcp package-addin",
+            "fusion-mcp doctor",
             "fusion-mcp test-live",
-            "fusion-mcp test-fixture",
-            "fusion-mcp test-3mf-fixture",
             "fusion-mcp print-client-config",
             "fusion-mcp dump-schemas",
+            "docs/installation.md",
+            "docs/client-config.md",
+            "docs/features.md",
+            "docs/safety-model.md",
+            "docs/development.md",
+            "docs/mock-payload-examples.md",
+            "docs/tooling-roadmap.md",
+            "docs/external-fusion-mcp-sweep.md",
+            "examples/prompts.md",
+            "GitHub Actions",
+            "LICENSE",
+        ]:
+            self.assertIn(text, readme)
+        self.assertLessEqual(len(readme.splitlines()), 120)
+
+    def test_detailed_docs_cover_profiles_features_safety_and_development(self):
+        doc_paths = [
+            os.path.join(ROOT, "docs", "features.md"),
+            os.path.join(ROOT, "docs", "safety-model.md"),
+            os.path.join(ROOT, "docs", "client-config.md"),
+            os.path.join(ROOT, "docs", "development.md"),
+        ]
+        docs_text = ""
+        for path in doc_paths:
+            with open(path, "r", encoding="utf-8") as f:
+                docs_text += f.read()
+        for text in [
             "Tool Profiles",
             "Feature Matrix",
             "presentation",
@@ -455,14 +480,14 @@ class ManifestAndDeploymentTests(unittest.TestCase):
             "fusion://docs/fusion-api",
             "search_local_fusion_docs",
             "examples/prompts.md",
-            "docs/mock-payload-examples.md",
-            "docs/tooling-roadmap.md",
-            "docs/external-fusion-mcp-sweep.md",
+            "mock-payload-examples.md",
+            "fusion-mcp package-addin",
+            "fusion-mcp test-fixture",
+            "fusion-mcp test-3mf-fixture",
             "GitHub Actions",
-            "LICENSE",
             "runOnStartup",
         ]:
-            self.assertIn(text, readme)
+            self.assertIn(text, docs_text)
 
     def test_cli_help_loads_without_fusion(self):
         completed = subprocess.run(

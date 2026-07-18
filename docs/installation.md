@@ -44,42 +44,19 @@ Utilities > Add-Ins > Scripts and Add-Ins > Add-Ins > FusionMCP > Run
 
 ## Verify
 
-```powershell
-fusion-mcp test-live
-```
-
-For a faster readiness check:
+For the normal readiness path:
 
 ```powershell
 fusion-mcp doctor
 ```
 
+Then run the live smoke test:
+
+```powershell
+fusion-mcp test-live
+```
+
 `doctor` returns nonzero when the live server is reachable but the advertised tool registry is stale or missing required tools.
-
-For deeper throwaway-fixture coverage after the live smoke test passes:
-
-```powershell
-fusion-mcp test-fixture
-```
-
-This wraps `scripts/test_fusion_mcp_inspection_fixture.ps1`, creates a controlled temporary model by default, and probes the guarded analysis, mesh, configuration, render, document-management, joint, surface, sheet-metal, drawing, electronics, simulation, CAM, and presentation contracts. Use `--keep-fixture-document` only when you intentionally want to inspect the generated Fusion document afterward.
-
-Add `--report-path dist\fusion-live-fixture-report.json` when you want a JSON record of which live probes passed, were preflight-blocked, or returned expected unsupported API responses.
-
-Validate a saved report without launching Fusion:
-
-```powershell
-fusion-mcp validate-fixture-report dist\fusion-live-fixture-report.json
-```
-
-The validator requires the complete probe surface emitted by the fixture, including exact analysis, motion joints, surface, sheet-metal, drawing, CAM, demo capture, and cleanup probes. Use repeated `--require-passed <probe_name>` arguments only for adapters that must be runtime-backed in the environment you are testing.
-
-Compare multiple archived reports:
-
-```powershell
-fusion-mcp fixture-report-matrix reports\fusion-*.json --output dist\fusion-fixture-matrix.json
-fusion-mcp fixture-report-matrix reports\fusion-*.json --format markdown --output dist\fusion-fixture-matrix.md
-```
 
 Or check health directly:
 
@@ -103,6 +80,12 @@ fusion-mcp print-client-config
 ```
 
 Prefer `bearer_sse_url` plus `authorization_header` when your client supports request headers.
+
+See [client-config.md](client-config.md) for transport details, discovery keys, and mock/schema commands.
+
+## Deeper Validation
+
+Maintainer fixture commands live in [development.md](development.md). Normal users should not need them for installation.
 
 ## Troubleshooting
 
