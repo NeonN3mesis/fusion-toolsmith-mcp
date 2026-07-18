@@ -1,5 +1,48 @@
 import sys
 import types
+import os
+
+
+_SOURCE_MARKERS = (
+    "FusionMCP.py",
+    "FusionMCP.manifest",
+    "tool_profiles.json",
+    "tools",
+    "server",
+)
+
+
+def _looks_like_source_root(path):
+    return all(os.path.exists(os.path.join(path, marker)) for marker in _SOURCE_MARKERS)
+
+
+def _candidate_roots():
+    env_root = os.environ.get("FUSION_MCP_SOURCE_ROOT")
+    if env_root:
+        yield env_root
+    yield os.getcwd()
+    package_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    yield package_root
+    current = package_root
+    while True:
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        yield parent
+        current = parent
+
+
+def ensure_source_root_on_path():
+    for candidate in _candidate_roots():
+        root = os.path.abspath(candidate)
+        if _looks_like_source_root(root):
+            if root not in sys.path:
+                sys.path.insert(0, root)
+            return root
+    raise ModuleNotFoundError(
+        "No module named 'tools'. Run fusion-mcp from the FusionMCP checkout/add-in root "
+        "or set FUSION_MCP_SOURCE_ROOT."
+    )
 
 
 def install_adsk_schema_stub():
@@ -90,6 +133,7 @@ def install_adsk_schema_stub():
 
 
 def load_offline_mcp_surface():
+    ensure_source_root_on_path()
     install_adsk_schema_stub()
     import tools
     from server import mcp_server

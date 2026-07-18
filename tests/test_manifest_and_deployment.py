@@ -1006,6 +1006,31 @@ class ManifestAndDeploymentTests(unittest.TestCase):
         self.assertIn("serverCapabilities", payload)
         self.assertIn("Wrote FusionMCP MCP schemas", completed.stdout)
 
+    def test_console_script_dump_schemas_finds_checkout_tool_modules(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = os.path.join(temp_dir, "schemas.json")
+            env = os.environ.copy()
+            path_entries = [
+                entry for entry in env.get("PYTHONPATH", "").split(os.pathsep)
+                if entry and os.path.abspath(entry) != ROOT
+            ]
+            env["PYTHONPATH"] = os.pathsep.join(path_entries)
+            completed = subprocess.run(
+                ["fusion-mcp", "dump-schemas", "--output", output],
+                cwd=ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue(os.path.isfile(output))
+            with open(output, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        self.assertIn("tools", payload)
+        self.assertIn("serverCapabilities", payload)
+
     def test_mock_server_exposes_streamable_http_without_fusion(self):
         from fusion_mcp_cli.mock_server import create_mock_http_server
 
