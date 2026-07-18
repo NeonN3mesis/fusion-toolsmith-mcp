@@ -1,6 +1,6 @@
 # Fusion Toolsmith MCP
 
-Safety-first Autodesk Fusion 360 MCP add-in for agents that need to inspect, plan, validate, and package CAD changes without blindly running raw scripts.
+Safety-first, diagnostic, tool-first Autodesk Fusion 360 MCP server for serious agent-assisted CAD work. Choose Toolsmith when you want guarded workflows, runtime diagnostics, and structured Fusion tools before raw scripts; choose a simpler server when you only need a minimal bridge into Fusion.
 
 Fusion Toolsmith MCP runs inside Fusion 360, exposes MCP over local HTTP on port `9100` with Streamable HTTP and legacy HTTP/SSE compatibility, and writes live discovery data to `~/.fusion_mcp.json`. The add-in is opt-in by default and does not start automatically with Fusion.
 

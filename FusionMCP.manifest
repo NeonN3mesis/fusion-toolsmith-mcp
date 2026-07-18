@@ -4,7 +4,7 @@
 	"id":	"e6b208b8-0f04-4b53-9a4a-7bc8f0471b69",
 	"author":	"Scott",
 	"description":	{
-		"":	"Higher-level Fusion MCP Server"
+		"":	"Safety-first, diagnostic, tool-first Fusion MCP server"
 	},
 	"version":	"1.1.0",
 	"runOnStartup": false,
