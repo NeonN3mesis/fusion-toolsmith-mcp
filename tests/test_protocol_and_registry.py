@@ -175,6 +175,22 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         def ref(name):
             return types.SimpleNamespace(name=name, entityToken=f"{name}-token", objectType="Ref")
 
+        def plane(name):
+            geometry = types.SimpleNamespace(
+                origin=types.SimpleNamespace(x=1, y=2, z=3),
+                normal=types.SimpleNamespace(x=0, y=0, z=1),
+                uDirection=types.SimpleNamespace(x=1, y=0, z=0),
+                vDirection=types.SimpleNamespace(x=0, y=1, z=0),
+            )
+            return types.SimpleNamespace(
+                name=name,
+                entityToken=f"{name}-token",
+                objectType="ConstructionPlane",
+                geometry=geometry,
+                isLightBulbOn=True,
+                isVisible=True,
+            )
+
         child_component = types.SimpleNamespace(
             name="Child",
             xConstructionAxis=ref("Child X"),
@@ -185,7 +201,7 @@ class ProtocolAndRegistryTests(unittest.TestCase):
             yZConstructionPlane=ref("Child YZ"),
             originConstructionPoint=ref("Child Origin"),
             constructionAxes=[ref("Child Axis")],
-            constructionPlanes=[],
+            constructionPlanes=[plane("Child Plane")],
             constructionPoints=[ref("Child Point")],
         )
         transform = types.SimpleNamespace(asArray=lambda: [1, 0, 0, 0])
@@ -214,6 +230,8 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(res["result"]["componentCount"], 2)
         self.assertEqual(res["result"]["components"][0]["origin"]["xAxis"]["name"], "Root X")
         self.assertEqual(res["result"]["components"][1]["constructionPoints"][0]["name"], "Child Point")
+        self.assertEqual(res["result"]["components"][1]["constructionPlanes"][0]["name"], "Child Plane")
+        self.assertEqual(res["result"]["components"][1]["constructionPlanes"][0]["normal"], [0, 0, 1])
         self.assertEqual(res["result"]["occurrences"][0]["componentName"], "Child")
 
     def test_get_assembly_joints_reports_joints_and_as_built_joints(self):
@@ -224,7 +242,16 @@ class ProtocolAndRegistryTests(unittest.TestCase):
             isLightBulbOn=True,
             isSuppressed=False,
             healthState=0,
-            jointMotion=types.SimpleNamespace(objectType="RigidJointMotion", jointType="rigid"),
+            jointMotion=types.SimpleNamespace(
+                objectType="RigidJointMotion",
+                jointType="rigid",
+                rotationLimits=types.SimpleNamespace(
+                    isMinimumValueEnabled=True,
+                    minimumValue=0.0,
+                    isMaximumValueEnabled=True,
+                    maximumValue=1.57,
+                ),
+            ),
             occurrenceOne=types.SimpleNamespace(name="OccA", entityToken="occ-a-token", objectType="Occurrence"),
             occurrenceTwo=types.SimpleNamespace(name="OccB", entityToken="occ-b-token", objectType="Occurrence"),
             geometryOrOriginOne=types.SimpleNamespace(name="PointA", entityToken="point-a-token", objectType="ConstructionPoint"),
@@ -252,7 +279,149 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(res["result"]["asBuiltJointCount"], 1)
         self.assertEqual(res["result"]["joints"][0]["name"], "RigidA")
         self.assertEqual(res["result"]["joints"][0]["occurrenceOne"]["name"], "OccA")
+        self.assertEqual(res["result"]["joints"][0]["jointMotion"]["rotationLimits"]["maximumValue"], 1.57)
         self.assertEqual(res["result"]["asBuiltJoints"][0]["name"], "AsBuiltA")
+
+    def test_plan_joint_limits_requires_target_expressions_and_reason(self):
+        root = types.SimpleNamespace(name="Root", joints=[], asBuiltJoints=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("plan_joint_limits", {"limit_type": "rotation"})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("joint_name or joint_entity_token is required", joined)
+        self.assertIn("reason is required", joined)
+        self.assertIn("minimum expression is required", joined)
+        self.assertIn("maximum expression is required", joined)
+
+    def test_plan_joint_limits_accepts_revolute_rotation_plan(self):
+        joint = types.SimpleNamespace(
+            name="DoorHinge",
+            objectType="Joint",
+            entityToken="joint-token",
+            isLightBulbOn=True,
+            isSuppressed=False,
+            healthState=0,
+            jointMotion=types.SimpleNamespace(
+                objectType="RevoluteJointMotion",
+                jointType="revolute",
+                rotationLimits=types.SimpleNamespace(
+                    isMinimumValueEnabled=False,
+                    minimumValue=0.0,
+                    isMaximumValueEnabled=False,
+                    maximumValue=0.0,
+                ),
+            ),
+        )
+        root = types.SimpleNamespace(name="Root", joints=[joint], asBuiltJoints=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("plan_joint_limits", {
+            "joint_name": "DoorHinge",
+            "limit_type": "rotation",
+            "minimum": "0 deg",
+            "maximum": "110 deg",
+            "reason": "Limit hinge travel to avoid component collision.",
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["joint"]["name"], "DoorHinge")
+        self.assertEqual(res["result"]["limitType"], "rotation")
+        self.assertEqual(res["result"]["requestedLimits"]["maximum"], "110 deg")
+        self.assertIn("does not edit assembly joints", " ".join(res["result"]["warnings"]))
+
+    def test_set_joint_limits_reports_unsupported_missing_limit_object(self):
+        joint = types.SimpleNamespace(
+            name="DoorHinge",
+            objectType="Joint",
+            entityToken="joint-token",
+            jointMotion=types.SimpleNamespace(objectType="RevoluteJointMotion", jointType="revolute"),
+        )
+        root = types.SimpleNamespace(name="Root", joints=[joint], asBuiltJoints=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("set_joint_limits", {
+            "joint_name": "DoorHinge",
+            "limit_type": "rotation",
+            "minimum": "0 deg",
+            "maximum": "90 deg",
+            "reason": "Unit test unsupported path.",
+        })
+
+        self.assertIn("error", res)
+        self.assertTrue(res["unsupported"])
+        self.assertIn("did not expose rotationLimits", res["error"])
+
+    def test_set_joint_limits_updates_writable_limit_expressions(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+
+        minimum_value = types.SimpleNamespace(expression="0 deg")
+        maximum_value = types.SimpleNamespace(expression="180 deg")
+        limits = types.SimpleNamespace(
+            isMinimumValueEnabled=False,
+            minimumValue=minimum_value,
+            isMaximumValueEnabled=False,
+            maximumValue=maximum_value,
+            isRestValueEnabled=False,
+            restValue=types.SimpleNamespace(expression="45 deg"),
+        )
+        joint = types.SimpleNamespace(
+            name="DoorHinge",
+            objectType="Joint",
+            entityToken="joint-token",
+            isLightBulbOn=True,
+            isSuppressed=False,
+            healthState=0,
+            jointMotion=types.SimpleNamespace(
+                objectType="RevoluteJointMotion",
+                jointType="revolute",
+                rotationLimits=limits,
+            ),
+        )
+        root = types.SimpleNamespace(name="Root", joints=[joint], asBuiltJoints=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+        parametric._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"joints": 1},
+            "components": [],
+            "bodies": [],
+            "sketches": [],
+            "parameters": {"user": [], "model": []},
+            "timeline": {"items": [], "unhealthyItems": []},
+            "document": {"active": {"isModified": False}},
+            "design": {"designType": "ParametricDesignType"},
+        }
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("set_joint_limits", {
+                "joint_name": "DoorHinge",
+                "limit_type": "rotation",
+                "minimum": "0 deg",
+                "maximum": "110 deg",
+                "reason": "Limit hinge travel to avoid collision.",
+            })
+        finally:
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(minimum_value.expression, "0 deg")
+        self.assertEqual(maximum_value.expression, "110 deg")
+        self.assertTrue(limits.isMinimumValueEnabled)
+        self.assertTrue(limits.isMaximumValueEnabled)
+        self.assertEqual(res["result"]["applied"]["maximum"], "maximumValue.expression")
+        self.assertTrue(res["result"]["stateComparison"]["hasChanges"])
 
     def test_create_rigid_joint_from_named_points(self):
         parametric = importlib.import_module("tools.parametric")
@@ -331,6 +500,221 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertTrue(created_inputs[0].isFlipped)
         self.assertEqual(created_inputs[0].offsetZ, "2 mm")
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_create_section_analysis_from_standard_plane(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+
+        created_inputs = []
+        analyses = []
+        class MockSectionInput:
+            def __init__(self):
+                self.plane = None
+            def setByPlane(self, plane):
+                self.plane = plane
+
+        class MockSectionAnalyses:
+            def __init__(self):
+                self.count = 0
+            def createInput(self):
+                return MockSectionInput()
+            def add(self, section_input):
+                created_inputs.append(section_input)
+                analysis = types.SimpleNamespace(name="", isLightBulbOn=False, objectType="SectionAnalysis", entityToken="section-token")
+                analyses.append(analysis)
+                self.count = len(analyses)
+                return analysis
+            def item(self, idx):
+                return analyses[idx]
+
+        plane = types.SimpleNamespace(name="XY")
+        root = types.SimpleNamespace(
+            name="Root",
+            xYConstructionPlane=plane,
+            xZConstructionPlane=types.SimpleNamespace(name="XZ"),
+            yZConstructionPlane=types.SimpleNamespace(name="YZ"),
+            constructionPlanes=[],
+            allOccurrences=[],
+            sectionAnalyses=MockSectionAnalyses(),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        parametric._design_state_snapshot = lambda include_selections=False: {"analysisCount": len(analyses)}
+        parametric.compare_design_state = lambda before, after: {"result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}}
+        try:
+            res = self.tools.execute_tool("create_section_analysis", {
+                "name": "Cutaway A",
+                "plane_name": "xy",
+            })
+        finally:
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(created_inputs[0].plane, plane)
+        self.assertEqual(analyses[0].name, "Cutaway A")
+        self.assertTrue(analyses[0].isLightBulbOn)
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_create_section_analysis_reports_unsupported_runtime(self):
+        root = types.SimpleNamespace(
+            name="Root",
+            xYConstructionPlane=types.SimpleNamespace(name="XY"),
+            xZConstructionPlane=types.SimpleNamespace(name="XZ"),
+            yZConstructionPlane=types.SimpleNamespace(name="YZ"),
+            constructionPlanes=[],
+            allOccurrences=[],
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("create_section_analysis", {"name": "Cutaway A"})
+
+        self.assertIn("error", res)
+        self.assertTrue(res["unsupported"])
+
+    def test_delete_section_analysis_requires_reason_and_deletes_named_items(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+
+        deleted = []
+        analysis = types.SimpleNamespace(name="Cutaway A", deleteMe=lambda: deleted.append("Cutaway A"))
+        class MockSectionAnalyses:
+            count = 1
+            def item(self, idx):
+                return analysis
+
+        root = types.SimpleNamespace(name="Root", sectionAnalyses=MockSectionAnalyses())
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        missing_reason = self.tools.execute_tool("delete_section_analysis", {"name": "Cutaway A"})
+        self.assertIn("reason is required", missing_reason["error"])
+
+        parametric._design_state_snapshot = lambda include_selections=False: {"deleted": list(deleted)}
+        parametric.compare_design_state = lambda before, after: {"result": {"hasChanges": True, "riskLevel": "low"}}
+        try:
+            res = self.tools.execute_tool("delete_section_analysis", {
+                "name": "Cutaway A",
+                "reason": "Cleanup temporary inspection section.",
+            })
+        finally:
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(deleted, ["Cutaway A"])
+        self.assertEqual(res["result"]["deletedCount"], 1)
+
+    def _install_motion_joint_fixture(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+        original_joint_geometry = getattr(sys.modules["adsk.fusion"], "JointGeometry", None)
+
+        class MockJointInput:
+            def __init__(self, geometry_one, geometry_two):
+                self.geometry_one = geometry_one
+                self.geometry_two = geometry_two
+                self.isFlipped = False
+                self.motion_calls = []
+                self.offsetX = None
+                self.offsetY = None
+                self.offsetZ = None
+            def setAsRevoluteJointMotion(self, axis):
+                self.motion_calls.append(("revolute", axis))
+            def setAsSliderJointMotion(self, direction):
+                self.motion_calls.append(("slider", direction))
+            def setAsCylindricalJointMotion(self, axis):
+                self.motion_calls.append(("cylindrical", axis))
+            def setAsPinSlotJointMotion(self, axis, direction):
+                self.motion_calls.append(("pin_slot", axis, direction))
+            def setAsPlanarJointMotion(self, normal):
+                self.motion_calls.append(("planar", normal))
+            def setAsBallJointMotion(self):
+                self.motion_calls.append(("ball",))
+
+        created_inputs = []
+        class MockJoints:
+            def createInput(self, geometry_one, geometry_two):
+                joint_input = MockJointInput(geometry_one, geometry_two)
+                created_inputs.append(joint_input)
+                return joint_input
+            def add(self, joint_input):
+                return types.SimpleNamespace(name="", input=joint_input)
+
+        point_a = types.SimpleNamespace(name="PointA", objectType="ConstructionPoint")
+        point_b = types.SimpleNamespace(name="PointB", objectType="ConstructionPoint")
+        root = types.SimpleNamespace(
+            name="Root",
+            joints=MockJoints(),
+            constructionPoints=[point_a, point_b],
+            sketches=[],
+            allOccurrences=[],
+        )
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+        sys.modules["adsk.fusion"].JointGeometry = types.SimpleNamespace(
+            createByPoint=lambda point: types.SimpleNamespace(point=point)
+        )
+        parametric._design_state_snapshot = lambda include_selections=False: {
+            "counts": {"createdJointInputs": len(created_inputs)}
+        }
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+
+        def cleanup():
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+            if original_joint_geometry is None:
+                delattr(sys.modules["adsk.fusion"], "JointGeometry")
+            else:
+                sys.modules["adsk.fusion"].JointGeometry = original_joint_geometry
+
+        return created_inputs, cleanup
+
+    def test_create_motion_joint_tools_set_expected_motion(self):
+        cases = [
+            ("create_revolute_joint", {"motion_axis": "z"}, ("revolute", "z")),
+            ("create_slider_joint", {"slide_direction": "x"}, ("slider", "x")),
+            ("create_cylindrical_joint", {"motion_axis": "y"}, ("cylindrical", "y")),
+            ("create_pin_slot_joint", {"motion_axis": "z", "slide_direction": "x"}, ("pin_slot", "z", "x")),
+            ("create_planar_joint", {"normal_direction": "z"}, ("planar", "z")),
+            ("create_ball_joint", {}, ("ball",)),
+        ]
+        for tool_name, args, expected_motion in cases:
+            with self.subTest(tool=tool_name):
+                created_inputs, cleanup = self._install_motion_joint_fixture()
+                try:
+                    res = self.tools.execute_tool(tool_name, {
+                        "name": f"{tool_name}_A",
+                        "point_one_name": "PointA",
+                        "point_two_name": "PointB",
+                        "offset_z": "1 mm",
+                        **args,
+                    })
+                finally:
+                    cleanup()
+
+                self.assertIn("result", res)
+                self.assertEqual(created_inputs[0].motion_calls[0], expected_motion)
+                self.assertEqual(created_inputs[0].offsetZ, "1 mm")
+                self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_create_revolute_joint_requires_explicit_axis(self):
+        created_inputs, cleanup = self._install_motion_joint_fixture()
+        try:
+            res = self.tools.execute_tool("create_revolute_joint", {
+                "name": "RevoluteA",
+                "point_one_name": "PointA",
+                "point_two_name": "PointB",
+            })
+        finally:
+            cleanup()
+
+        self.assertIn("error", res)
+        self.assertIn("Explicit joint direction is required", res["error"])
+        self.assertEqual(len(created_inputs), 1)
 
     def test_server_uses_fixed_default_port(self):
         self.assertEqual(self.mcp_server.DEFAULT_PORT, 9100)
@@ -672,7 +1056,39 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("clear_change_journal", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("get_assembly_references", resource["profiles"]["inspection"]["tools"])
         self.assertIn("get_assembly_joints", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("plan_joint_limits", resource["profiles"]["inspection"]["tools"])
         self.assertIn("get_physical_properties", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("inspect_analysis_capabilities", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("interference_check", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("clearance_check", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("verify_insert_alignment", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("verify_insert_alignment", resource["profiles"]["export"]["tools"])
+        self.assertIn("exact_interference_check", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("exact_clearance_check", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("inspect_sheet_metal_rules", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("preflight_flat_pattern", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("plan_sheet_metal_workflow", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("export_flat_pattern", resource["profiles"]["export"]["tools"])
+        self.assertIn("inspect_surface_bodies", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("plan_surface_repair", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("inspect_drawing_documents", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("preflight_drawing_creation", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("plan_drawing_views", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("plan_drawing_views", resource["profiles"]["export"]["tools"])
+        self.assertIn("add_drawing_view", resource["profiles"]["export"]["tools"])
+        self.assertIn("add_drawing_dimension", resource["profiles"]["export"]["tools"])
+        self.assertIn("add_drawing_callout", resource["profiles"]["export"]["tools"])
+        self.assertIn("add_parts_list", resource["profiles"]["export"]["tools"])
+        self.assertIn("add_revision_table", resource["profiles"]["export"]["tools"])
+        self.assertIn("plan_multicolor_3mf_export", resource["profiles"]["export"]["tools"])
+        self.assertIn("inspect_manufacturing_workspace", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("list_manufacturing_setups", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("inspect_operation", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("plan_manufacturing_operation", resource["profiles"]["inspection"]["tools"])
+        self.assertIn("create_manufacturing_setup", resource["profiles"]["manufacturing"]["tools"])
+        self.assertIn("create_manufacturing_operation", resource["profiles"]["manufacturing"]["tools"])
+        self.assertIn("generate_toolpaths", resource["profiles"]["manufacturing"]["tools"])
+        self.assertIn("post_process", resource["profiles"]["manufacturing"]["tools"])
         self.assertIn("list_appearances", resource["profiles"]["inspection"]["tools"])
         self.assertIn("inspect_body_style", resource["profiles"]["inspection"]["tools"])
         self.assertIn("revolve_feature", resource["profiles"]["modeling"]["tools"])
@@ -681,11 +1097,43 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("list_appearances", resource["profiles"]["modeling"]["tools"])
         self.assertIn("inspect_body_style", resource["profiles"]["modeling"]["tools"])
         self.assertIn("create_rigid_joint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_section_analysis", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_revolute_joint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_slider_joint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_cylindrical_joint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_pin_slot_joint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_planar_joint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_ball_joint", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("set_joint_limits", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_flange", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_bend", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("unfold_sheet_metal", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("refold_sheet_metal", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("copy_profile_loop", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("offset_profile_loop", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_insert_socket", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("extrude_existing_profile", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("patch_surface", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("stitch_surfaces", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("thicken_surface", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("trim_surface", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("extend_surface", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("create_ruled_surface", resource["profiles"]["modeling"]["tools"])
+        self.assertIn("edit_extrude_feature", resource["profiles"]["parameters"]["tools"])
+        self.assertIn("edit_fillet_radius", resource["profiles"]["parameters"]["tools"])
+        self.assertIn("edit_chamfer_distance", resource["profiles"]["parameters"]["tools"])
+        self.assertIn("edit_shell_thickness", resource["profiles"]["parameters"]["tools"])
+        self.assertIn("edit_pattern_parameter", resource["profiles"]["parameters"]["tools"])
+        self.assertIn("edit_hole_parameter", resource["profiles"]["parameters"]["tools"])
         self.assertIn("delete_sketch_constraint", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("delete_section_analysis", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("delete_named_experiment", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("set_active_document", resource["profiles"]["dangerous"]["tools"])
+        self.assertIn("close_active_document", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("set_timeline_marker", resource["profiles"]["dangerous"]["tools"])
         self.assertIn("capture_demo_sequence", resource["profiles"]["presentation"]["tools"])
         self.assertIn("list_documents", resource["profiles"]["document"]["tools"])
+        self.assertIn("create_design_document", resource["profiles"]["document"]["tools"])
         advertised = {schema["name"] for schema in self.tools.get_tool_schemas()}
         profiled = set()
         for profile in resource["profiles"].values():
@@ -741,12 +1189,65 @@ class ProtocolAndRegistryTests(unittest.TestCase):
 
         self.assertTrue(schemas["inspect_design"]["annotations"]["readOnlyHint"])
         self.assertFalse(schemas["inspect_design"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["plan_joint_limits"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["inspect_analysis_capabilities"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["interference_check"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["clearance_check"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["verify_insert_alignment"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["exact_interference_check"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["exact_clearance_check"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["inspect_sheet_metal_rules"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["preflight_flat_pattern"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["plan_sheet_metal_workflow"]["annotations"]["readOnlyHint"])
+        for name in ("create_flange", "create_bend", "unfold_sheet_metal", "refold_sheet_metal"):
+            self.assertFalse(schemas[name]["annotations"]["readOnlyHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["destructiveHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["idempotentHint"], name)
+        self.assertFalse(schemas["export_flat_pattern"]["annotations"]["readOnlyHint"])
+        self.assertFalse(schemas["export_flat_pattern"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["export_flat_pattern"]["annotations"]["idempotentHint"])
+        self.assertTrue(schemas["inspect_surface_bodies"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["plan_surface_repair"]["annotations"]["readOnlyHint"])
+        for name in ("patch_surface", "stitch_surfaces", "thicken_surface", "trim_surface", "extend_surface", "create_ruled_surface"):
+            self.assertFalse(schemas[name]["annotations"]["readOnlyHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["destructiveHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["idempotentHint"], name)
+        self.assertTrue(schemas["inspect_drawing_documents"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["preflight_drawing_creation"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["plan_drawing_views"]["annotations"]["readOnlyHint"])
+        for name in ("add_drawing_view", "add_drawing_dimension", "add_drawing_callout", "add_parts_list", "add_revision_table"):
+            self.assertFalse(schemas[name]["annotations"]["readOnlyHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["destructiveHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["idempotentHint"], name)
+        self.assertTrue(schemas["inspect_manufacturing_workspace"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["list_manufacturing_setups"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["inspect_operation"]["annotations"]["readOnlyHint"])
+        self.assertTrue(schemas["plan_manufacturing_operation"]["annotations"]["readOnlyHint"])
+        for name in ("create_manufacturing_setup", "create_manufacturing_operation", "generate_toolpaths", "post_process"):
+            self.assertFalse(schemas[name]["annotations"]["readOnlyHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["destructiveHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["idempotentHint"], name)
         self.assertTrue(schemas["set_parameter"]["annotations"]["idempotentHint"])
+        self.assertTrue(schemas["set_joint_limits"]["annotations"]["idempotentHint"])
+        self.assertFalse(schemas["set_joint_limits"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["edit_extrude_feature"]["annotations"]["idempotentHint"])
+        self.assertFalse(schemas["edit_extrude_feature"]["annotations"]["destructiveHint"])
         self.assertFalse(schemas["create_box"]["annotations"]["idempotentHint"])
         self.assertFalse(schemas["create_box"]["annotations"]["readOnlyHint"])
+        for name in ("copy_profile_loop", "offset_profile_loop", "create_insert_socket", "extrude_existing_profile"):
+            self.assertFalse(schemas[name]["annotations"]["readOnlyHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["destructiveHint"], name)
+            self.assertFalse(schemas[name]["annotations"]["idempotentHint"], name)
+        self.assertFalse(schemas["create_design_document"]["annotations"]["readOnlyHint"])
+        self.assertFalse(schemas["create_design_document"]["annotations"]["destructiveHint"])
+        self.assertFalse(schemas["create_design_document"]["annotations"]["idempotentHint"])
         self.assertTrue(schemas["run_fusion_script"]["annotations"]["destructiveHint"])
+        self.assertFalse(schemas["create_section_analysis"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["delete_section_analysis"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["delete_named_experiment"]["annotations"]["destructiveHint"])
         self.assertTrue(schemas["clear_change_journal"]["annotations"]["destructiveHint"])
         self.assertTrue(schemas["set_active_document"]["annotations"]["destructiveHint"])
+        self.assertTrue(schemas["close_active_document"]["annotations"]["destructiveHint"])
         self.assertTrue(schemas["set_timeline_marker"]["annotations"]["destructiveHint"])
         self.assertFalse(schemas["search_local_fusion_docs"]["annotations"]["openWorldHint"])
 
@@ -834,6 +1335,81 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(report["appearance"]["name"], "Satin Steel")
         self.assertEqual(report["physicalMaterial"]["entityToken"], "material-token")
 
+    def test_inspect_body_style_accepts_entity_tokens(self):
+        appearance = types.SimpleNamespace(name="Red Paint", objectType="Appearance", entityToken="appearance-token")
+        body = types.SimpleNamespace(
+            name="DuplicateName",
+            entityToken="body-token",
+            isVisible=True,
+            appearance=appearance,
+            material=None,
+            physicalMaterial=None,
+        )
+        component = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=component)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("inspect_body_style", {"body_entity_tokens": ["body-token"]})
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["count"], 1)
+        self.assertEqual(res["result"]["bodies"][0]["entityToken"], "body-token")
+
+    def test_apply_appearance_accepts_body_entity_tokens(self):
+        utilities = importlib.import_module("tools.utilities")
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+
+        old_appearance = types.SimpleNamespace(name="Old", objectType="Appearance", entityToken="old-token")
+        new_appearance = types.SimpleNamespace(name="Logo Red", objectType="Appearance", entityToken="red-token")
+        body = types.SimpleNamespace(
+            name="LogoBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="logo-token",
+            isVisible=True,
+            appearance=old_appearance,
+            material=None,
+            physicalMaterial=None,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=1.0),
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[], sketches=[], constructionPlanes=[])
+        body.parentComponent = root
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            appearances=[new_appearance],
+            selectionSets=[],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+        )
+        _fake_app.activeProduct = design
+        _fake_app.materialLibraries = []
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("apply_appearance", {
+                "appearance_name": "Logo Red",
+                "body_entity_tokens": ["logo-token"],
+                "expected_body_count": 1,
+            })
+        finally:
+            fusion.BRepBody.cast = original_cast
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["applied"])
+        self.assertEqual(body.appearance, new_appearance)
+        self.assertEqual(res["result"]["targetBodies"][0]["appearance"]["name"], "Logo Red")
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
     def test_get_physical_properties_reports_converted_body_properties(self):
         appearance = types.SimpleNamespace(
             name="Blue Paint",
@@ -883,6 +1459,1743 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertEqual(report["physicalMaterial"]["name"], "Aluminum")
         self.assertEqual(report["appearance"]["entityToken"], "appearance-token")
 
+    def test_inspect_analysis_capabilities_reports_unsupported_exact_apis(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("inspect_analysis_capabilities", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertTrue(res["result"]["broadPhaseAvailable"])
+        self.assertFalse(res["result"]["exactInterference"]["supported"])
+        self.assertFalse(res["result"]["exactMinimumDistance"]["supported"])
+        self.assertIn("Current interference_check and clearance_check remain broad-phase", " ".join(res["result"]["warnings"]))
+
+    def test_inspect_analysis_capabilities_reports_candidate_apis_without_claiming_validation(self):
+        inspection = importlib.import_module("tools.inspection")
+        original_temp_manager = getattr(inspection.adsk.fusion, "TemporaryBRepManager", None)
+        original_measure_manager = getattr(_fake_app, "measureManager", None)
+        had_measure_manager = hasattr(_fake_app, "measureManager")
+
+        class _TempBRepManager:
+            @staticmethod
+            def get():
+                return _TempBRepManager()
+
+            def copy(self, _body):
+                return object()
+
+            def booleanOperation(self, *_args):
+                return True
+
+        class _MeasureManager:
+            def measureMinimumDistance(self, *_args):
+                return types.SimpleNamespace(value=1.0)
+
+        visible_body_a = types.SimpleNamespace(name="BodyA", isVisible=True)
+        visible_body_b = types.SimpleNamespace(name="BodyB", isVisible=True)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[visible_body_a, visible_body_b], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        inspection.adsk.fusion.TemporaryBRepManager = _TempBRepManager
+        _fake_app.measureManager = _MeasureManager()
+        try:
+            res = self.tools.execute_tool("inspect_analysis_capabilities", {})
+        finally:
+            if original_temp_manager is None:
+                delattr(inspection.adsk.fusion, "TemporaryBRepManager")
+            else:
+                inspection.adsk.fusion.TemporaryBRepManager = original_temp_manager
+            if had_measure_manager:
+                _fake_app.measureManager = original_measure_manager
+            else:
+                delattr(_fake_app, "measureManager")
+
+        self.assertTrue(res["result"]["exactInterference"]["supported"])
+        self.assertEqual(res["result"]["exactInterference"]["booleanCandidate"]["method"], "booleanOperation")
+        self.assertTrue(res["result"]["exactMinimumDistance"]["supported"])
+        self.assertEqual(res["result"]["exactMinimumDistance"]["distanceCandidate"]["method"], "measureMinimumDistance")
+        self.assertIn("Candidate API availability is not proof", res["result"]["warnings"][0])
+
+    def test_interference_check_reports_bounding_box_collisions(self):
+        body_a = types.SimpleNamespace(
+            name="BodyA",
+            entityToken="token-a",
+            isVisible=True,
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                maxPoint=types.SimpleNamespace(x=2.0, y=2.0, z=2.0),
+            ),
+        )
+        body_b = types.SimpleNamespace(
+            name="BodyB",
+            entityToken="token-b",
+            isVisible=True,
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=1.0, y=1.0, z=1.0),
+                maxPoint=types.SimpleNamespace(x=3.0, y=3.0, z=3.0),
+            ),
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body_a, body_b], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("interference_check", {"body_names": ["BodyA", "BodyB"]})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(res["result"]["method"], "axis_aligned_bounding_box")
+        self.assertEqual(res["result"]["pairCount"], 1)
+        self.assertEqual(res["result"]["interferenceCount"], 1)
+        self.assertEqual(res["result"]["interferences"][0]["bboxOverlapMm"], [10.0, 10.0, 10.0])
+        self.assertEqual(res["result"]["interferences"][0]["bboxOverlapVolumeMm3"], 1000.0)
+
+    def test_interference_check_requires_two_bodies(self):
+        body = types.SimpleNamespace(
+            name="OnlyBody",
+            isVisible=True,
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                maxPoint=types.SimpleNamespace(x=1.0, y=1.0, z=1.0),
+            ),
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("interference_check", {"body_names": ["OnlyBody"]})
+
+        self.assertIn("error", res)
+        self.assertIn("at least two", res["error"])
+
+    def test_exact_interference_check_reports_unsupported_missing_api(self):
+        body_a = types.SimpleNamespace(name="BodyA", entityToken="token-a", isVisible=True)
+        body_b = types.SimpleNamespace(name="BodyB", entityToken="token-b", isVisible=True)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body_a, body_b], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("exact_interference_check", {"body_names": ["BodyA", "BodyB"]})
+
+        self.assertIn("error", res)
+        self.assertTrue(res["unsupported"])
+        self.assertIn("Exact interference APIs are not available", res["error"])
+
+    def test_exact_interference_check_uses_temporary_brep_candidate(self):
+        inspection = importlib.import_module("tools.inspection")
+        original_temp_manager = getattr(inspection.adsk.fusion, "TemporaryBRepManager", None)
+
+        class _TempBRepManager:
+            @staticmethod
+            def get():
+                return _TempBRepManager()
+
+            def copy(self, body):
+                return types.SimpleNamespace(name=f"{body.name}_copy", volume=0)
+
+            def booleanOperation(self, body_a, body_b):
+                return types.SimpleNamespace(name=f"{body_a.name}_{body_b.name}_intersection", volume=1.25)
+
+        body_a = types.SimpleNamespace(name="BodyA", entityToken="token-a", isVisible=True, boundingBox=None)
+        body_b = types.SimpleNamespace(name="BodyB", entityToken="token-b", isVisible=True, boundingBox=None)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body_a, body_b], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        inspection.adsk.fusion.TemporaryBRepManager = _TempBRepManager
+        try:
+            res = self.tools.execute_tool("exact_interference_check", {"body_names": ["BodyA", "BodyB"]})
+        finally:
+            if original_temp_manager is None:
+                delattr(inspection.adsk.fusion, "TemporaryBRepManager")
+            else:
+                inspection.adsk.fusion.TemporaryBRepManager = original_temp_manager
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["method"], "temporary_brep_boolean_intersection")
+        self.assertFalse(res["result"]["validatedExact"])
+        self.assertEqual(res["result"]["interferenceCount"], 1)
+        self.assertTrue(res["result"]["interferences"][0]["exactInterferes"])
+
+    def test_clearance_check_reports_minimum_clearance_violation(self):
+        target = types.SimpleNamespace(
+            name="Target",
+            entityToken="target-token",
+            isVisible=True,
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                maxPoint=types.SimpleNamespace(x=1.0, y=1.0, z=1.0),
+            ),
+        )
+        tool = types.SimpleNamespace(
+            name="Tool",
+            entityToken="tool-token",
+            isVisible=True,
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=1.04, y=0.0, z=0.0),
+                maxPoint=types.SimpleNamespace(x=2.0, y=1.0, z=1.0),
+            ),
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[target, tool], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("clearance_check", {
+            "target_body_names": ["Target"],
+            "tool_body_names": ["Tool"],
+            "minimum_clearance": "0.5 mm",
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(res["result"]["pairCount"], 1)
+        self.assertEqual(res["result"]["violationCount"], 1)
+        self.assertAlmostEqual(res["result"]["violations"][0]["bboxDistanceMm"], 0.4)
+        self.assertFalse(res["result"]["violations"][0]["clearanceOk"])
+
+    def test_clearance_check_accepts_entity_tokens(self):
+        target = types.SimpleNamespace(
+            name="Target",
+            entityToken="target-token",
+            isVisible=True,
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                maxPoint=types.SimpleNamespace(x=1.0, y=1.0, z=1.0),
+            ),
+        )
+        tool = types.SimpleNamespace(
+            name="Tool",
+            entityToken="tool-token",
+            isVisible=True,
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=2.0, y=0.0, z=0.0),
+                maxPoint=types.SimpleNamespace(x=3.0, y=1.0, z=1.0),
+            ),
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[target, tool], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("clearance_check", {
+            "target_body_entity_tokens": ["target-token"],
+            "tool_body_entity_tokens": ["tool-token"],
+            "minimum_clearance": "5 mm",
+        })
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["violationCount"], 0)
+        self.assertTrue(res["result"]["checkedPairs"][0]["clearanceOk"])
+
+    def test_verify_insert_alignment_blocks_separated_logo(self):
+        def body(name, token, min_xyz, max_xyz):
+            return types.SimpleNamespace(
+                name=name,
+                entityToken=token,
+                isVisible=True,
+                boundingBox=types.SimpleNamespace(
+                    minPoint=types.SimpleNamespace(x=min_xyz[0], y=min_xyz[1], z=min_xyz[2]),
+                    maxPoint=types.SimpleNamespace(x=max_xyz[0], y=max_xyz[1], z=max_xyz[2]),
+                ),
+            )
+
+        plate = body("Plate", "plate-token", (0.0, 0.0, 0.0), (4.0, 3.0, 0.2))
+        socket = body("Socket", "socket-token", (0.0, 0.0, 0.0), (4.0, 3.0, 0.2))
+        logo = body("LogoText", "logo-token", (1.0, 1.0, 0.35), (2.0, 2.0, 0.45))
+        root = types.SimpleNamespace(name="Root", bRepBodies=[plate, socket, logo], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("verify_insert_alignment", {
+            "plate_body_name": "Plate",
+            "socket_body_name": "Socket",
+            "logo_body_names": ["LogoText"],
+            "expected_plate_thickness": "2 mm",
+            "thickness_axis": "z",
+            "tolerance": "0.05 mm",
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["readOnly"])
+        self.assertFalse(result["okToExport"])
+        self.assertTrue(result["checks"]["plateSocketFootprintOverlap"])
+        self.assertTrue(result["checks"]["socketDepthMatchesPlateThickness"])
+        self.assertFalse(result["checks"]["logoBodiesOnOrIntersectPlate"])
+        self.assertEqual(result["plate"]["sizeMm"], [40.0, 30.0, 2.0])
+        self.assertTrue(result["logoBodies"][0]["separatedFromPlate"])
+        self.assertGreater(result["logoBodies"][0]["minAbovePlateTopMm"], 0.05)
+        self.assertIn("Logo bodies appear separated above the plate", " ".join(result["blockingReasons"]))
+
+    def test_verify_insert_alignment_passes_touching_insert(self):
+        def body(name, token, min_xyz, max_xyz):
+            return types.SimpleNamespace(
+                name=name,
+                entityToken=token,
+                isVisible=True,
+                boundingBox=types.SimpleNamespace(
+                    minPoint=types.SimpleNamespace(x=min_xyz[0], y=min_xyz[1], z=min_xyz[2]),
+                    maxPoint=types.SimpleNamespace(x=max_xyz[0], y=max_xyz[1], z=max_xyz[2]),
+                ),
+            )
+
+        plate = body("Plate", "plate-token", (0.0, 0.0, 0.0), (4.0, 3.0, 0.2))
+        socket = body("Socket", "socket-token", (0.0, 0.0, 0.0), (4.0, 3.0, 0.2))
+        logo = body("LogoText", "logo-token", (1.0, 1.0, 0.199), (2.0, 2.0, 0.4))
+        root = types.SimpleNamespace(name="Root", bRepBodies=[plate, socket, logo], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("verify_insert_alignment", {
+            "plate_body_entity_token": "plate-token",
+            "socket_body_entity_token": "socket-token",
+            "logo_body_entity_tokens": ["logo-token"],
+            "expected_plate_thickness": "2 mm",
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToExport"])
+        self.assertEqual(res["result"]["blockingReasons"], [])
+        self.assertTrue(res["result"]["checks"]["logoBodiesOnOrIntersectPlate"])
+
+    def test_exact_clearance_check_uses_measure_manager_candidate(self):
+        original_measure_manager = getattr(_fake_app, "measureManager", None)
+        had_measure_manager = hasattr(_fake_app, "measureManager")
+
+        class _MeasureManager:
+            def measureMinimumDistance(self, body_a, body_b):
+                return types.SimpleNamespace(value=0.04)
+
+        target = types.SimpleNamespace(name="Target", entityToken="target-token", isVisible=True, boundingBox=None)
+        tool = types.SimpleNamespace(name="Tool", entityToken="tool-token", isVisible=True, boundingBox=None)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[target, tool], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        _fake_app.measureManager = _MeasureManager()
+        try:
+            res = self.tools.execute_tool("exact_clearance_check", {
+                "target_body_entity_tokens": ["target-token"],
+                "tool_body_entity_tokens": ["tool-token"],
+                "minimum_clearance": "0.5 mm",
+            })
+        finally:
+            if had_measure_manager:
+                _fake_app.measureManager = original_measure_manager
+            else:
+                delattr(_fake_app, "measureManager")
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["method"], "measure_manager_minimum_distance")
+        self.assertFalse(res["result"]["validatedExact"])
+        self.assertEqual(res["result"]["violationCount"], 1)
+        self.assertAlmostEqual(res["result"]["violations"][0]["exactDistanceMm"], 0.4)
+
+    def test_inspect_sheet_metal_rules_reports_rule_and_body_metadata(self):
+        rule = types.SimpleNamespace(
+            name="Default Sheet Metal",
+            objectType="adsk::fusion::SheetMetalRule",
+            thickness=types.SimpleNamespace(expression="1 mm", value=0.1),
+            bendRadius=types.SimpleNamespace(expression="1.5 mm", value=0.15),
+            kFactor=types.SimpleNamespace(expression="0.44", value=0.44),
+        )
+        body = types.SimpleNamespace(
+            name="Panel",
+            entityToken="panel-token",
+            objectType="adsk::fusion::SheetMetalBody",
+            isVisible=True,
+            isSolid=True,
+            isSheetMetal=True,
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                maxPoint=types.SimpleNamespace(x=1.0, y=2.0, z=0.1),
+            ),
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            activeSheetMetalRule=rule,
+            sheetMetalRules=[rule],
+            designType="SheetMetalDesignType",
+        )
+
+        res = self.tools.execute_tool("inspect_sheet_metal_rules", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(res["result"]["activeRule"]["name"], "Default Sheet Metal")
+        self.assertEqual(res["result"]["activeRule"]["thicknessExpression"], "1 mm")
+        self.assertEqual(res["result"]["sheetMetalBodyCount"], 1)
+        self.assertTrue(res["result"]["bodies"][0]["isSheetMetal"])
+
+    def test_preflight_flat_pattern_blocks_non_sheet_metal_design(self):
+        body = types.SimpleNamespace(
+            name="SolidBody",
+            entityToken="solid-token",
+            objectType="adsk::fusion::BRepBody",
+            isVisible=True,
+            isSolid=True,
+            isSheetMetal=False,
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("preflight_flat_pattern", {"body_name": "SolidBody"})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["riskLevel"], "high")
+        self.assertTrue(any("No active sheet-metal rule" in item for item in res["result"]["blockingReasons"]))
+        self.assertTrue(any("not identified as sheet metal" in item for item in res["result"]["blockingReasons"]))
+
+    def test_preflight_flat_pattern_reports_available_flat_pattern(self):
+        rule = types.SimpleNamespace(
+            name="Default Sheet Metal",
+            thickness=types.SimpleNamespace(expression="1 mm", value=0.1),
+            bendRadius=types.SimpleNamespace(expression="1 mm", value=0.1),
+            kFactor=types.SimpleNamespace(value=0.44),
+        )
+        body = types.SimpleNamespace(
+            name="Panel",
+            entityToken="panel-token",
+            objectType="adsk::fusion::SheetMetalBody",
+            isVisible=True,
+            isSolid=True,
+            isSheetMetal=True,
+        )
+        flat_pattern = types.SimpleNamespace(
+            name="Panel Flat Pattern",
+            entityToken="flat-token",
+            objectType="adsk::fusion::FlatPattern",
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[], flatPattern=flat_pattern)
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            activeSheetMetalRule=rule,
+            sheetMetalRules=[rule],
+        )
+
+        res = self.tools.execute_tool("preflight_flat_pattern", {"body_name": "Panel"})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertTrue(res["result"]["flatPatternAvailable"])
+        self.assertEqual(res["result"]["flatPattern"]["entityToken"], "flat-token")
+
+    def test_plan_sheet_metal_workflow_requires_explicit_creation_inputs(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("plan_sheet_metal_workflow", {"operation": "create_flange"})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("rule_name is required", joined)
+        self.assertIn("reason is required", joined)
+        self.assertIn("edge_entity_tokens are required", joined)
+
+    def test_plan_sheet_metal_workflow_accepts_complete_flange_plan(self):
+        rule = types.SimpleNamespace(
+            name="Default Sheet Metal",
+            thickness=types.SimpleNamespace(expression="1 mm", value=0.1),
+            bendRadius=types.SimpleNamespace(expression="1 mm", value=0.1),
+            kFactor=types.SimpleNamespace(value=0.44),
+        )
+        body = types.SimpleNamespace(
+            name="Panel",
+            entityToken="panel-token",
+            objectType="adsk::fusion::SheetMetalBody",
+            isVisible=True,
+            isSolid=True,
+            isSheetMetal=True,
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            activeSheetMetalRule=rule,
+            sheetMetalRules=[rule],
+        )
+
+        res = self.tools.execute_tool("plan_sheet_metal_workflow", {
+            "operation": "create_flange",
+            "body_entity_token": "panel-token",
+            "edge_entity_tokens": ["edge-token"],
+            "rule_name": "Default Sheet Metal",
+            "parameters": {"height": "12 mm", "angle": "90 deg"},
+            "reason": "Create explicit enclosure wall flange.",
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["operation"], "create_flange")
+        self.assertEqual(res["result"]["targetBody"]["bodyName"], "Panel")
+        self.assertEqual(res["result"]["edgeEntityTokens"], ["edge-token"])
+        self.assertEqual(res["result"]["parameters"]["height"], "12 mm")
+        self.assertIn("does not create flanges", " ".join(res["result"]["warnings"]))
+
+    def test_create_flange_blocks_failed_preflight(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("create_flange", {
+            "edge_entity_tokens": ["edge-token"],
+            "reason": "Create explicit enclosure wall flange.",
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["okToProceed"])
+        joined = " ".join(res["preflight"]["blockingReasons"])
+        self.assertIn("rule_name is required", joined)
+
+    def test_create_flange_reports_unsupported_missing_feature_collection(self):
+        rule = types.SimpleNamespace(name="Default Sheet Metal")
+        edge = types.SimpleNamespace(name="FlangeEdge", entityToken="edge-token", faces=[])
+        body = types.SimpleNamespace(
+            name="Panel",
+            entityToken="panel-token",
+            objectType="adsk::fusion::SheetMetalBody",
+            isVisible=True,
+            isSolid=True,
+            isSheetMetal=True,
+            edges=[edge],
+            faces=[],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[], features=types.SimpleNamespace())
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            activeSheetMetalRule=rule,
+            sheetMetalRules=[rule],
+        )
+
+        res = self.tools.execute_tool("create_flange", {
+            "body_entity_token": "panel-token",
+            "edge_entity_tokens": ["edge-token"],
+            "rule_name": "Default Sheet Metal",
+            "parameters": {"height": "12 mm"},
+            "reason": "Create explicit enclosure wall flange.",
+        })
+
+        self.assertIn("error", res)
+        self.assertTrue(res["unsupported"])
+        self.assertEqual(res["operation"], "create_flange")
+        self.assertIn("flangeFeatures", res["error"])
+
+    def test_create_flange_uses_writable_feature_collection(self):
+        from tools import parametric
+
+        class _SheetMetalFeatureCollection:
+            def __init__(self):
+                self.inputs = []
+
+            def createInput(self, payload):
+                feature_input = types.SimpleNamespace(
+                    payload=payload,
+                    height=types.SimpleNamespace(expression=""),
+                )
+                self.inputs.append(feature_input)
+                return feature_input
+
+            def add(self, feature_input):
+                return types.SimpleNamespace(name="", featureInput=feature_input)
+
+        rule = types.SimpleNamespace(name="Default Sheet Metal")
+        edge = types.SimpleNamespace(name="FlangeEdge", entityToken="edge-token", faces=[])
+        body = types.SimpleNamespace(
+            name="Panel",
+            entityToken="panel-token",
+            objectType="adsk::fusion::SheetMetalBody",
+            isVisible=True,
+            isSolid=True,
+            isSheetMetal=True,
+            edges=[edge],
+            faces=[],
+        )
+        flange_features = _SheetMetalFeatureCollection()
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(flangeFeatures=flange_features),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            activeSheetMetalRule=rule,
+            sheetMetalRules=[rule],
+        )
+        old_snapshot = parametric._design_state_snapshot
+        old_compare = parametric.compare_design_state
+        snapshots = [{"snapshot": "before"}, {"snapshot": "after"}]
+        try:
+            parametric._design_state_snapshot = lambda include_selections=False: snapshots.pop(0)
+            parametric.compare_design_state = lambda before, after: {"result": {"changed": before != after, "before": before, "after": after}}
+
+            res = self.tools.execute_tool("create_flange", {
+                "body_entity_token": "panel-token",
+                "edge_entity_tokens": ["edge-token"],
+                "rule_name": "Default Sheet Metal",
+                "parameters": {"height": "12 mm"},
+                "reason": "Create explicit enclosure wall flange.",
+            })
+        finally:
+            parametric._design_state_snapshot = old_snapshot
+            parametric.compare_design_state = old_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["operation"], "create_flange")
+        self.assertEqual(res["result"]["featureName"], "create_flange_Panel")
+        self.assertEqual(res["result"]["ruleName"], "Default Sheet Metal")
+        self.assertEqual(res["result"]["appliedParameters"]["height"], "height.expression")
+        self.assertEqual(flange_features.inputs[0].height.expression, "12 mm")
+        self.assertTrue(res["result"]["stateComparison"]["changed"])
+
+    def test_inspect_surface_bodies_classifies_surface_and_open_edges(self):
+        open_edge = types.SimpleNamespace(
+            name="OpenEdge",
+            entityToken="edge-token",
+            objectType="adsk::fusion::BRepEdge",
+            faces=[],
+            length=2.5,
+        )
+        closed_edge = types.SimpleNamespace(
+            name="ClosedEdge",
+            faces=[types.SimpleNamespace(), types.SimpleNamespace()],
+            length=1.0,
+        )
+        surface = types.SimpleNamespace(
+            name="PatchSurface",
+            entityToken="surface-token",
+            objectType="adsk::fusion::BRepBody",
+            isVisible=True,
+            isSolid=False,
+            faces=[types.SimpleNamespace()],
+            edges=[open_edge, closed_edge],
+        )
+        solid = types.SimpleNamespace(
+            name="SolidBody",
+            entityToken="solid-token",
+            objectType="adsk::fusion::BRepBody",
+            isVisible=True,
+            isSolid=True,
+            faces=[types.SimpleNamespace() for _ in range(6)],
+            edges=[],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[surface, solid], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("inspect_surface_bodies", {"include_edges": True})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(res["result"]["bodyCount"], 2)
+        self.assertEqual(res["result"]["surfaceBodyCount"], 1)
+        surface_report = [body for body in res["result"]["bodies"] if body["bodyName"] == "PatchSurface"][0]
+        self.assertEqual(surface_report["classification"], "surface")
+        self.assertEqual(surface_report["openEdgeCount"], 1)
+        self.assertEqual(surface_report["openEdges"][0]["entityToken"], "edge-token")
+        self.assertIn("stitch_surfaces", surface_report["candidateRepairTools"])
+
+    def test_inspect_surface_bodies_reports_missing_targets(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("inspect_surface_bodies", {"body_names": ["MissingBody"]})
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["missingBodyNames"], ["MissingBody"])
+        self.assertTrue(any("Body names not found" in warning for warning in res["result"]["warnings"]))
+
+    def test_plan_surface_repair_requires_target_edges_and_reason(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("plan_surface_repair", {"operation": "stitch_surfaces"})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("body_name or body_entity_token is required", joined)
+        self.assertIn("reason is required", joined)
+        self.assertIn("edge_entity_tokens are required", joined)
+
+    def test_plan_surface_repair_accepts_explicit_surface_target(self):
+        open_edge = types.SimpleNamespace(
+            name="OpenEdge",
+            entityToken="edge-token",
+            objectType="adsk::fusion::BRepEdge",
+            faces=[],
+            length=2.5,
+        )
+        surface = types.SimpleNamespace(
+            name="PatchSurface",
+            entityToken="surface-token",
+            objectType="adsk::fusion::BRepBody",
+            isVisible=True,
+            isSolid=False,
+            faces=[types.SimpleNamespace()],
+            edges=[open_edge],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[surface], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("plan_surface_repair", {
+            "operation": "stitch_surfaces",
+            "body_entity_token": "surface-token",
+            "edge_entity_tokens": ["edge-token"],
+            "parameters": {"tolerance": "0.01 mm"},
+            "reason": "Close imported surface gap before downstream solid conversion.",
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["operation"], "stitch_surfaces")
+        self.assertEqual(res["result"]["target"]["bodyName"], "PatchSurface")
+        self.assertEqual(res["result"]["edgeEntityTokens"], ["edge-token"])
+        self.assertEqual(res["result"]["parameters"]["tolerance"], "0.01 mm")
+        self.assertIn("does not patch", " ".join(res["result"]["warnings"]))
+
+    def test_patch_surface_blocks_failed_preflight(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("patch_surface", {"edge_entity_tokens": ["edge-token"]})
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["okToProceed"])
+        self.assertIn("body_name or body_entity_token is required", " ".join(res["preflight"]["blockingReasons"]))
+
+    def test_patch_surface_reports_unsupported_missing_feature_collection(self):
+        open_edge = types.SimpleNamespace(
+            name="OpenEdge",
+            entityToken="edge-token",
+            objectType="adsk::fusion::BRepEdge",
+            faces=[],
+            length=2.5,
+        )
+        surface = types.SimpleNamespace(
+            name="PatchSurface",
+            entityToken="surface-token",
+            objectType="adsk::fusion::BRepBody",
+            isVisible=True,
+            isSolid=False,
+            faces=[],
+            edges=[open_edge],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[surface], allOccurrences=[], features=types.SimpleNamespace())
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+
+        res = self.tools.execute_tool("patch_surface", {
+            "body_entity_token": "surface-token",
+            "edge_entity_tokens": ["edge-token"],
+            "reason": "Patch imported surface gap.",
+        })
+
+        self.assertIn("error", res)
+        self.assertTrue(res["unsupported"])
+        self.assertEqual(res["operation"], "patch_surface")
+        self.assertIn("patchFeatures", res["error"])
+
+    def test_patch_surface_uses_writable_feature_collection(self):
+        from tools import parametric
+
+        class _SurfaceFeatureCollection:
+            def __init__(self):
+                self.inputs = []
+
+            def createInput(self, payload):
+                feature_input = types.SimpleNamespace(
+                    payload=payload,
+                    tolerance=types.SimpleNamespace(expression=""),
+                )
+                self.inputs.append(feature_input)
+                return feature_input
+
+            def add(self, feature_input):
+                return types.SimpleNamespace(name="", featureInput=feature_input)
+
+        open_edge = types.SimpleNamespace(
+            name="OpenEdge",
+            entityToken="edge-token",
+            objectType="adsk::fusion::BRepEdge",
+            faces=[],
+            length=2.5,
+        )
+        surface = types.SimpleNamespace(
+            name="PatchSurface",
+            entityToken="surface-token",
+            objectType="adsk::fusion::BRepBody",
+            isVisible=True,
+            isSolid=False,
+            faces=[],
+            edges=[open_edge],
+        )
+        patch_features = _SurfaceFeatureCollection()
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[surface],
+            allOccurrences=[],
+            features=types.SimpleNamespace(patchFeatures=patch_features),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        old_snapshot = parametric._design_state_snapshot
+        old_compare = parametric.compare_design_state
+        snapshots = [{"snapshot": "before"}, {"snapshot": "after"}]
+        try:
+            parametric._design_state_snapshot = lambda include_selections=False: snapshots.pop(0)
+            parametric.compare_design_state = lambda before, after: {"result": {"changed": before != after, "before": before, "after": after}}
+
+            res = self.tools.execute_tool("patch_surface", {
+                "body_entity_token": "surface-token",
+                "edge_entity_tokens": ["edge-token"],
+                "parameters": {"tolerance": "0.01 mm"},
+                "reason": "Patch imported surface gap.",
+            })
+        finally:
+            parametric._design_state_snapshot = old_snapshot
+            parametric.compare_design_state = old_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["operation"], "patch_surface")
+        self.assertEqual(res["result"]["featureName"], "patch_surface_PatchSurface")
+        self.assertEqual(res["result"]["appliedParameters"]["tolerance"], "tolerance.expression")
+        self.assertEqual(patch_features.inputs[0].tolerance.expression, "0.01 mm")
+        self.assertTrue(res["result"]["stateComparison"]["changed"])
+
+    def test_inspect_manufacturing_workspace_reports_unavailable(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("inspect_manufacturing_workspace", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["workspaceAvailable"])
+        self.assertFalse(res["result"]["okToInspectSetups"])
+        self.assertIn("CAM/manufacturing", res["result"]["blockingReasons"][0])
+
+    def test_list_manufacturing_setups_reports_setup_and_operations(self):
+        operation = types.SimpleNamespace(
+            name="Adaptive1",
+            objectType="adsk::cam::Operation",
+            entityToken="op-token",
+            isValid=True,
+            isSuppressed=False,
+            hasToolpath=False,
+            tool=types.SimpleNamespace(name="Flat End Mill", objectType="Tool", entityToken="tool-token"),
+        )
+        setup = types.SimpleNamespace(
+            name="Setup1",
+            objectType="adsk::cam::Setup",
+            entityToken="setup-token",
+            isValid=True,
+            operations=[operation],
+        )
+        cam = types.SimpleNamespace(
+            objectType="adsk::cam::CAM",
+            productType="CAMProductType",
+            setups=[setup],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, cam=cam)
+
+        res = self.tools.execute_tool("list_manufacturing_setups", {"include_operations": True})
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["setupCount"], 1)
+        self.assertEqual(res["result"]["setups"][0]["name"], "Setup1")
+        self.assertEqual(res["result"]["setups"][0]["operations"][0]["name"], "Adaptive1")
+        self.assertEqual(res["result"]["setups"][0]["operations"][0]["tool"]["name"], "Flat End Mill")
+
+    def test_inspect_operation_requires_target_and_finds_by_name(self):
+        operation = types.SimpleNamespace(name="Contour1", objectType="Operation", hasToolpath=True)
+        setup = types.SimpleNamespace(name="Setup1", objectType="Setup", operations=[operation])
+        cam = types.SimpleNamespace(objectType="adsk::cam::CAM", productType="CAMProductType", setups=[setup])
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, cam=cam)
+
+        missing_target = self.tools.execute_tool("inspect_operation", {})
+        self.assertTrue(any("operation_name or operation_index is required" in reason for reason in missing_target["result"]["blockingReasons"]))
+
+        res = self.tools.execute_tool("inspect_operation", {"setup_name": "Setup1", "operation_name": "Contour1"})
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["matchCount"], 1)
+        self.assertEqual(res["result"]["operations"][0]["name"], "Contour1")
+
+    def test_plan_manufacturing_operation_requires_explicit_production_inputs(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("plan_manufacturing_operation", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("setup_name is required", joined)
+        self.assertIn("machine must be a non-empty object", joined)
+        self.assertIn("feeds must be a non-empty object", joined)
+        self.assertIn("requires_user_approval must be true", joined)
+        self.assertIn("CAM/manufacturing", joined)
+
+    def test_plan_manufacturing_operation_accepts_complete_explicit_plan(self):
+        cam = types.SimpleNamespace(objectType="adsk::cam::CAM", productType="CAMProductType", setups=[])
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, cam=cam)
+
+        res = self.tools.execute_tool("plan_manufacturing_operation", {
+            "setup_name": "Setup1",
+            "operation_name": "Adaptive1",
+            "operation_type": "adaptive",
+            "machine": {"name": "Shop Mill", "controller": "generic"},
+            "stock": {"x_mm": 100, "y_mm": 50, "z_mm": 12, "material": "6061"},
+            "wcs": {"origin": "stock_box_point", "axis": "model_z"},
+            "tool": {"name": "6mm flat end mill", "diameter_mm": 6, "flutes": 2},
+            "feeds": {"cut_mm_per_min": 600, "plunge_mm_per_min": 120},
+            "speeds": {"spindle_rpm": 12000},
+            "post_processor": {"name": "generic", "output_extension": "nc"},
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["setup"]["machine"]["name"], "Shop Mill")
+        self.assertEqual(res["result"]["operation"]["type"], "adaptive")
+        self.assertEqual(res["result"]["operation"]["feeds"]["cut_mm_per_min"], 600)
+        self.assertTrue(res["result"]["requiresUserApproval"])
+        self.assertIn("does not create setups", " ".join(res["result"]["warnings"]))
+
+    def test_inspect_simulation_workspace_reports_unavailable(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("inspect_simulation_workspace", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["workspaceAvailable"])
+        self.assertFalse(res["result"]["okToInspectStudies"])
+        self.assertIn("Simulation", res["result"]["blockingReasons"][0])
+
+    def test_list_simulation_studies_reports_study_metadata(self):
+        study = types.SimpleNamespace(
+            name="Static Stress 1",
+            objectType="SimulationStudy",
+            entityToken="study-token",
+            studyType="static_stress",
+            isValid=True,
+            solveStatus="not_solved",
+            isSolved=False,
+            loads=[types.SimpleNamespace(name="Load1")],
+            constraints=[types.SimpleNamespace(name="Fixed1")],
+            materials=[types.SimpleNamespace(name="Steel")],
+            contacts=[],
+            results=[],
+            mesh=None,
+        )
+        sim = types.SimpleNamespace(
+            objectType="adsk::fusion::SimulationProduct",
+            productType="SimulationProductType",
+            studies=[study],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, simulationProduct=sim)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("list_simulation_studies", {"include_details": True})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(res["result"]["studyCount"], 1)
+        self.assertEqual(res["result"]["studies"][0]["name"], "Static Stress 1")
+        self.assertEqual(res["result"]["studies"][0]["loadCount"], 1)
+        self.assertEqual(res["result"]["studies"][0]["constraintCount"], 1)
+
+    def test_plan_simulation_study_requires_explicit_inputs_and_approval(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("plan_simulation_study", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("study_name is required", joined)
+        self.assertIn("target_body_names or target_body_entity_tokens are required", joined)
+        self.assertIn("materials must be a non-empty object", joined)
+        self.assertIn("requires_user_approval must be true", joined)
+        self.assertIn("Simulation workspace is unavailable", joined)
+
+    def test_plan_simulation_study_accepts_complete_explicit_plan(self):
+        body = types.SimpleNamespace(
+            name="Bracket",
+            isVisible=True,
+            isSolid=True,
+            entityToken="body-token",
+            boundingBox=None,
+            physicalProperties=None,
+        )
+        sim = types.SimpleNamespace(
+            objectType="adsk::fusion::SimulationProduct",
+            productType="SimulationProductType",
+            studies=[],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, simulationProduct=sim)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("plan_simulation_study", {
+            "study_name": "Bracket Static Stress",
+            "study_type": "static_stress",
+            "target_body_entity_tokens": ["body-token"],
+            "materials": {"Bracket": "Aluminum 6061"},
+            "loads": {"load1": {"type": "force", "magnitude": "100 N", "direction": "z"}},
+            "constraints": {"fixed1": {"type": "fixed", "target": "mounting face"}},
+            "contacts": {"default": "bonded"},
+            "mesh_settings": {"size": "3 mm", "order": "linear"},
+            "result_outputs": {"plots": ["stress", "displacement"]},
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["blockingReasons"], [])
+        self.assertEqual(res["result"]["study"]["type"], "static_stress")
+        self.assertEqual(res["result"]["study"]["targetBodies"][0]["name"], "Bracket")
+        self.assertTrue(res["result"]["requiresUserApproval"])
+
+    def test_inspect_electronics_workspace_reports_unavailable(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("inspect_electronics_workspace", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["workspaceAvailable"])
+        self.assertIn("Electronics", res["result"]["blockingReasons"][0])
+
+    def test_inspect_electronics_workspace_reports_board_metadata(self):
+        outline = types.SimpleNamespace(
+            name="Board Outline",
+            objectType="BoardOutline",
+            entityToken="outline-token",
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0, y=0, z=0),
+                maxPoint=types.SimpleNamespace(x=8.0, y=5.0, z=0.16),
+            ),
+        )
+        connector = types.SimpleNamespace(
+            name="J1 USB-C",
+            objectType="Component",
+            entityToken="j1-token",
+            designator="J1",
+            packageName="USB-C",
+            boundingBox=None,
+        )
+        component = types.SimpleNamespace(
+            name="U1 MCU",
+            objectType="Component",
+            entityToken="u1-token",
+            designator="U1",
+            packageName="QFN",
+            boundingBox=None,
+        )
+        net = types.SimpleNamespace(name="GND", objectType="Net", entityToken="net-token")
+        electronics = types.SimpleNamespace(
+            objectType="ElectronicsProduct",
+            productType="ElectronicsProductType",
+            boards=[types.SimpleNamespace(name="Main Board", objectType="Board")],
+            boardOutlines=[outline],
+            components=[connector, component],
+            nets=[net],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, electronicsProduct=electronics)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("inspect_electronics_workspace", {})
+
+        self.assertIn("result", res)
+        product = res["result"]["electronicsProduct"]
+        self.assertEqual(product["boardOutlineCount"], 1)
+        self.assertEqual(product["componentCount"], 2)
+        self.assertEqual(product["netCount"], 1)
+        self.assertEqual(product["connectorCandidateCount"], 1)
+        self.assertEqual(product["boardOutlines"][0]["sizeMm"], [80.0, 50.0, 1.6])
+
+    def test_plan_pcb_enclosure_fit_requires_explicit_inputs(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("plan_pcb_enclosure_fit", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("board_outline must be a non-empty object", joined)
+        self.assertIn("connectors must be a non-empty object", joined)
+        self.assertIn("requires_user_approval must be true", joined)
+        self.assertIn("Electronics workspace is unavailable", joined)
+
+    def test_plan_pcb_enclosure_fit_accepts_complete_explicit_plan(self):
+        body = types.SimpleNamespace(
+            name="Enclosure",
+            isVisible=True,
+            isSolid=True,
+            entityToken="enclosure-token",
+            boundingBox=None,
+            physicalProperties=None,
+        )
+        electronics = types.SimpleNamespace(
+            objectType="ElectronicsProduct",
+            productType="ElectronicsProductType",
+            boards=[types.SimpleNamespace(name="Main Board")],
+            boardOutlines=[types.SimpleNamespace(name="Board Outline")],
+            components=[types.SimpleNamespace(name="J1 USB-C", designator="J1")],
+            nets=[types.SimpleNamespace(name="GND")],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[body], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, electronicsProduct=electronics)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("plan_pcb_enclosure_fit", {
+            "board_outline": {"width": "80 mm", "height": "50 mm", "thickness": "1.6 mm"},
+            "keepouts": {"antenna": {"width": "20 mm", "height": "8 mm"}},
+            "connectors": {"J1": {"type": "usb-c", "insertion_direction": "front"}},
+            "mounting_holes": {"H1": {"diameter": "3.2 mm", "x": "5 mm", "y": "5 mm"}},
+            "clearance_rules": {"board_to_wall": "1.5 mm", "connector_service": "6 mm"},
+            "enclosure_body_entity_token": "enclosure-token",
+            "linked_mechanical_reference": "mechanical-link-1",
+            "reason": "Validate PCB fit before enclosure edits.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["blockingReasons"], [])
+        self.assertEqual(res["result"]["targetEnclosureBodies"][0]["name"], "Enclosure")
+        self.assertEqual(res["result"]["connectors"]["J1"]["type"], "usb-c")
+
+    def test_inspect_design_configurations_reports_unavailable(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            userParameters=[],
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("inspect_design_configurations", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["configurationCollectionAvailable"])
+        self.assertIn("configuration collection", res["result"]["blockingReasons"][0])
+
+    def test_inspect_design_configurations_reports_rows_and_parameters(self):
+        default_row = types.SimpleNamespace(
+            name="Default",
+            objectType="ConfigurationRow",
+            isActive=True,
+            parameters=[types.SimpleNamespace(name="width", expression="80 mm", unit="mm")],
+        )
+        wide_row = types.SimpleNamespace(
+            name="Wide",
+            objectType="ConfigurationRow",
+            isActive=False,
+            parameters=[types.SimpleNamespace(name="width", expression="100 mm", unit="mm")],
+        )
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            configurations=[default_row, wide_row],
+            activeConfiguration=default_row,
+            userParameters=[types.SimpleNamespace(name="width", expression="80 mm", value=8.0, unit="mm")],
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("inspect_design_configurations", {})
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["configurationCollectionAvailable"])
+        self.assertEqual(result["configurationCount"], 2)
+        self.assertEqual(result["activeConfiguration"]["name"], "Default")
+        self.assertEqual(result["configurations"][1]["parameters"][0]["expression"], "100 mm")
+        self.assertEqual(result["userParameters"][0]["name"], "width")
+
+    def test_plan_design_variant_requires_explicit_inputs_and_runtime_support(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, userParameters=[])
+
+        res = self.tools.execute_tool("plan_design_variant", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("variant_name is required", joined)
+        self.assertIn("parameter_changes must be a non-empty object", joined)
+        self.assertIn("requires_user_approval must be true", joined)
+        self.assertIn("configuration collection", joined)
+
+    def test_plan_design_variant_accepts_complete_explicit_plan(self):
+        row = types.SimpleNamespace(name="Default", objectType="ConfigurationRow", isActive=True, parameters=[])
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            configurations=[row],
+            activeConfiguration=row,
+            userParameters=[
+                types.SimpleNamespace(name="width", expression="80 mm", value=8.0, unit="mm"),
+                types.SimpleNamespace(name="height", expression="50 mm", value=5.0, unit="mm"),
+            ],
+        )
+
+        res = self.tools.execute_tool("plan_design_variant", {
+            "variant_name": "Wide",
+            "base_configuration": "Default",
+            "parameter_changes": {"width": "100 mm", "height": "60 mm"},
+            "expected_affected_bodies": ["BodyA"],
+            "expected_affected_features": ["Extrude1"],
+            "reason": "Create a wider configurable variant.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["blockingReasons"], [])
+        self.assertEqual(res["result"]["variant"]["name"], "Wide")
+        self.assertEqual(res["result"]["variant"]["parameterChanges"]["width"], "100 mm")
+
+    def test_apply_design_variant_parameters_blocks_without_approved_plan(self):
+        class FakeUserParameters(list):
+            def itemByName(self, name):
+                for param in self:
+                    if param.name == name:
+                        return param
+                return None
+
+        width = types.SimpleNamespace(name="width", expression="80 mm", value=8.0, unit="mm", comment="")
+        row = types.SimpleNamespace(name="Default", objectType="ConfigurationRow", isActive=True, parameters=[])
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], sketches=[], occurrences=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            configurations=[row],
+            activeConfiguration=row,
+            userParameters=FakeUserParameters([width]),
+            allParameters=[],
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+            designType="parametric",
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+        )
+
+        res = self.tools.execute_tool("apply_design_variant_parameters", {
+            "variant_name": "Wide",
+            "parameter_changes": {"width": "100 mm"},
+            "expected_affected_bodies": ["BodyA"],
+            "reason": "Try to apply without explicit user approval.",
+            "requires_user_approval": False,
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["okToProceed"])
+        self.assertEqual(width.expression, "80 mm")
+
+    def test_apply_design_variant_parameters_updates_existing_user_parameters(self):
+        class FakeUserParameters(list):
+            def itemByName(self, name):
+                for param in self:
+                    if param.name == name:
+                        return param
+                return None
+
+        width = types.SimpleNamespace(name="width", expression="80 mm", value=8.0, unit="mm", comment="")
+        height = types.SimpleNamespace(name="height", expression="50 mm", value=5.0, unit="mm", comment="")
+        row = types.SimpleNamespace(name="Default", objectType="ConfigurationRow", isActive=True, parameters=[])
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], sketches=[], occurrences=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            configurations=[row],
+            activeConfiguration=row,
+            userParameters=FakeUserParameters([width, height]),
+            allParameters=[],
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+            designType="parametric",
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+        )
+        _fake_app.activeDocument = types.SimpleNamespace(name="VariantDoc", isModified=False)
+        _fake_app.documents = [_fake_app.activeDocument]
+
+        res = self.tools.execute_tool("apply_design_variant_parameters", {
+            "variant_name": "Wide",
+            "base_configuration": "Default",
+            "parameter_changes": {"width": "100 mm", "height": "60 mm"},
+            "expected_affected_bodies": ["BodyA"],
+            "expected_affected_features": ["Extrude1"],
+            "reason": "Apply approved wider parameter set.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["applied"])
+        self.assertEqual(result["variantName"], "Wide")
+        self.assertEqual(result["parameterCount"], 2)
+        self.assertEqual(width.expression, "100 mm")
+        self.assertEqual(height.expression, "60 mm")
+        self.assertTrue(result["preflight"]["okToProceed"])
+        self.assertIn("did not create or activate Fusion configuration rows", result["notes"][0])
+
+    def test_inspect_render_workspace_reports_viewport_and_named_views(self):
+        camera = types.SimpleNamespace(
+            objectType="Camera",
+            eye=types.SimpleNamespace(x=1, y=2, z=3),
+            target=types.SimpleNamespace(x=0, y=0, z=0),
+            upVector=types.SimpleNamespace(x=0, y=1, z=0),
+            viewOrientation="iso",
+            isFitView=True,
+            isPerspective=False,
+        )
+        named_view = types.SimpleNamespace(name="Hero View", objectType="NamedView", camera=camera)
+        render_settings = types.SimpleNamespace(objectType="RenderSettings", quality="draft", resolution="1280x720")
+        render_product = types.SimpleNamespace(name="Render", objectType="RenderProduct", renderSettings=render_settings)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeViewport = types.SimpleNamespace(camera=camera)
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            namedViews=[named_view],
+            cameras=[],
+            environments=[types.SimpleNamespace(name="Studio", objectType="Environment")],
+            appearances=[types.SimpleNamespace(name="Paint")],
+            renderProduct=render_product,
+        )
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("inspect_render_workspace", {})
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["readOnly"])
+        self.assertTrue(result["activeViewportAvailable"])
+        self.assertEqual(result["namedViews"][0]["name"], "Hero View")
+        self.assertEqual(result["activeCamera"]["eye"], [1, 2, 3])
+        self.assertEqual(result["renderSettings"]["quality"], "draft")
+
+    def test_plan_render_output_requires_camera_path_reason_and_approval(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeViewport = None
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, namedViews=[], cameras=[], environments=[], appearances=[])
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("plan_render_output", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("camera_name or named_view is required", joined)
+        self.assertIn("output_path is required", joined)
+        self.assertIn("reason is required", joined)
+        self.assertIn("requires_user_approval must be true", joined)
+
+    def test_plan_render_output_accepts_complete_explicit_plan(self):
+        camera = types.SimpleNamespace(name="activeViewport", viewOrientation="iso")
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeViewport = types.SimpleNamespace(camera=camera)
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, namedViews=[], cameras=[], environments=[], appearances=[])
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+        output_path = os.path.join(self.temp_dir.name, "render.png")
+
+        res = self.tools.execute_tool("plan_render_output", {
+            "camera_name": "activeViewport",
+            "output_path": output_path,
+            "width": 1280,
+            "height": 720,
+            "visual_style": "shaded",
+            "environment": "Studio",
+            "reason": "Create review still.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["blockingReasons"], [])
+        self.assertEqual(res["result"]["renderPlan"]["outputPath"], output_path)
+        self.assertEqual(res["result"]["renderPlan"]["width"], 1280)
+
+    def test_render_viewport_output_blocks_without_approved_plan(self):
+        class FakeViewport:
+            camera = types.SimpleNamespace(name="activeViewport")
+
+            def saveAsImageFile(self, *_args):
+                raise AssertionError("render_viewport_output should not capture when preflight fails")
+
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], sketches=[], occurrences=[], allOccurrences=[])
+        _fake_app.activeViewport = FakeViewport()
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            namedViews=[],
+            cameras=[],
+            environments=[],
+            appearances=[],
+            designType="parametric",
+            userParameters=[],
+            allParameters=[],
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+        )
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None), name="RenderDoc", isModified=False)
+        output_path = os.path.join(self.temp_dir.name, "render.png")
+
+        res = self.tools.execute_tool("render_viewport_output", {
+            "camera_name": "activeViewport",
+            "output_path": output_path,
+            "reason": "Try without approval.",
+            "requires_user_approval": False,
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["okToProceed"])
+        self.assertFalse(os.path.exists(output_path))
+
+    def test_render_viewport_output_writes_nonempty_file_after_preflight(self):
+        class FakeViewport:
+            def __init__(self):
+                self.camera = types.SimpleNamespace(name="activeViewport")
+                self.saved = []
+
+            def saveAsImageFile(self, path, width, height):
+                self.saved.append((path, width, height))
+                with open(path, "wb") as f:
+                    f.write(b"fake-render")
+
+            def fit(self):
+                pass
+
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], sketches=[], occurrences=[], allOccurrences=[])
+        viewport = FakeViewport()
+        _fake_app.activeViewport = viewport
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            namedViews=[],
+            cameras=[],
+            environments=[],
+            appearances=[],
+            designType="parametric",
+            userParameters=[],
+            allParameters=[],
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+        )
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None), name="RenderDoc", isModified=False)
+        _fake_app.documents = [_fake_app.activeDocument]
+        output_path = os.path.join(self.temp_dir.name, "render.png")
+
+        res = self.tools.execute_tool("render_viewport_output", {
+            "camera_name": "activeViewport",
+            "output_path": output_path,
+            "width": 640,
+            "height": 360,
+            "visual_style": "shaded",
+            "reason": "Create approved viewport still.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["rendered"])
+        self.assertTrue(result["exists"])
+        self.assertGreater(result["sizeBytes"], 0)
+        self.assertEqual(viewport.saved[0], (output_path, 640, 360))
+        self.assertTrue(result["preflight"]["okToProceed"])
+        self.assertEqual(result["method"], "active_viewport_saveAsImageFile")
+
+    def test_inspect_document_management_state_reports_data_file_and_refs(self):
+        data_file = types.SimpleNamespace(
+            name="SavedDesign",
+            id="df-1",
+            versionNumber=7,
+            parentProject=types.SimpleNamespace(name="Project A", id="proj-1"),
+            parentFolder=types.SimpleNamespace(name="Folder A", id="folder-1"),
+            versions=[types.SimpleNamespace(name="v7", versionNumber=7, id="v7")],
+        )
+        ref_file = types.SimpleNamespace(name="LinkedPart", id="df-ref")
+        reference = types.SimpleNamespace(
+            name="LinkedPartRef",
+            objectType="ExternalReference",
+            dataFile=ref_file,
+            isOutOfDate=False,
+            isBroken=False,
+        )
+        doc = types.SimpleNamespace(
+            name="SavedDesign",
+            documentType="FusionDesignDocument",
+            isModified=True,
+            dataFile=data_file,
+            references=[reference],
+        )
+        _fake_app.activeDocument = doc
+        _fake_app.documents = [doc]
+
+        res = self.tools.execute_tool("inspect_document_management_state", {})
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["readOnly"])
+        self.assertTrue(result["cloudDataAvailable"])
+        self.assertEqual(result["activeDocument"]["dataFile"]["name"], "SavedDesign")
+        self.assertEqual(result["activeDocument"]["externalReferenceCount"], 1)
+        self.assertTrue(any("unsaved modifications" in warning for warning in result["warnings"]))
+
+    def test_plan_document_management_action_requires_explicit_dry_run_approval(self):
+        _fake_app.activeDocument = None
+        _fake_app.documents = []
+
+        res = self.tools.execute_tool("plan_document_management_action", {})
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("action must be one of", joined)
+        self.assertIn("reason is required", joined)
+        self.assertIn("requires_user_approval must be true", joined)
+
+    def test_plan_document_management_action_accepts_complete_export_copy_plan(self):
+        data_file = types.SimpleNamespace(name="SavedDesign", id="df-1", versionNumber=7)
+        doc = types.SimpleNamespace(name="SavedDesign", isModified=False, dataFile=data_file)
+        _fake_app.activeDocument = doc
+        _fake_app.documents = [doc]
+        target_path = os.path.join(self.temp_dir.name, "copy.f3d")
+
+        res = self.tools.execute_tool("plan_document_management_action", {
+            "action": "export_copy",
+            "document_name": "SavedDesign",
+            "target_path": target_path,
+            "dry_run": True,
+            "reason": "Archive reviewed design copy.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["blockingReasons"], [])
+        self.assertEqual(res["result"]["actionPlan"]["action"], "export_copy")
+        self.assertEqual(res["result"]["actionPlan"]["targetPath"], target_path)
+
+    def test_plan_document_management_action_accepts_close_plan(self):
+        doc = types.SimpleNamespace(name="FixtureDoc", isModified=True, dataFile=None)
+        _fake_app.activeDocument = doc
+        _fake_app.documents = [doc]
+
+        res = self.tools.execute_tool("plan_document_management_action", {
+            "action": "close",
+            "document_name": "FixtureDoc",
+            "dry_run": True,
+            "reason": "Close controlled fixture document.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["actionPlan"]["action"], "close")
+        self.assertEqual(res["result"]["actionPlan"]["documentName"], "FixtureDoc")
+
+    def test_plan_document_management_action_accepts_new_design_plan(self):
+        _fake_app.activeDocument = None
+        _fake_app.documents = []
+
+        res = self.tools.execute_tool("plan_document_management_action", {
+            "action": "new_design",
+            "document_name": "FixtureDoc",
+            "dry_run": True,
+            "reason": "Create controlled fixture document.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["actionPlan"]["action"], "new_design")
+        self.assertEqual(res["result"]["actionPlan"]["documentName"], "FixtureDoc")
+
+    def test_export_document_copy_blocks_without_approved_plan(self):
+        data_file = types.SimpleNamespace(name="SavedDesign", id="df-1", versionNumber=7)
+        doc = types.SimpleNamespace(name="SavedDesign", isModified=False, dataFile=data_file)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], sketches=[], occurrences=[], allOccurrences=[])
+        _fake_app.activeDocument = doc
+        _fake_app.documents = [doc]
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            userParameters=[],
+            allParameters=[],
+            designType="parametric",
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+            exportManager=types.SimpleNamespace(),
+        )
+        target_path = os.path.join(self.temp_dir.name, "copy.f3d")
+
+        res = self.tools.execute_tool("export_document_copy", {
+            "document_name": "SavedDesign",
+            "target_path": target_path,
+            "reason": "Try without approval.",
+            "requires_user_approval": False,
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["okToProceed"])
+        self.assertFalse(os.path.exists(target_path))
+
+    def test_export_document_copy_reports_unsupported_without_archive_export_api(self):
+        data_file = types.SimpleNamespace(name="SavedDesign", id="df-1", versionNumber=7)
+        doc = types.SimpleNamespace(name="SavedDesign", isModified=False, dataFile=data_file)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], sketches=[], occurrences=[], allOccurrences=[])
+        _fake_app.activeDocument = doc
+        _fake_app.documents = [doc]
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            userParameters=[],
+            allParameters=[],
+            designType="parametric",
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+            exportManager=types.SimpleNamespace(execute=lambda _options: None),
+        )
+        target_path = os.path.join(self.temp_dir.name, "copy.f3d")
+
+        res = self.tools.execute_tool("export_document_copy", {
+            "document_name": "SavedDesign",
+            "target_path": target_path,
+            "reason": "Archive reviewed design copy.",
+            "requires_user_approval": True,
+        })
+
+        self.assertTrue(res["unsupported"])
+        self.assertIn("archive export-copy API", res["error"])
+
+    def test_export_document_copy_writes_nonempty_archive_when_runtime_supports_it(self):
+        class FakeExportManager:
+            def __init__(self):
+                self.options = []
+                self.executed = []
+
+            def createFusionArchiveExportOptions(self, path, design):
+                option = types.SimpleNamespace(path=path, design=design)
+                self.options.append(option)
+                return option
+
+            def execute(self, option):
+                self.executed.append(option)
+                with open(option.path, "wb") as f:
+                    f.write(b"fake-f3d")
+
+        data_file = types.SimpleNamespace(name="SavedDesign", id="df-1", versionNumber=7)
+        doc = types.SimpleNamespace(name="SavedDesign", isModified=False, dataFile=data_file)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], sketches=[], occurrences=[], allOccurrences=[])
+        export_manager = FakeExportManager()
+        _fake_app.activeDocument = doc
+        _fake_app.documents = [doc]
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            userParameters=[],
+            allParameters=[],
+            designType="parametric",
+            timeline=types.SimpleNamespace(count=0, markerPosition=0, item=lambda idx: None),
+            exportManager=export_manager,
+        )
+        target_path = os.path.join(self.temp_dir.name, "copy.f3d")
+
+        res = self.tools.execute_tool("export_document_copy", {
+            "document_name": "SavedDesign",
+            "target_path": target_path,
+            "reason": "Archive reviewed design copy.",
+            "requires_user_approval": True,
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["exported"])
+        self.assertEqual(result["targetPath"], target_path)
+        self.assertGreater(result["sizeBytes"], 0)
+        self.assertEqual(len(export_manager.options), 1)
+        self.assertEqual(len(export_manager.executed), 1)
+        self.assertIn("did not save, upload, version", result["notes"][1])
+
+    def _complete_manufacturing_args(self):
+        return {
+            "setup_name": "Setup1",
+            "operation_name": "Adaptive1",
+            "operation_type": "adaptive",
+            "machine": {"name": "Shop Mill", "controller": "generic"},
+            "stock": {"x_mm": 100, "y_mm": 50, "z_mm": 12, "material": "6061"},
+            "wcs": {"origin": "stock_box_point", "axis": "model_z"},
+            "tool": {"name": "6mm flat end mill", "diameter_mm": 6, "flutes": 2},
+            "feeds": {"cut_mm_per_min": 600, "plunge_mm_per_min": 120},
+            "speeds": {"spindle_rpm": 12000},
+            "post_processor": {"name": "generic", "output_extension": "nc"},
+            "requires_user_approval": True,
+        }
+
+    def test_create_manufacturing_setup_blocks_failed_plan(self):
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeDocument = types.SimpleNamespace(products=types.SimpleNamespace(itemByProductType=lambda _kind: None))
+
+        res = self.tools.execute_tool("create_manufacturing_setup", {})
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["okToProceed"])
+        self.assertIn("setup_name is required", " ".join(res["preflight"]["blockingReasons"]))
+
+    def test_create_manufacturing_operation_reports_missing_setup(self):
+        cam = types.SimpleNamespace(objectType="adsk::cam::CAM", productType="CAMProductType", setups=[])
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, cam=cam)
+
+        res = self.tools.execute_tool("create_manufacturing_operation", self._complete_manufacturing_args())
+
+        self.assertIn("error", res)
+        self.assertIn("Setup1", res["error"])
+        self.assertIn("preflight", res)
+
+    def test_create_manufacturing_setup_uses_writable_setup_collection(self):
+        class _SetupCollection:
+            def __init__(self):
+                self.inputs = []
+
+            def add(self, payload):
+                self.inputs.append(payload)
+                return types.SimpleNamespace(name="", objectType="adsk::cam::Setup", operations=[])
+
+        setups = _SetupCollection()
+        cam = types.SimpleNamespace(objectType="adsk::cam::CAM", productType="CAMProductType", setups=setups)
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, cam=cam)
+
+        res = self.tools.execute_tool("create_manufacturing_setup", self._complete_manufacturing_args())
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["setupName"], "Setup1")
+        self.assertEqual(setups.inputs[0]["setup"]["machine"]["name"], "Shop Mill")
+        self.assertIn("stateComparison", res["result"])
+
+    def test_generate_toolpaths_and_post_process_require_explicit_approval_and_paths(self):
+        operation = types.SimpleNamespace(name="Adaptive1", objectType="Operation", generateToolpath=lambda: True)
+        setup = types.SimpleNamespace(name="Setup1", objectType="Setup", operations=[operation])
+        cam = types.SimpleNamespace(objectType="adsk::cam::CAM", productType="CAMProductType", setups=[setup])
+        root = types.SimpleNamespace(name="Root", bRepBodies=[], allOccurrences=[])
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=root, cam=cam)
+
+        args = self._complete_manufacturing_args()
+        res = self.tools.execute_tool("generate_toolpaths", args)
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["generated"])
+
+        bad_path = self.tools.execute_tool("post_process", {**args, "output_path": "relative.nc"})
+        self.assertIn("error", bad_path)
+        self.assertIn("absolute", bad_path["error"])
+
     def test_change_journal_tools_and_resource(self):
         self.mcp_server.append_change_journal({
             "kind": "tools/call",
@@ -927,6 +3240,8 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("doctor", result["result"]["requiredFirstTools"])
         self.assertIn("preflight_export", result["result"]["requiredFirstTools"])
         self.assertIn("export_asset", result["result"]["preferredTools"])
+        self.assertIn("export_flat_pattern", result["result"]["preferredTools"])
+        self.assertIn("plan_drawing_views", result["result"]["preferredTools"])
         self.assertEqual(result["result"]["rawScript"]["status"], "last_resort")
 
     def test_recommend_mcp_workflow_routes_parameterization_to_planner(self):
@@ -1326,6 +3641,773 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertTrue(res["result"]["preflight"]["okToExport"])
         self.assertTrue(res["result"]["preflight"]["compute"]["succeeded"])
 
+    def test_inspect_selection_sets_reports_named_body_contents(self):
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+        try:
+            root = types.SimpleNamespace(name="Root", allOccurrences=[])
+            body = types.SimpleNamespace(
+                name="KioskBody",
+                objectType="adsk::fusion::BRepBody",
+                entityToken="body-token",
+                parentComponent=root,
+                isVisible=True,
+                physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+            )
+            selection_set = types.SimpleNamespace(name="Selection Set2", entities=[body])
+            design = types.SimpleNamespace(rootComponent=root, selectionSets=[selection_set])
+            _fake_app.activeProduct = design
+
+            res = self.tools.execute_tool("inspect_selection_sets", {"names": ["Selection Set2"]})
+        finally:
+            fusion.BRepBody.cast = original_cast
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["count"], 1)
+        item = res["result"]["selectionSets"][0]
+        self.assertEqual(item["name"], "Selection Set2")
+        self.assertEqual(item["entityCount"], 1)
+        self.assertEqual(item["entities"][0]["bodyName"], "KioskBody")
+        self.assertEqual(item["entities"][0]["entityToken"], "body-token")
+
+    def test_export_asset_3mf_targets_selection_sets_and_restores_visibility(self):
+        utilities = importlib.import_module("tools.utilities")
+        import zipfile
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+
+        executed = []
+        export_path = os.path.join(self.temp_dir.name, "kiosk.3mf")
+
+        def execute(options):
+            executed.append(options)
+            with zipfile.ZipFile(export_path, "w") as archive:
+                archive.writestr(
+                    "3D/3dmodel.model",
+                    """<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <object id="1" type="model"><mesh><vertices/><triangles/></mesh></object>
+    <object id="2" type="model"><mesh><vertices/><triangles/></mesh></object>
+  </resources>
+  <build><item objectid="1"/><item objectid="2"/></build>
+</model>""",
+                )
+
+        class FakeExportManager:
+            def createC3MFExportOptions(self, bodies, path):
+                return ("3mf", [body.name for body in bodies], path)
+
+            def execute(self, options):
+                execute(options)
+
+        root = types.SimpleNamespace(name="Root", allOccurrences=[])
+        target = types.SimpleNamespace(
+            name="KioskBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="target-token",
+            parentComponent=root,
+            isVisible=False,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+        )
+        logo = types.SimpleNamespace(
+            name="LogoBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="logo-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=0.2, area=0.5),
+        )
+        other = types.SimpleNamespace(
+            name="OtherBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="other-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=0.2, area=0.5),
+        )
+        root.bRepBodies = [target, logo, other]
+        root.sketches = []
+        root.constructionPlanes = []
+        selection_set = types.SimpleNamespace(name="Selection Set2", entities=[logo])
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            selectionSets=[selection_set],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+            exportManager=FakeExportManager(),
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 3, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("export_asset", {
+                "format": "3mf",
+                "export_path": export_path,
+                "body_names": ["KioskBody"],
+                "body_entity_tokens": ["logo-token"],
+                "selection_set_names": ["Selection Set2"],
+                "expected_body_count": 2,
+            })
+        finally:
+            fusion.BRepBody.cast = original_cast
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["exported"])
+        self.assertEqual(executed, [("3mf", ["KioskBody", "LogoBody"], export_path)])
+        self.assertEqual(target.isVisible, False)
+        self.assertEqual(logo.isVisible, True)
+        self.assertEqual(other.isVisible, True)
+        self.assertTrue(res["result"]["visibilityRestored"])
+        self.assertEqual([body["name"] for body in res["result"]["targetBodies"]], ["KioskBody", "LogoBody"])
+        self.assertTrue(res["result"]["archiveValidation"]["isZip"])
+        self.assertTrue(res["result"]["archiveValidation"]["has3DModelPart"])
+        self.assertTrue(res["result"]["archiveValidation"]["valid"])
+        self.assertEqual(res["result"]["archiveValidation"]["objectCount"], 2)
+        self.assertEqual(res["result"]["archiveValidation"]["meshObjectCount"], 2)
+        self.assertEqual(res["result"]["archiveValidation"]["buildItemCount"], 2)
+        self.assertEqual(res["result"]["archiveValidation"]["separateObjectCandidateCount"], 2)
+        self.assertTrue(res["result"]["archiveValidation"]["slicerColorabilityLikely"])
+
+    def test_inspect_3mf_archive_reports_existing_file_structure(self):
+        import zipfile
+        export_path = os.path.join(self.temp_dir.name, "inspectable.3mf")
+        with zipfile.ZipFile(export_path, "w") as archive:
+            archive.writestr(
+                "3D/3dmodel.model",
+                """<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <metadata name="Application">FusionMCP Test</metadata>
+  <resources>
+    <object id="1" type="model"><mesh><vertices/><triangles/></mesh></object>
+    <object id="2" type="model"><mesh><vertices/><triangles/></mesh></object>
+  </resources>
+  <build><item objectid="1"/><item objectid="2"/></build>
+</model>""",
+            )
+
+        res = self.tools.execute_tool("inspect_3mf_archive", {
+            "export_path": export_path,
+            "expected_body_count": 2,
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["valid"])
+        self.assertTrue(result["slicerColorabilityLikely"])
+        self.assertEqual(result["printReadiness"]["status"], "warning")
+        self.assertTrue(result["printReadiness"]["readyForSlicerImport"])
+        self.assertTrue(result["printReadiness"]["readyForMulticolorAssignment"])
+        self.assertFalse(result["embeddedColorEvidence"])
+        self.assertFalse(result["validationScope"]["embeddedMaterialOrColorProperties"])
+        self.assertFalse(result["validationScope"]["slicerAssignmentVerified"])
+        self.assertTrue(any("embedded material/color" in warning for warning in result["warnings"]))
+        self.assertEqual(result["metadata"]["Application"], "FusionMCP Test")
+        self.assertEqual(result["objectIds"], ["1", "2"])
+        self.assertEqual(result["missingBuildObjectIds"], [])
+
+    def test_inspect_3mf_archive_reports_embedded_color_evidence(self):
+        import zipfile
+        export_path = os.path.join(self.temp_dir.name, "colored.3mf")
+        with zipfile.ZipFile(export_path, "w") as archive:
+            archive.writestr(
+                "3D/3dmodel.model",
+                """<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter"
+  xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+  xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
+  <resources>
+    <m:colorgroup id="10"><m:color color="#ff0000ff"/><m:color color="#0000ffff"/></m:colorgroup>
+    <object id="1" type="model"><mesh><vertices/><triangles><triangle v1="0" v2="0" v3="0" pid="10" p1="0"/></triangles></mesh></object>
+    <object id="2" type="model"><mesh><vertices/><triangles><triangle v1="0" v2="0" v3="0" pid="10" p1="1"/></triangles></mesh></object>
+  </resources>
+  <build><item objectid="1"/><item objectid="2"/></build>
+</model>""",
+            )
+
+        res = self.tools.execute_tool("inspect_3mf_archive", {
+            "export_path": export_path,
+            "expected_body_count": 2,
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["valid"])
+        self.assertTrue(result["embeddedColorEvidence"])
+        self.assertEqual(result["colorGroupCount"], 1)
+        self.assertEqual(result["colorPropertyCount"], 2)
+        self.assertGreater(result["propertyReferenceCount"], 0)
+        self.assertTrue(result["validationScope"]["embeddedMaterialOrColorProperties"])
+
+    def test_inspect_3mf_archive_rejects_relative_path(self):
+        res = self.tools.execute_tool("inspect_3mf_archive", {"export_path": "model.3mf"})
+
+        self.assertIn("error", res)
+        self.assertIn("absolute", res["error"])
+
+    def test_export_asset_3mf_prefers_object_collection_targets(self):
+        utilities = importlib.import_module("tools.utilities")
+        import zipfile
+        core = sys.modules["adsk.core"]
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        original_object_collection = core.ObjectCollection
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+
+        class MockObjectCollection(list):
+            @property
+            def count(self):
+                return len(self)
+            def add(self, item):
+                self.append(item)
+
+        core.ObjectCollection = types.SimpleNamespace(create=lambda: MockObjectCollection())
+        export_path = os.path.join(self.temp_dir.name, "collection.3mf")
+        method_calls = []
+
+        class FakeExportManager:
+            def createC3MFExportOptions(self, bodies, path):
+                method_calls.append(type(bodies).__name__)
+                if not isinstance(bodies, MockObjectCollection):
+                    raise TypeError("expected ObjectCollection")
+                return ("3mf", [body.name for body in bodies], path)
+
+            def execute(self, options):
+                with zipfile.ZipFile(export_path, "w") as archive:
+                    archive.writestr(
+                        "3D/3dmodel.model",
+                        """<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" type="model"/></resources><build><item objectid="1"/></build></model>""",
+                    )
+
+        root = types.SimpleNamespace(name="Root", allOccurrences=[])
+        body = types.SimpleNamespace(
+            name="KioskBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="target-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+        )
+        root.bRepBodies = [body]
+        root.sketches = []
+        root.constructionPlanes = []
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            selectionSets=[],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+            exportManager=FakeExportManager(),
+        )
+        _fake_app.activeProduct = design
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("export_asset", {
+                "format": "3mf",
+                "export_path": export_path,
+                "body_entity_tokens": ["target-token"],
+                "expected_body_count": 1,
+            })
+        finally:
+            fusion.BRepBody.cast = original_cast
+            core.ObjectCollection = original_object_collection
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(method_calls, ["MockObjectCollection"])
+        self.assertEqual(res["result"]["method"], "createC3MFExportOptions/2")
+
+    def test_export_asset_3mf_restores_visibility_on_execute_failure(self):
+        utilities = importlib.import_module("tools.utilities")
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+
+        class FakeExportManager:
+            def createC3MFExportOptions(self, bodies, path):
+                return ("3mf", [body.name for body in bodies], path)
+
+            def execute(self, options):
+                raise RuntimeError("export failed")
+
+        root = types.SimpleNamespace(name="Root", allOccurrences=[])
+        target = types.SimpleNamespace(
+            name="KioskBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="target-token",
+            parentComponent=root,
+            isVisible=False,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+        )
+        other = types.SimpleNamespace(
+            name="OtherBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="other-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=0.2, area=0.5),
+        )
+        root.bRepBodies = [target, other]
+        root.sketches = []
+        root.constructionPlanes = []
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            selectionSets=[],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+            exportManager=FakeExportManager(),
+        )
+        _fake_app.activeProduct = design
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 2, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("export_asset", {
+                "format": "3mf",
+                "export_path": os.path.join(self.temp_dir.name, "failure.3mf"),
+                "body_entity_tokens": ["target-token"],
+                "expected_body_count": 1,
+            })
+        finally:
+            fusion.BRepBody.cast = original_cast
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertEqual(res["error"], "Fusion 3MF export failed during export manager execution.")
+        self.assertIn("export failed", res["details"])
+        self.assertEqual(target.isVisible, False)
+        self.assertEqual(other.isVisible, True)
+        self.assertTrue(res["visibilityRestored"])
+        self.assertEqual([body["name"] for body in res["targetBodies"]], ["KioskBody"])
+
+    def test_export_asset_3mf_warns_when_archive_collapses_color_targets(self):
+        utilities = importlib.import_module("tools.utilities")
+        import zipfile
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+
+        export_path = os.path.join(self.temp_dir.name, "collapsed.3mf")
+
+        class FakeExportManager:
+            def createC3MFExportOptions(self, bodies, path):
+                return ("3mf", [body.name for body in bodies], path)
+
+            def execute(self, options):
+                with zipfile.ZipFile(export_path, "w") as archive:
+                    archive.writestr(
+                        "3D/3dmodel.model",
+                        """<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <object id="1" type="model"><mesh><vertices/><triangles/></mesh></object>
+  </resources>
+  <build><item objectid="1"/></build>
+</model>""",
+                    )
+
+        root = types.SimpleNamespace(name="Root", allOccurrences=[])
+        body_a = types.SimpleNamespace(
+            name="BodyA",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="body-a-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+        )
+        body_b = types.SimpleNamespace(
+            name="BodyB",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="body-b-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+        )
+        root.bRepBodies = [body_a, body_b]
+        root.sketches = []
+        root.constructionPlanes = []
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            selectionSets=[],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+            exportManager=FakeExportManager(),
+        )
+        _fake_app.activeProduct = design
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 2, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("export_asset", {
+                "format": "3mf",
+                "export_path": export_path,
+                "body_entity_tokens": ["body-a-token", "body-b-token"],
+                "expected_body_count": 2,
+            })
+        finally:
+            fusion.BRepBody.cast = original_cast
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        archive_validation = res["result"]["archiveValidation"]
+        self.assertTrue(archive_validation["valid"])
+        self.assertFalse(archive_validation["slicerColorabilityLikely"])
+        self.assertEqual(archive_validation["printReadiness"]["status"], "warning")
+        self.assertTrue(archive_validation["printReadiness"]["readyForSlicerImport"])
+        self.assertFalse(archive_validation["printReadiness"]["readyForMulticolorAssignment"])
+        self.assertEqual(archive_validation["separateObjectCandidateCount"], 1)
+        self.assertTrue(any("separate object candidate" in warning for warning in archive_validation["warnings"]))
+
+    def test_plan_multibody_3mf_export_resolves_tokens_and_selection_sets(self):
+        utilities = importlib.import_module("tools.utilities")
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+
+        root = types.SimpleNamespace(name="Root", allOccurrences=[])
+        body_a = types.SimpleNamespace(
+            name="KioskBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="body-a-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+        )
+        body_b = types.SimpleNamespace(
+            name="LogoBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="body-b-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=0.2, area=0.5),
+        )
+        root.bRepBodies = [body_a, body_b]
+        root.sketches = []
+        root.constructionPlanes = []
+        selection_set = types.SimpleNamespace(name="Selection Set2", entities=[body_b, types.SimpleNamespace(name="IgnoredSketch")])
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            selectionSets=[selection_set],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+            exportManager=types.SimpleNamespace(),
+        )
+        _fake_app.activeProduct = design
+
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 2, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("plan_multibody_3mf_export", {
+                "export_path": os.path.join(self.temp_dir.name, "planned.3mf"),
+                "body_entity_tokens": ["body-a-token"],
+                "selection_set_names": ["Selection Set2"],
+                "expected_body_count": 2,
+            })
+        finally:
+            fusion.BRepBody.cast = original_cast
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["okToExport"])
+        self.assertEqual(result["targetBodyCount"], 2)
+        self.assertEqual(result["targetResolution"]["requestedBodyEntityTokens"], ["body-a-token"])
+        self.assertEqual(result["targetResolution"]["selectionSets"][0]["nonBodyEntityCount"], 1)
+        self.assertTrue(any("non-body" in warning for warning in result["warnings"]))
+
+    def test_plan_multibody_3mf_export_blocks_expected_count_mismatch(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        root = types.SimpleNamespace(name="Root", allOccurrences=[], bRepBodies=[], sketches=[], constructionPlanes=[])
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            selectionSets=[],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+            exportManager=types.SimpleNamespace(),
+        )
+        _fake_app.activeProduct = design
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 0, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("plan_multibody_3mf_export", {
+                "export_path": os.path.join(self.temp_dir.name, "planned.3mf"),
+                "body_entity_tokens": ["missing-token"],
+                "expected_body_count": 1,
+            })
+        finally:
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertFalse(res["result"]["okToExport"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("missing-token", joined)
+        self.assertIn("Resolved 0 target bodies, expected 1", joined)
+
+    def test_plan_multibody_3mf_export_blocks_existing_path_without_overwrite(self):
+        utilities = importlib.import_module("tools.utilities")
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+
+        export_path = os.path.join(self.temp_dir.name, "existing.3mf")
+        with open(export_path, "w", encoding="utf-8") as handle:
+            handle.write("old")
+        root = types.SimpleNamespace(name="Root", allOccurrences=[])
+        body = types.SimpleNamespace(
+            name="KioskBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="body-token",
+            parentComponent=root,
+            isVisible=True,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+        )
+        root.bRepBodies = [body]
+        root.sketches = []
+        root.constructionPlanes = []
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            selectionSets=[],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+            exportManager=types.SimpleNamespace(),
+        )
+        _fake_app.activeProduct = design
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("plan_multibody_3mf_export", {
+                "export_path": export_path,
+                "body_entity_tokens": ["body-token"],
+                "expected_body_count": 1,
+            })
+        finally:
+            fusion.BRepBody.cast = original_cast
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertFalse(res["result"]["okToExport"])
+        self.assertIn("allow_overwrite=true", " ".join(res["result"]["blockingReasons"]))
+
+    def test_plan_multicolor_3mf_export_reports_color_assignments(self):
+        utilities = importlib.import_module("tools.utilities")
+        fusion = sys.modules["adsk.fusion"]
+        original_cast = fusion.BRepBody.cast
+        original_snapshot = utilities._design_state_snapshot
+        original_compare = utilities.compare_design_state
+        fusion.BRepBody.cast = lambda value: value if getattr(value, "objectType", "") == "adsk::fusion::BRepBody" else None
+
+        appearance = types.SimpleNamespace(name="Logo Red", objectType="Appearance", entityToken="red-token")
+        root = types.SimpleNamespace(name="Root", allOccurrences=[])
+        body = types.SimpleNamespace(
+            name="LogoBody",
+            objectType="adsk::fusion::BRepBody",
+            entityToken="logo-token",
+            parentComponent=root,
+            isVisible=True,
+            appearance=None,
+            material=None,
+            physicalMaterial=None,
+            physicalProperties=types.SimpleNamespace(volume=1.0, area=2.0),
+        )
+        root.bRepBodies = [body]
+        root.sketches = []
+        root.constructionPlanes = []
+        design = types.SimpleNamespace(
+            rootComponent=root,
+            appearances=[appearance],
+            selectionSets=[],
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            computeAll=lambda: None,
+            exportManager=types.SimpleNamespace(),
+        )
+        _fake_app.activeProduct = design
+        _fake_app.materialLibraries = []
+        utilities._design_state_snapshot = lambda include_selections=False: {
+            "document": {"active": {"name": "DocA", "isModified": False}},
+            "counts": {"bodies": 1, "timelineItems": 0, "unhealthyTimelineItems": 0},
+        }
+        utilities.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": False, "riskLevel": "none", "diff": {"countChanges": {}}}
+        }
+        try:
+            res = self.tools.execute_tool("plan_multicolor_3mf_export", {
+                "export_path": os.path.join(self.temp_dir.name, "colors.3mf"),
+                "color_assignments": [
+                    {"body_entity_token": "logo-token", "appearance_name": "Logo Red"}
+                ],
+                "expected_body_count": 1,
+            })
+        finally:
+            fusion.BRepBody.cast = original_cast
+            utilities._design_state_snapshot = original_snapshot
+            utilities.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToExport"])
+        assignment = res["result"]["colorAssignments"][0]
+        self.assertEqual(assignment["appearance"]["name"], "Logo Red")
+        self.assertEqual(assignment["applyAppearanceArguments"]["body_entity_tokens"], ["logo-token"])
+        self.assertEqual(res["result"]["exportPlan"]["targetBodyCount"], 1)
+
+    def test_export_flat_pattern_rejects_relative_path(self):
+        res = self.tools.execute_tool("export_flat_pattern", {"export_path": "panel.dxf"})
+        self.assertIn("error", res)
+        self.assertIn("absolute", res["error"])
+
+    def test_export_flat_pattern_blocks_failed_preflight(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_preflight = utilities.preflight_flat_pattern
+        utilities.preflight_flat_pattern = lambda: {
+            "result": {
+                "okToProceed": False,
+                "riskLevel": "high",
+                "blockingReasons": ["No flat pattern is available."],
+            }
+        }
+        try:
+            res = self.tools.execute_tool("export_flat_pattern", {
+                "export_path": os.path.join(self.temp_dir.name, "blocked.dxf"),
+            })
+        finally:
+            utilities.preflight_flat_pattern = original_preflight
+
+        self.assertIn("error", res)
+        self.assertIn("blocked by preflight", res["error"])
+        self.assertEqual(res["preflight"]["blockingReasons"], ["No flat pattern is available."])
+
+    def test_export_flat_pattern_override_requires_reason(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_preflight = utilities.preflight_flat_pattern
+        utilities.preflight_flat_pattern = lambda: {
+            "result": {
+                "okToProceed": False,
+                "riskLevel": "high",
+                "blockingReasons": ["Sheet-metal rule was not inspectable."],
+            }
+        }
+        try:
+            res = self.tools.execute_tool("export_flat_pattern", {
+                "export_path": os.path.join(self.temp_dir.name, "override.dxf"),
+                "allow_blocked_export": True,
+            })
+        finally:
+            utilities.preflight_flat_pattern = original_preflight
+
+        self.assertIn("error", res)
+        self.assertIn("override_reason is required", res["error"])
+
+    def test_export_flat_pattern_reports_unsupported_missing_export_api(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_preflight = utilities.preflight_flat_pattern
+        utilities.preflight_flat_pattern = lambda: {
+            "result": {"okToProceed": True, "riskLevel": "none", "blockingReasons": []}
+        }
+        _fake_app.activeProduct = types.SimpleNamespace(
+            flatPattern=types.SimpleNamespace(),
+            rootComponent=types.SimpleNamespace(name="Root"),
+        )
+        try:
+            res = self.tools.execute_tool("export_flat_pattern", {
+                "export_path": os.path.join(self.temp_dir.name, "unsupported.dxf"),
+            })
+        finally:
+            utilities.preflight_flat_pattern = original_preflight
+
+        self.assertIn("error", res)
+        self.assertTrue(res["unsupported"])
+        self.assertIn("supported export method", res["error"])
+
+    def test_export_flat_pattern_success_uses_flat_pattern_export_manager(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_preflight = utilities.preflight_flat_pattern
+        executed = []
+
+        class _FlatPatternExportManager:
+            def createDXFExportOptions(self, path):
+                return ("dxf", path)
+
+            def execute(self, options):
+                executed.append(options)
+                return True
+
+        utilities.preflight_flat_pattern = lambda: {
+            "result": {"okToProceed": True, "riskLevel": "none", "blockingReasons": []}
+        }
+        _fake_app.activeProduct = types.SimpleNamespace(
+            flatPattern=types.SimpleNamespace(exportManager=_FlatPatternExportManager()),
+            rootComponent=types.SimpleNamespace(name="Root"),
+        )
+        try:
+            export_path = os.path.join(self.temp_dir.name, "panel.dxf")
+            res = self.tools.execute_tool("export_flat_pattern", {
+                "format": "dxf",
+                "export_path": export_path,
+            })
+        finally:
+            utilities.preflight_flat_pattern = original_preflight
+
+        self.assertTrue(res["result"]["exported"])
+        self.assertEqual(res["result"]["format"], "dxf")
+        self.assertEqual(res["result"]["method"], "flatPattern.exportManager.createDXFExportOptions")
+        self.assertEqual(executed, [("dxf", export_path)])
+
     def test_create_2d_drawing_blocks_failed_preflight_before_export(self):
         utilities = importlib.import_module("tools.utilities")
         original_preflight = utilities.preflight_model_change
@@ -1350,6 +4432,243 @@ class ProtocolAndRegistryTests(unittest.TestCase):
         self.assertIn("error", res)
         self.assertIn("Drawing export blocked", res["error"])
         self.assertEqual(res["preflight"]["blockingReasons"], ["Fusion computeAll failed."])
+
+    def test_inspect_drawing_documents_reports_sheets_and_views(self):
+        original_drawing_module = sys.modules.get("adsk.drawing")
+        drawing_module = types.ModuleType("adsk.drawing")
+        view = types.SimpleNamespace(name="Base View", objectType="DrawingView", scale=1.0, orientation="front", viewStyle="visible")
+        sheet = types.SimpleNamespace(
+            name="Sheet 1",
+            objectType="DrawingSheet",
+            size="B",
+            orientation="landscape",
+            drawingViews=[view],
+            titleBlock=types.SimpleNamespace(name="Title Block", objectType="TitleBlock"),
+            partsLists=[],
+            tables=[],
+            dimensions=[types.SimpleNamespace()],
+        )
+        drawing_doc = types.SimpleNamespace(drawing=types.SimpleNamespace(objectType="Drawing", sheets=[sheet]))
+        drawing_module.DrawingDocument = types.SimpleNamespace(cast=lambda doc: drawing_doc if getattr(doc, "name", "") == "DrawingDoc" else None)
+        sys.modules["adsk.drawing"] = drawing_module
+        drawing_document = types.SimpleNamespace(
+            name="DrawingDoc",
+            documentType=1,
+            isModified=False,
+            dataFile=types.SimpleNamespace(name="DrawingData"),
+        )
+        design_document = types.SimpleNamespace(
+            name="DesignDoc",
+            documentType=0,
+            isModified=True,
+            dataFile=None,
+        )
+        _fake_app.activeDocument = drawing_document
+        _fake_app.documents = [drawing_document, design_document]
+        try:
+            res = self.tools.execute_tool("inspect_drawing_documents", {})
+        finally:
+            if original_drawing_module is None:
+                sys.modules.pop("adsk.drawing", None)
+            else:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertEqual(res["result"]["drawingDocumentCount"], 1)
+        drawing_report = res["result"]["documents"][0]
+        self.assertTrue(drawing_report["isDrawingDocument"])
+        self.assertEqual(drawing_report["sheets"][0]["views"][0]["name"], "Base View")
+        self.assertEqual(drawing_report["sheets"][0]["dimensionsCount"], 1)
+
+    def test_preflight_drawing_creation_blocks_unsaved_or_relative_path(self):
+        original_drawing_module = sys.modules.get("adsk.drawing")
+        sys.modules.pop("adsk.drawing", None)
+        _fake_app.activeDocument = types.SimpleNamespace(name="UnsavedDoc", isModified=True, dataFile=None)
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
+        try:
+            res = self.tools.execute_tool("preflight_drawing_creation", {"export_pdf_path": "relative.pdf"})
+        finally:
+            if original_drawing_module is not None:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertIn("result", res)
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("The active design must be saved", joined)
+        self.assertIn("export_pdf_path must be absolute", joined)
+        self.assertIn("DrawingManager is not available", joined)
+
+    def test_preflight_drawing_creation_passes_for_saved_document_and_absolute_path(self):
+        original_drawing_module = sys.modules.get("adsk.drawing")
+        drawing_module = types.ModuleType("adsk.drawing")
+        drawing_module.DrawingManager = types.SimpleNamespace(get=lambda: types.SimpleNamespace())
+        sys.modules["adsk.drawing"] = drawing_module
+        _fake_app.activeDocument = types.SimpleNamespace(
+            name="SavedDoc",
+            isModified=False,
+            dataFile=types.SimpleNamespace(name="SavedData"),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
+        export_path = os.path.join(self.temp_dir.name, "drawing.pdf")
+        try:
+            res = self.tools.execute_tool("preflight_drawing_creation", {"export_pdf_path": export_path})
+        finally:
+            if original_drawing_module is None:
+                sys.modules.pop("adsk.drawing", None)
+            else:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertTrue(res["result"]["drawingManagerAvailable"])
+        self.assertEqual(res["result"]["exportPdfPath"], export_path)
+
+    def test_plan_drawing_views_defaults_and_preflight(self):
+        original_drawing_module = sys.modules.get("adsk.drawing")
+        drawing_module = types.ModuleType("adsk.drawing")
+        drawing_module.DrawingManager = types.SimpleNamespace(get=lambda: types.SimpleNamespace())
+        sys.modules["adsk.drawing"] = drawing_module
+        _fake_app.activeDocument = types.SimpleNamespace(
+            name="SavedDoc",
+            isModified=False,
+            dataFile=types.SimpleNamespace(name="SavedData"),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
+        try:
+            res = self.tools.execute_tool("plan_drawing_views", {})
+        finally:
+            if original_drawing_module is None:
+                sys.modules.pop("adsk.drawing", None)
+            else:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["readOnly"])
+        self.assertTrue(res["result"]["okToProceed"])
+        self.assertEqual(res["result"]["sheet"]["standard"], "ASME")
+        self.assertEqual(res["result"]["sheet"]["sheetSize"], "A")
+        self.assertEqual(res["result"]["views"][0]["orientation"], "front")
+        self.assertEqual(res["result"]["views"][0]["scale"], 1.0)
+
+    def test_plan_drawing_views_validates_explicit_metadata(self):
+        original_drawing_module = sys.modules.get("adsk.drawing")
+        sys.modules.pop("adsk.drawing", None)
+        _fake_app.activeDocument = types.SimpleNamespace(name="UnsavedDoc", isModified=True, dataFile=None)
+        _fake_app.activeProduct = types.SimpleNamespace(rootComponent=types.SimpleNamespace(name="Root"))
+        try:
+            res = self.tools.execute_tool("plan_drawing_views", {
+                "standard": "DIN",
+                "sheet_size": "Z",
+                "sheet_orientation": "diagonal",
+                "units": "cm",
+                "export_pdf_path": "relative.pdf",
+                "views": [{"name": "Bad View", "orientation": "up", "style": "wire", "scale": 0}],
+            })
+        finally:
+            if original_drawing_module is not None:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertIn("result", res)
+        self.assertFalse(res["result"]["okToProceed"])
+        joined = " ".join(res["result"]["blockingReasons"])
+        self.assertIn("standard must be one of", joined)
+        self.assertIn("sheet_size must be one of", joined)
+        self.assertIn("orientation must be one of", joined)
+        self.assertIn("scale must be a positive number", joined)
+        self.assertIn("export_pdf_path must be absolute", joined)
+        self.assertIn("DrawingManager is not available", joined)
+
+    def test_add_drawing_dimension_requires_tokens_and_reason(self):
+        res = self.tools.execute_tool("add_drawing_dimension", {
+            "view_name": "Front",
+            "reason": "Add checked reference dimension.",
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("geometry_entity_tokens are required", res["error"])
+
+        res = self.tools.execute_tool("add_revision_table", {})
+        self.assertIn("error", res)
+        self.assertIn("reason is required", res["error"])
+
+    def test_add_drawing_callout_reports_unsupported_without_drawing_api(self):
+        original_drawing_module = sys.modules.get("adsk.drawing")
+        sys.modules.pop("adsk.drawing", None)
+        try:
+            res = self.tools.execute_tool("add_drawing_callout", {
+                "text": "CHECK FIT",
+                "reason": "Add review callout.",
+            })
+        finally:
+            if original_drawing_module is not None:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertIn("error", res)
+        self.assertTrue(res["unsupported"])
+        self.assertIn("Drawing API is not available", res["error"])
+
+    def test_add_drawing_callout_uses_writable_note_collection(self):
+        utilities = importlib.import_module("tools.utilities")
+        original_drawing_module = sys.modules.get("adsk.drawing")
+        old_snapshot = utilities._design_state_snapshot
+        old_compare = utilities.compare_design_state
+
+        class _NoteCollection:
+            def __init__(self):
+                self.payloads = []
+
+            def add(self, payload):
+                self.payloads.append(payload)
+                return types.SimpleNamespace(name="Callout 1", objectType="DrawingNote")
+
+        notes = _NoteCollection()
+        sheet = types.SimpleNamespace(name="Sheet 1", notes=notes)
+        drawing_doc = types.SimpleNamespace(drawing=types.SimpleNamespace(sheets=[sheet]))
+        drawing_module = types.ModuleType("adsk.drawing")
+        drawing_module.DrawingDocument = types.SimpleNamespace(cast=lambda doc: drawing_doc)
+        sys.modules["adsk.drawing"] = drawing_module
+        _fake_app.activeDocument = types.SimpleNamespace(name="DrawingDoc", dataFile=types.SimpleNamespace(name="DrawingData"))
+        snapshots = [{"snapshot": "before"}, {"snapshot": "after"}]
+        try:
+            utilities._design_state_snapshot = lambda include_selections=False: snapshots.pop(0)
+            utilities.compare_design_state = lambda before, after: {"result": {"changed": before != after}}
+
+            res = self.tools.execute_tool("add_drawing_callout", {
+                "text": "CHECK FIT",
+                "placement": {"x": 10, "y": 20},
+                "reason": "Add review callout.",
+            })
+        finally:
+            utilities._design_state_snapshot = old_snapshot
+            utilities.compare_design_state = old_compare
+            if original_drawing_module is None:
+                sys.modules.pop("adsk.drawing", None)
+            else:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertIn("result", res)
+        self.assertEqual(res["result"]["operation"], "add_drawing_callout")
+        self.assertEqual(res["result"]["createdName"], "Callout 1")
+        self.assertEqual(notes.payloads[0]["text"], "CHECK FIT")
+        self.assertTrue(res["result"]["stateComparison"]["changed"])
+
+    def test_add_drawing_view_blocks_failed_plan(self):
+        original_drawing_module = sys.modules.get("adsk.drawing")
+        sys.modules.pop("adsk.drawing", None)
+        _fake_app.activeDocument = types.SimpleNamespace(name="UnsavedDoc", isModified=True, dataFile=None)
+        try:
+            res = self.tools.execute_tool("add_drawing_view", {
+                "view": {"name": "Bad", "orientation": "up", "scale": 0},
+                "reason": "Add front view.",
+            })
+        finally:
+            if original_drawing_module is not None:
+                sys.modules["adsk.drawing"] = original_drawing_module
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["okToProceed"])
 
     def test_create_2d_drawing_unhealthy_override_requires_reason(self):
         utilities = importlib.import_module("tools.utilities")
@@ -1555,6 +4874,13 @@ def run(context):
         self.assertIn("task_manager_running", payload)
         self.assertIn("pending_tasks", payload)
         self.assertIn("discovery", payload)
+        self.assertIn("source_root", payload)
+        self.assertIn("source_fingerprint", payload)
+        self.assertEqual(payload["source_fingerprint"]["algorithm"], "sha256")
+        self.assertTrue(payload["source_fingerprint"]["fingerprint"])
+        fingerprint_paths = [item["path"] for item in payload["source_fingerprint"]["files"]]
+        self.assertIn("tools/features.py", fingerprint_paths)
+        self.assertIn("install_metadata", payload)
         self.assertIn("active_http_sessions", payload)
         self.assertNotIn("sse_url", payload)
         self.assertNotIn("token", json.dumps(payload))
@@ -1859,6 +5185,45 @@ def run(context):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_streamable_http_rejects_malformed_session_header(self):
+        server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            init_payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode("utf-8")
+            init_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/mcp",
+                data=init_payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
+            )
+            with urllib.request.urlopen(init_request, timeout=2) as response:
+                self.assertTrue(response.headers.get("Mcp-Session-Id"))
+
+            tools_payload = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}).encode("utf-8")
+            tools_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/mcp",
+                data=tools_payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Mcp-Session-Id": "System.String[]",
+                    "Authorization": f"Bearer {self.mcp_server.auth_token}",
+                },
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(tools_request, timeout=2)
+            self.assertEqual(ctx.exception.code, 400)
+            body = json.loads(ctx.exception.read().decode("utf-8"))
+            self.assertIn("PowerShell", body["error"]["message"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_streamable_http_followup_requires_auth(self):
         server = self.mcp_server.ThreadedHTTPServer(("127.0.0.1", 0), self.mcp_server.MCPServerHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -2110,6 +5475,12 @@ def run(context):
         self.assertIn("missing_tool", result["requiredTools"]["missingFromSchema"])
         self.assertIn("missing_tool", result["requiredTools"]["missingFromRegistry"])
         self.assertTrue(result["restartRecommended"])
+        self.assertIn("sourceFingerprint", result["runtime"])
+        self.assertEqual(result["runtime"]["sourceFingerprint"]["algorithm"], "sha256")
+        self.assertTrue(result["runtime"]["sourceFingerprint"]["fingerprint"])
+        fingerprint_paths = [item["path"] for item in result["runtime"]["sourceFingerprint"]["files"]]
+        self.assertIn("tools/features.py", fingerprint_paths)
+        self.assertIn("tools/utilities.py", fingerprint_paths)
         self.assertEqual(result["runtime"]["discovery"]["payload"]["token"], "<redacted>")
         self.assertEqual(result["runtime"]["discovery"]["payload"]["authorization_header"], "<redacted>")
         self.assertIn("token=<redacted>", result["runtime"]["discovery"]["payload"]["sse_url"])
@@ -2427,6 +5798,324 @@ def run(context):
         codes = {warning["code"] for warning in result["warnings"]}
         self.assertIn("mesh_tiny_triangle_edges", codes)
         self.assertIn("mesh_overhang_triangles", codes)
+
+    def test_inspect_mesh_bodies_reports_mesh_metadata(self):
+        mesh = types.SimpleNamespace(
+            nodeCoordinates=[
+                types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                types.SimpleNamespace(x=1.0, y=0.0, z=0.0),
+                types.SimpleNamespace(x=0.0, y=1.0, z=0.0),
+            ],
+            triangleNodeIndices=[0, 1, 2],
+        )
+        mesh_body = types.SimpleNamespace(
+            name="ScanMesh",
+            isVisible=True,
+            isLightBulbOn=True,
+            entityToken="mesh-token",
+            objectType="MeshBody",
+            boundingBox=types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0, y=0, z=0),
+                maxPoint=types.SimpleNamespace(x=2.0, y=3.0, z=4.0),
+            ),
+            triangleMesh=mesh,
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            meshBodies=[mesh_body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(meshToBREPFeatures=object()),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("inspect_mesh_bodies", {})
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["readOnly"])
+        self.assertEqual(result["meshBodyCount"], 1)
+        self.assertTrue(result["conversionCapabilities"]["meshToBrepAvailable"])
+        body = result["meshBodies"][0]
+        self.assertEqual(body["name"], "ScanMesh")
+        self.assertEqual(body["entityToken"], "mesh-token")
+        self.assertEqual(body["sizeMm"], [20.0, 30.0, 40.0])
+        self.assertEqual(body["meshAnalysis"]["triangleCount"], 1)
+
+    def test_plan_mesh_conversion_blocks_without_explicit_acknowledgement(self):
+        mesh_body = types.SimpleNamespace(
+            name="ScanMesh",
+            isVisible=True,
+            entityToken="mesh-token",
+            boundingBox=None,
+            triangleMesh=types.SimpleNamespace(triangleCount=12, nodeCount=8),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            meshBodies=[mesh_body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(meshToBREPFeatures=object()),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("plan_mesh_conversion", {"body_name": "ScanMesh"})
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["readOnly"])
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("reason" in blocker for blocker in result["blockers"]))
+        self.assertTrue(any("acknowledge_quality_loss" in blocker for blocker in result["blockers"]))
+        self.assertEqual(result["target"]["name"], "ScanMesh")
+
+    def test_plan_mesh_conversion_ready_when_runtime_and_inputs_are_explicit(self):
+        mesh_body = types.SimpleNamespace(
+            name="ScanMesh",
+            isVisible=True,
+            entityToken="mesh-token",
+            boundingBox=None,
+            triangleMesh=types.SimpleNamespace(triangleCount=12, nodeCount=8),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            meshBodies=[mesh_body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(meshToBREPFeatures=object()),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("plan_mesh_conversion", {
+            "body_entity_token": "mesh-token",
+            "conversion_intent": "convert_to_brep",
+            "operation": "new_body",
+            "acknowledge_quality_loss": True,
+            "reason": "Convert imported scan reference into editable BRep.",
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["blockers"], [])
+        self.assertEqual(result["normalizedRequest"]["conversionIntent"], "convert_to_brep")
+        self.assertEqual(result["target"]["entityToken"], "mesh-token")
+
+    def test_convert_mesh_to_solid_blocks_without_mesh_preflight_acknowledgement(self):
+        class FakeMeshToBrepFeatures:
+            def __init__(self):
+                self.add_called = False
+
+            def createInput(self, *_args):
+                return types.SimpleNamespace()
+
+            def add(self, *_args):
+                self.add_called = True
+                return types.SimpleNamespace(name="")
+
+        mesh_features = FakeMeshToBrepFeatures()
+        mesh_body = types.SimpleNamespace(
+            name="ScanMesh",
+            isVisible=True,
+            entityToken="mesh-token",
+            boundingBox=None,
+            triangleMesh=types.SimpleNamespace(triangleCount=12, nodeCount=8),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            meshBodies=[mesh_body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(meshToBREPFeatures=mesh_features),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("convert_mesh_to_solid", {"mesh_body_name": "ScanMesh"})
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["ready"])
+        self.assertFalse(mesh_features.add_called)
+
+    def test_convert_mesh_to_solid_uses_mesh_preflight_and_exact_token(self):
+        class FakeMeshToBrepFeatures:
+            def __init__(self):
+                self.created = []
+                self.added = []
+
+            def createInput(self, mesh, operation):
+                mesh_input = types.SimpleNamespace(mesh=mesh, operation=operation)
+                self.created.append(mesh_input)
+                return mesh_input
+
+            def add(self, mesh_input):
+                self.added.append(mesh_input)
+                return types.SimpleNamespace(name="")
+
+        mesh_features = FakeMeshToBrepFeatures()
+        mesh_body = types.SimpleNamespace(
+            name="ScanMesh",
+            isVisible=True,
+            entityToken="mesh-token",
+            boundingBox=None,
+            triangleMesh=types.SimpleNamespace(triangleCount=12, nodeCount=8),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            meshBodies=[mesh_body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(meshToBREPFeatures=mesh_features),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("convert_mesh_to_solid", {
+            "mesh_body_entity_token": "mesh-token",
+            "operation": "new_body",
+            "acknowledge_quality_loss": True,
+            "reason": "Convert imported scan reference into editable BRep.",
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["converted"])
+        self.assertEqual(result["meshBodyName"], "ScanMesh")
+        self.assertEqual(result["meshBodyEntityToken"], "mesh-token")
+        self.assertTrue(result["preflight"]["ready"])
+        self.assertEqual(len(mesh_features.created), 1)
+        self.assertEqual(mesh_features.created[0].mesh, mesh_body)
+        self.assertEqual(len(mesh_features.added), 1)
+        self.assertEqual(result["featureName"], "ScanMesh_Solid")
+
+    def test_repair_mesh_body_blocks_without_mesh_preflight_acknowledgement(self):
+        class FakeMeshRepairFeatures:
+            def __init__(self):
+                self.add_called = False
+
+            def createInput(self, *_args):
+                return types.SimpleNamespace()
+
+            def add(self, *_args):
+                self.add_called = True
+                return types.SimpleNamespace(name="")
+
+        repair_features = FakeMeshRepairFeatures()
+        mesh_body = types.SimpleNamespace(
+            name="ScanMesh",
+            isVisible=True,
+            entityToken="mesh-token",
+            boundingBox=None,
+            triangleMesh=types.SimpleNamespace(triangleCount=12, nodeCount=8),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            meshBodies=[mesh_body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(meshRepairFeatures=repair_features),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("repair_mesh_body", {"mesh_body_name": "ScanMesh"})
+
+        self.assertIn("error", res)
+        self.assertIn("preflight", res)
+        self.assertFalse(res["preflight"]["ready"])
+        self.assertFalse(repair_features.add_called)
+
+    def test_reduce_mesh_body_reports_unsupported_for_incompatible_runtime_collection(self):
+        mesh_body = types.SimpleNamespace(
+            name="ScanMesh",
+            isVisible=True,
+            entityToken="mesh-token",
+            boundingBox=None,
+            triangleMesh=types.SimpleNamespace(triangleCount=12, nodeCount=8),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            meshBodies=[mesh_body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(meshReduceFeatures=types.SimpleNamespace()),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("reduce_mesh_body", {
+            "mesh_body_entity_token": "mesh-token",
+            "reduction_target": "50 percent triangle count",
+            "acknowledge_quality_loss": True,
+            "reason": "Reduce imported scan mesh before downstream conversion.",
+        })
+
+        self.assertTrue(res["unsupported"])
+        self.assertIn("input builder", res["error"])
+        self.assertTrue(res["preflight"]["ready"])
+
+    def test_remesh_body_uses_mesh_preflight_and_runtime_collection(self):
+        class FakeRemeshFeatures:
+            def __init__(self):
+                self.created = []
+                self.added = []
+
+            def createInput(self, mesh):
+                mesh_input = types.SimpleNamespace(mesh=mesh)
+                self.created.append(mesh_input)
+                return mesh_input
+
+            def add(self, mesh_input):
+                self.added.append(mesh_input)
+                return types.SimpleNamespace(name="")
+
+        remesh_features = FakeRemeshFeatures()
+        mesh_body = types.SimpleNamespace(
+            name="ScanMesh",
+            isVisible=True,
+            entityToken="mesh-token",
+            boundingBox=None,
+            triangleMesh=types.SimpleNamespace(triangleCount=12, nodeCount=8),
+        )
+        root = types.SimpleNamespace(
+            name="Root",
+            meshBodies=[mesh_body],
+            allOccurrences=[],
+            features=types.SimpleNamespace(remeshFeatures=remesh_features),
+        )
+        _fake_app.activeProduct = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(defaultLengthUnits="mm"),
+        )
+
+        res = self.tools.execute_tool("remesh_body", {
+            "mesh_body_entity_token": "mesh-token",
+            "remesh_type": "uniform",
+            "acknowledge_quality_loss": True,
+            "reason": "Regularize imported scan triangle distribution.",
+        })
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["remeshed"])
+        self.assertEqual(result["meshBodyName"], "ScanMesh")
+        self.assertEqual(result["meshBodyEntityToken"], "mesh-token")
+        self.assertTrue(result["preflight"]["ready"])
+        self.assertEqual(len(remesh_features.created), 1)
+        self.assertEqual(remesh_features.created[0].mesh, mesh_body)
+        self.assertEqual(len(remesh_features.added), 1)
+        self.assertEqual(result["featureName"], "ScanMesh_Remesh")
 
     def test_capture_demo_sequence_writes_frames_and_restores_visibility(self):
         class FakeViewport:
@@ -2924,6 +6613,314 @@ def run(context):
         self.assertEqual(res["result"]["resultBodies"], ["BodyA"])
         self.assertEqual(created_inputs[0].distance, "5 mm")
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "low")
+
+    def test_extrude_existing_profile_reports_create_input_failure_with_recovery(self):
+        features_module = importlib.import_module("tools.features")
+
+        class MockCollection:
+            def __init__(self, items):
+                self._items = items
+                self.count = len(items)
+            def item(self, index):
+                return self._items[index]
+
+        class MockExtrudes:
+            def createInput(self, _profile, _operation):
+                raise RuntimeError("profile is unstable")
+
+        profile = types.SimpleNamespace(name="Profile0", areaProperties=lambda: types.SimpleNamespace())
+        component = types.SimpleNamespace(name="Root", features=types.SimpleNamespace(extrudeFeatures=MockExtrudes()))
+        sketch = types.SimpleNamespace(
+            name="SketchA",
+            parentComponent=component,
+            isVisible=True,
+            isComputeDeferred=False,
+            profiles=MockCollection([profile]),
+        )
+        root = types.SimpleNamespace(name="Root", sketches=[sketch], bRepBodies=[], allOccurrences=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("extrude_existing_profile", {
+            "sketch_name": "SketchA",
+            "distance": "5 mm",
+            "operation": "NewBody",
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("profile is unstable", res["error"])
+        self.assertEqual(res["diagnostics"]["stage"], "create_input")
+        self.assertEqual(res["diagnostics"]["profileCount"], 1)
+        self.assertTrue(any("copy_profile_loop" in action for action in res["diagnostics"]["recoveryActions"]))
+
+    def test_copy_profile_loop_projects_only_selected_outer_loop(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+
+        class MockCollection:
+            def __init__(self, items=None):
+                self._items = list(items or [])
+                self.count = len(self._items)
+            def item(self, index):
+                return self._items[index]
+            def __iter__(self):
+                return iter(self._items)
+
+        source_line = types.SimpleNamespace(
+            name="OuterLine",
+            objectType="adsk::fusion::SketchLine",
+            entityToken="outer-line-token",
+            isConstruction=False,
+        )
+        inner_line = types.SimpleNamespace(name="InnerLine", objectType="adsk::fusion::SketchLine", entityToken="inner-line-token")
+        outer_loop = types.SimpleNamespace(
+            isOuter=True,
+            profileCurves=MockCollection([types.SimpleNamespace(sketchEntity=source_line)]),
+        )
+        inner_loop = types.SimpleNamespace(
+            isOuter=False,
+            profileCurves=MockCollection([types.SimpleNamespace(sketchEntity=inner_line)]),
+        )
+        profile = types.SimpleNamespace(profileLoops=MockCollection([inner_loop, outer_loop]))
+        projected = []
+
+        class DestinationSketch:
+            name = "LoopCopy"
+            def project(self, entity):
+                copied = types.SimpleNamespace(
+                    name=f"Projected_{entity.name}",
+                    objectType=entity.objectType,
+                    entityToken=f"projected-{entity.entityToken}",
+                    isConstruction=False,
+                )
+                projected.append(entity.name)
+                return MockCollection([copied])
+
+        component = types.SimpleNamespace(name="Root")
+        source = types.SimpleNamespace(name="Sketch163", parentComponent=component, profiles=MockCollection([profile]))
+        destination = DestinationSketch()
+        root = types.SimpleNamespace(name="Root", sketches=[source, destination], bRepBodies=[], allOccurrences=[])
+        self.mock_design = types.SimpleNamespace(rootComponent=root)
+        _fake_app.activeProduct = self.mock_design
+        features_module._design_state_snapshot = lambda include_selections=False: {"counts": {"sketches": 2}}
+        features_module.compare_design_state = lambda before, after: {"result": {"hasChanges": True, "riskLevel": "low"}}
+        try:
+            res = self.tools.execute_tool("copy_profile_loop", {
+                "source_sketch_name": "Sketch163",
+                "profile_index": 0,
+                "outer_loop": True,
+                "destination_sketch_name": "LoopCopy",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(projected, ["OuterLine"])
+        self.assertEqual(res["result"]["loopIndex"], 1)
+        self.assertEqual(res["result"]["copiedCurveCount"], 1)
+        self.assertEqual(res["result"]["copiedCurves"][0]["entityToken"], "projected-outer-line-token")
+
+    def test_offset_profile_loop_offsets_only_loop_curves(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+
+        class MockCollection:
+            def __init__(self, items=None):
+                self._items = list(items or [])
+                self.count = len(self._items)
+            def item(self, index):
+                return self._items[index]
+            def add(self, item):
+                self._items.append(item)
+                self.count = len(self._items)
+            def __iter__(self):
+                return iter(self._items)
+
+        class MockObjectCollection(list):
+            @property
+            def count(self):
+                return len(self)
+            def add(self, item):
+                self.append(item)
+
+        source_line = types.SimpleNamespace(name="OuterLine", objectType="adsk::fusion::SketchLine", entityToken="outer-line-token")
+        ignored_line = types.SimpleNamespace(name="ReferenceLogoLine", objectType="adsk::fusion::SketchLine", entityToken="ignored-token")
+        profile_loop = types.SimpleNamespace(
+            isOuter=True,
+            profileCurves=MockCollection([types.SimpleNamespace(sketchEntity=source_line)]),
+        )
+        profile = types.SimpleNamespace(
+            profileLoops=MockCollection([profile_loop]),
+            areaProperties=lambda: types.SimpleNamespace(centroid=types.SimpleNamespace(x=0, y=0, z=0)),
+        )
+        offset_inputs = []
+
+        class MockSketch:
+            name = "Sketch163"
+            profiles = MockCollection([profile])
+            def offset(self, curves, direction_point, distance):
+                offset_inputs.append((list(curves), direction_point, distance))
+                return MockCollection([types.SimpleNamespace(name="OffsetOuterLine", objectType="adsk::fusion::SketchLine", entityToken="offset-token", isConstruction=False)])
+
+        root = types.SimpleNamespace(name="Root", sketches=[MockSketch()], bRepBodies=[], allOccurrences=[])
+        self.mock_design = types.SimpleNamespace(
+            rootComponent=root,
+            unitsManager=types.SimpleNamespace(evaluateExpression=lambda expression, _units: 0.02),
+        )
+        _fake_app.activeProduct = self.mock_design
+        core = sys.modules["adsk.core"]
+        original_object_collection = core.ObjectCollection
+        core.ObjectCollection = types.SimpleNamespace(create=lambda: MockObjectCollection())
+        features_module._design_state_snapshot = lambda include_selections=False: {"counts": {"sketches": 1}}
+        features_module.compare_design_state = lambda before, after: {"result": {"hasChanges": True, "riskLevel": "low"}}
+        try:
+            res = self.tools.execute_tool("offset_profile_loop", {
+                "sketch_name": "Sketch163",
+                "profile_index": 0,
+                "outer_loop": True,
+                "offset_distance": "0.2 mm",
+            })
+        finally:
+            core.ObjectCollection = original_object_collection
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertEqual(offset_inputs[0][0], [source_line])
+        self.assertNotIn(ignored_line, offset_inputs[0][0])
+        self.assertEqual(res["result"]["offsetCurveCount"], 1)
+        self.assertEqual(res["result"]["offsetCurves"][0]["entityToken"], "offset-token")
+
+    def test_create_insert_socket_creates_plate_cutter_and_socket_cut(self):
+        features_module = importlib.import_module("tools.features")
+        original_snapshot = features_module._design_state_snapshot
+        original_compare = features_module.compare_design_state
+
+        class MockCollection:
+            def __init__(self, items=None):
+                self._items = list(items or [])
+                self.count = len(self._items)
+            def item(self, index):
+                return self._items[index]
+            def add(self, item):
+                self._items.append(item)
+                self.count = len(self._items)
+            def __iter__(self):
+                return iter(self._items)
+
+        def bbox():
+            return types.SimpleNamespace(
+                minPoint=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                maxPoint=types.SimpleNamespace(x=4.0, y=3.0, z=0.2),
+            )
+
+        class MockUnits:
+            defaultLengthUnits = "mm"
+            def evaluateExpression(self, expression, _units):
+                text = str(expression).strip().lower().replace("mm", "").strip()
+                return float(text or 0) / 10.0
+
+        source_line = types.SimpleNamespace(name="OuterLine", objectType="adsk::fusion::SketchLine", entityToken="outer-token")
+        source_loop = types.SimpleNamespace(
+            isOuter=True,
+            profileCurves=MockCollection([types.SimpleNamespace(sketchEntity=source_line)]),
+        )
+        source_profile = types.SimpleNamespace(
+            profileLoops=MockCollection([source_loop]),
+            areaProperties=lambda: types.SimpleNamespace(centroid=types.SimpleNamespace(x=0, y=0, z=0)),
+        )
+        work_profile = types.SimpleNamespace(
+            profileLoops=MockCollection([source_loop]),
+            areaProperties=lambda: types.SimpleNamespace(centroid=types.SimpleNamespace(x=0, y=0, z=0)),
+        )
+        target = types.SimpleNamespace(name="Cabinet", entityToken="target-token", isVisible=True, boundingBox=bbox())
+        root_bodies = [target]
+        created_features = []
+        combine_inputs = []
+
+        class MockExtrudeInput:
+            def __init__(self, profile, operation):
+                self.profile = profile
+                self.operation = operation
+                self.distance = None
+            def setDistanceExtent(self, _symmetric, distance):
+                self.distance = distance
+
+        class MockExtrudes:
+            def createInput(self, profile, operation):
+                return MockExtrudeInput(profile, operation)
+            def add(self, input_obj):
+                body = types.SimpleNamespace(name="", entityToken=f"body-token-{len(root_bodies)}", isVisible=True, boundingBox=bbox())
+                root_bodies.append(body)
+                feature = types.SimpleNamespace(name="", bodies=MockCollection([body]), input=input_obj)
+                created_features.append(feature)
+                return feature
+
+        class MockCombineInput:
+            def __init__(self, target_body, tools):
+                self.targetBody = target_body
+                self.toolBodies = tools
+                self.operation = None
+                self.isKeepToolBodies = None
+
+        class MockCombines:
+            def createInput(self, target_body, tools):
+                combine_input = MockCombineInput(target_body, tools)
+                combine_inputs.append(combine_input)
+                return combine_input
+            def add(self, input_obj):
+                return types.SimpleNamespace(name="", input=input_obj)
+
+        component = types.SimpleNamespace(
+            name="Root",
+            features=types.SimpleNamespace(extrudeFeatures=MockExtrudes(), combineFeatures=MockCombines()),
+        )
+        source = types.SimpleNamespace(name="Sketch163", parentComponent=component, profiles=MockCollection([source_profile]))
+
+        class WorkSketch:
+            name = "InsertWork"
+            profiles = MockCollection([work_profile])
+            def project(self, entity):
+                return MockCollection([types.SimpleNamespace(name=f"Projected_{entity.name}", entityToken="projected-token")])
+
+        work = WorkSketch()
+        root = types.SimpleNamespace(name="Root", sketches=[source, work], bRepBodies=root_bodies, allOccurrences=[])
+        component.sketches = MockCollection([source, work])
+        self.mock_design = types.SimpleNamespace(rootComponent=root, unitsManager=MockUnits())
+        _fake_app.activeProduct = self.mock_design
+        features_module._design_state_snapshot = lambda include_selections=False: {"counts": {"bodies": len(root_bodies)}}
+        features_module.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "medium", "before": before, "after": after}
+        }
+        try:
+            res = self.tools.execute_tool("create_insert_socket", {
+                "source_sketch_name": "Sketch163",
+                "target_body_name": "Cabinet",
+                "insert_thickness": "2 mm",
+                "work_sketch_name": "InsertWork",
+                "plate_body_name": "LogoPlate",
+                "cutter_body_name": "LogoSocketCutter",
+                "socket_feature_name": "LogoSocketCut",
+                "reason": "Create removable logo plate and matching cabinet pocket.",
+            })
+        finally:
+            features_module._design_state_snapshot = original_snapshot
+            features_module.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        result = res["result"]
+        self.assertTrue(result["created"])
+        self.assertEqual(result["plateBodyName"], "LogoPlate")
+        self.assertEqual(result["cutterBodyName"], "LogoSocketCutter")
+        self.assertEqual(result["socketFeatureName"], "LogoSocketCut")
+        self.assertEqual(len(created_features), 2)
+        self.assertEqual(combine_inputs[0].targetBody, target)
+        self.assertFalse(combine_inputs[0].isKeepToolBodies)
+        self.assertTrue(result["alignmentVerification"]["okToExport"])
+        self.assertEqual(result["diagnostics"]["cutterCleanup"], "combine_cut_consumed_tool_body")
 
     def test_revolve_feature_creates_named_body_and_state_diff(self):
         features_module = importlib.import_module("tools.features")
@@ -4609,6 +8606,78 @@ def run(context):
         self.assertEqual(opened[0], data_file)
         self.assertEqual(opened[1], "activated")
 
+    def test_create_design_document_requires_approval_and_creates_unsaved_doc(self):
+        core = sys.modules["adsk.core"]
+        original_document_types = core.DocumentTypes
+        created = []
+
+        def add_doc(document_type):
+            doc = types.SimpleNamespace(
+                name="Untitled",
+                isModified=False,
+                activate=lambda: created.append("activated"),
+            )
+            created.append(document_type)
+            _fake_app.activeDocument = doc
+            return doc
+
+        try:
+            core.DocumentTypes = types.SimpleNamespace(FusionDesignDocumentType="fusion-design")
+            _fake_app.activeDocument = None
+            _fake_app.documents = types.SimpleNamespace(add=add_doc)
+
+            blocked = self.tools.execute_tool("create_design_document", {
+                "document_name": "FixtureDoc",
+                "reason": "Missing explicit approval.",
+            })
+            self.assertIn("error", blocked)
+            self.assertEqual(created, [])
+
+            res = self.tools.execute_tool("create_design_document", {
+                "document_name": "FixtureDoc",
+                "requires_user_approval": True,
+                "reason": "Create controlled fixture document.",
+            })
+        finally:
+            core.DocumentTypes = original_document_types
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["created"])
+        self.assertEqual(res["result"]["documentName"], "FixtureDoc")
+        self.assertEqual(created, ["fusion-design", "activated"])
+
+    def test_close_active_document_requires_approval_and_closes_active_doc(self):
+        closed = []
+        doc = types.SimpleNamespace(
+            name="FixtureDoc",
+            dataFile=None,
+            isModified=True,
+            close=lambda save: closed.append(save) or True,
+        )
+        _fake_app.activeDocument = doc
+        _fake_app.documents = [doc]
+
+        blocked = self.tools.execute_tool("close_active_document", {
+            "document_name": "FixtureDoc",
+            "save_changes": False,
+            "reason": "Missing explicit approval.",
+        })
+        self.assertIn("error", blocked)
+        self.assertEqual(closed, [])
+
+        res = self.tools.execute_tool("close_active_document", {
+            "document_name": "FixtureDoc",
+            "save_changes": False,
+            "requires_user_approval": True,
+            "reason": "Close controlled fixture document.",
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["closed"])
+        self.assertEqual(res["result"]["documentName"], "FixtureDoc")
+        self.assertFalse(res["result"]["saveChanges"])
+        self.assertEqual(closed, [False])
+
     def test_delete_timeline_feature_requires_reason(self):
         deleted = []
         mock_item = types.SimpleNamespace(name="FeatureA", deleteMe=lambda: deleted.append(True))
@@ -4707,6 +8776,91 @@ def run(context):
         self.assertTrue(res["result"]["allowedDownstreamRisk"])
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "medium")
 
+    def test_delete_named_experiment_dry_run_reports_matches_without_deleting(self):
+        deleted = []
+        mock_item = types.SimpleNamespace(name="Exp_Feature", deleteMe=lambda: deleted.append("timeline"))
+        body = types.SimpleNamespace(name="Exp_Body", entityToken="body-token", deleteMe=lambda: deleted.append("body"))
+        sketch = types.SimpleNamespace(name="KeepSketch", entityToken="sketch-token", deleteMe=lambda: deleted.append("sketch"))
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[body],
+            sketches=[sketch],
+            allOccurrences=[],
+        )
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+            rootComponent=root,
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("delete_named_experiment", {
+            "prefixes": ["Exp_"],
+            "reason": "Preview cleanup of failed experiment artifacts.",
+        })
+
+        self.assertIn("result", res)
+        self.assertTrue(res["result"]["dryRun"])
+        self.assertFalse(res["result"]["deleted"])
+        self.assertEqual(res["result"]["matchCount"], 2)
+        self.assertEqual(deleted, [])
+        self.assertEqual({item["kind"] for item in res["result"]["matches"]}, {"timeline", "body"})
+
+    def test_delete_named_experiment_confirmed_deletes_named_artifacts(self):
+        parametric = importlib.import_module("tools.parametric")
+        original_snapshot = parametric._design_state_snapshot
+        original_compare = parametric.compare_design_state
+        deleted = []
+        mock_item = types.SimpleNamespace(name="Exp_Feature", deleteMe=lambda: deleted.append("timeline"))
+        body = types.SimpleNamespace(name="Exp_Body", entityToken="body-token", deleteMe=lambda: deleted.append("body"))
+        sketch = types.SimpleNamespace(name="Exp_Sketch", entityToken="sketch-token", deleteMe=lambda: deleted.append("sketch"))
+        root = types.SimpleNamespace(
+            name="Root",
+            bRepBodies=[body],
+            sketches=[sketch],
+            allOccurrences=[],
+        )
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: mock_item),
+            rootComponent=root,
+        )
+        _fake_app.activeProduct = self.mock_design
+        parametric._design_state_snapshot = lambda include_selections=False: {"counts": {"deleted": len(deleted)}}
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "high", "before": before, "after": after}
+        }
+        try:
+            res = self.tools.execute_tool("delete_named_experiment", {
+                "names": ["Exp_Feature"],
+                "prefixes": ["Exp_"],
+                "reason": "Remove approved failed insert experiment.",
+                "confirm_delete": True,
+            })
+        finally:
+            parametric._design_state_snapshot = original_snapshot
+            parametric.compare_design_state = original_compare
+
+        self.assertIn("result", res)
+        self.assertFalse(res["result"]["dryRun"])
+        self.assertEqual(deleted, ["timeline", "body", "sketch"])
+        self.assertEqual(res["result"]["deletedCount"], 3)
+        self.assertEqual(res["result"]["errorCount"], 0)
+        self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "high")
+
+    def test_delete_named_experiment_rejects_short_prefix_without_override(self):
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=0, item=lambda idx: None),
+            rootComponent=types.SimpleNamespace(name="Root", bRepBodies=[], sketches=[], allOccurrences=[]),
+        )
+        _fake_app.activeProduct = self.mock_design
+
+        res = self.tools.execute_tool("delete_named_experiment", {
+            "prefixes": ["X"],
+            "reason": "Try unsafe broad cleanup.",
+        })
+
+        self.assertIn("error", res)
+        self.assertIn("short cleanup prefixes", res["error"])
+
     def test_suppress_timeline_feature_blocks_downstream_consumers(self):
         parametric = importlib.import_module("tools.parametric")
         original_dependencies = parametric.get_feature_dependencies
@@ -4780,6 +8934,194 @@ def run(context):
         self.assertIn("result", res)
         self.assertTrue(mock_item.isSuppressed)
         self.assertEqual(res["result"]["stateComparison"]["riskLevel"], "medium")
+
+    def _install_feature_edit_fixture(self, object_type, feature_name="FeatureA", parameters=None):
+        parameters = parameters or [types.SimpleNamespace(name="d1", expression="1 mm", value=0.1, unit="cm")]
+        feature = types.SimpleNamespace(
+            name=feature_name,
+            objectType=object_type,
+            modelParameters=parameters,
+        )
+        item = types.SimpleNamespace(name=feature_name, index=0, healthState=0, entity=feature)
+        self.mock_design = types.SimpleNamespace(
+            timeline=types.SimpleNamespace(count=1, item=lambda idx: item),
+            rootComponent=types.SimpleNamespace(sketches=[], allOccurrences=[]),
+        )
+        _fake_app.activeProduct = self.mock_design
+        return feature, item, parameters
+
+    def _patch_feature_edit_safety(self, parametric, downstream=None, impact=None, state=None):
+        originals = (
+            parametric.get_feature_dependencies,
+            parametric.assess_change_impact,
+            parametric._design_state_snapshot,
+            parametric.compare_design_state,
+            parametric.inspect_feature,
+        )
+        parametric.get_feature_dependencies = lambda feature_name: {
+            "result": {
+                "featureName": feature_name,
+                "likelyDownstreamConsumers": downstream or [],
+            }
+        }
+        parametric.assess_change_impact = lambda target_features, change_type="edit": {
+            "result": impact or {
+                "okToProceed": True,
+                "riskLevel": "low",
+                "targetFeatures": [target_features],
+                "changeType": change_type,
+            }
+        }
+        snapshots = list(state or [{"state": "before"}, {"state": "after"}])
+        parametric._design_state_snapshot = lambda include_selections=False: snapshots.pop(0) if snapshots else {"state": "after"}
+        parametric.compare_design_state = lambda before, after: {
+            "result": {"hasChanges": True, "riskLevel": "low", "before": before, "after": after}
+        }
+        parametric.inspect_feature = lambda feature_name: {
+            "result": {"featureName": feature_name, "parameters": []}
+        }
+        return originals
+
+    def _restore_feature_edit_safety(self, parametric, originals):
+        (
+            parametric.get_feature_dependencies,
+            parametric.assess_change_impact,
+            parametric._design_state_snapshot,
+            parametric.compare_design_state,
+            parametric.inspect_feature,
+        ) = originals
+
+    def test_edit_extrude_feature_updates_distance_and_operation(self):
+        parametric = importlib.import_module("tools.parametric")
+        param = types.SimpleNamespace(name="d1", expression="10 mm", value=1.0, unit="cm")
+        feature, _item, _params = self._install_feature_edit_fixture(
+            "adsk::fusion::ExtrudeFeature",
+            "ExtrudeA",
+            [param],
+        )
+        feature.operation = sys.modules["adsk.fusion"].FeatureOperations.NewBodyFeatureOperation
+        originals = self._patch_feature_edit_safety(parametric)
+        try:
+            res = self.tools.execute_tool("edit_extrude_feature", {
+                "feature_name": "ExtrudeA",
+                "distance": "15 mm",
+                "operation": "cut",
+            })
+        finally:
+            self._restore_feature_edit_safety(parametric, originals)
+
+        self.assertIn("result", res)
+        self.assertEqual(param.expression, "15 mm")
+        self.assertEqual(feature.operation, sys.modules["adsk.fusion"].FeatureOperations.CutFeatureOperation)
+        self.assertEqual(res["result"]["before"]["expression"], "10 mm")
+        self.assertEqual(res["result"]["after"]["expression"], "15 mm")
+        self.assertTrue(res["result"]["stateComparison"]["hasChanges"])
+
+    def test_feature_edit_tools_update_supported_feature_parameters(self):
+        cases = [
+            ("edit_fillet_radius", "adsk::fusion::FilletFeature", {"radius": "2 mm"}, "2 mm"),
+            ("edit_chamfer_distance", "adsk::fusion::ChamferFeature", {"distance": "1 mm"}, "1 mm"),
+            ("edit_shell_thickness", "adsk::fusion::ShellFeature", {"thickness": "1.2 mm"}, "1.2 mm"),
+            ("edit_pattern_parameter", "adsk::fusion::RectangularPatternFeature", {"parameter_name": "d1", "expression": "4"}, "4"),
+            ("edit_hole_parameter", "adsk::fusion::HoleFeature", {"parameter_name": "d1", "expression": "3 mm"}, "3 mm"),
+        ]
+        for tool_name, object_type, args, expected in cases:
+            with self.subTest(tool=tool_name):
+                parametric = importlib.import_module("tools.parametric")
+                param = types.SimpleNamespace(name="d1", expression="1 mm", value=0.1, unit="cm")
+                self._install_feature_edit_fixture(object_type, "FeatureA", [param])
+                originals = self._patch_feature_edit_safety(parametric)
+                try:
+                    res = self.tools.execute_tool(tool_name, {"feature_name": "FeatureA", **args})
+                finally:
+                    self._restore_feature_edit_safety(parametric, originals)
+
+                self.assertIn("result", res)
+                self.assertEqual(param.expression, expected)
+                self.assertEqual(res["result"]["after"]["expression"], expected)
+
+    def test_feature_edit_rejects_unsupported_feature_kind(self):
+        parametric = importlib.import_module("tools.parametric")
+        self._install_feature_edit_fixture("adsk::fusion::BoxFeature", "BoxA")
+        originals = self._patch_feature_edit_safety(parametric)
+        try:
+            res = self.tools.execute_tool("edit_fillet_radius", {
+                "feature_name": "BoxA",
+                "radius": "2 mm",
+            })
+        finally:
+            self._restore_feature_edit_safety(parametric, originals)
+
+        self.assertIn("error", res)
+        self.assertIn("supports only", res["error"])
+        self.assertIn("toolGap", res)
+
+    def test_feature_edit_blocks_downstream_risk_by_default(self):
+        parametric = importlib.import_module("tools.parametric")
+        param = types.SimpleNamespace(name="d1", expression="1 mm", value=0.1, unit="cm")
+        self._install_feature_edit_fixture("adsk::fusion::FilletFeature", "FilletA", [param])
+        originals = self._patch_feature_edit_safety(
+            parametric,
+            downstream=[{"timelineName": "CutB"}],
+            impact={"okToProceed": False, "riskLevel": "high", "blockingReasons": ["downstream consumers"]},
+        )
+        try:
+            res = self.tools.execute_tool("edit_fillet_radius", {
+                "feature_name": "FilletA",
+                "radius": "2 mm",
+            })
+        finally:
+            self._restore_feature_edit_safety(parametric, originals)
+
+        self.assertIn("error", res)
+        self.assertEqual(param.expression, "1 mm")
+        self.assertEqual(res["impactReport"]["riskLevel"], "high")
+
+    def test_feature_edit_requires_reason_for_downstream_override(self):
+        parametric = importlib.import_module("tools.parametric")
+        param = types.SimpleNamespace(name="d1", expression="1 mm", value=0.1, unit="cm")
+        self._install_feature_edit_fixture("adsk::fusion::FilletFeature", "FilletA", [param])
+        originals = self._patch_feature_edit_safety(
+            parametric,
+            downstream=[{"timelineName": "CutB"}],
+            impact={"okToProceed": False, "riskLevel": "high", "blockingReasons": ["downstream consumers"]},
+        )
+        try:
+            res = self.tools.execute_tool("edit_fillet_radius", {
+                "feature_name": "FilletA",
+                "radius": "2 mm",
+                "allow_downstream_risk": True,
+            })
+        finally:
+            self._restore_feature_edit_safety(parametric, originals)
+
+        self.assertIn("error", res)
+        self.assertIn("reason is required", res["error"])
+        self.assertEqual(param.expression, "1 mm")
+
+    def test_feature_edit_downstream_override_returns_state_comparison(self):
+        parametric = importlib.import_module("tools.parametric")
+        param = types.SimpleNamespace(name="d1", expression="1 mm", value=0.1, unit="cm")
+        self._install_feature_edit_fixture("adsk::fusion::FilletFeature", "FilletA", [param])
+        originals = self._patch_feature_edit_safety(
+            parametric,
+            downstream=[{"timelineName": "CutB"}],
+            impact={"okToProceed": False, "riskLevel": "high", "blockingReasons": ["downstream consumers"]},
+        )
+        try:
+            res = self.tools.execute_tool("edit_fillet_radius", {
+                "feature_name": "FilletA",
+                "radius": "2 mm",
+                "allow_downstream_risk": True,
+                "reason": "User approved adjusting the parent fillet.",
+            })
+        finally:
+            self._restore_feature_edit_safety(parametric, originals)
+
+        self.assertIn("result", res)
+        self.assertEqual(param.expression, "2 mm")
+        self.assertTrue(res["result"]["allowedDownstreamRisk"])
+        self.assertTrue(res["result"]["stateComparison"]["hasChanges"])
 
     def test_edit_sketch_dimension(self):
         mock_param = types.SimpleNamespace(name="d1", expression="10 cm", value=10.0)

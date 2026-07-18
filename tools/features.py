@@ -54,6 +54,112 @@ def _profile_by_index(sketch, profile_index):
     return profiles.item(index)
 
 
+def _profile_loop_by_index(profile, loop_index=None, outer_loop=False):
+    loops = _safe_value(lambda: profile.profileLoops) or _safe_value(lambda: profile.profileLoops)
+    loop_items = _collection_items(loops)
+    if not loop_items:
+        raise ValueError("Selected profile does not expose profileLoops in this Fusion runtime.")
+    if outer_loop:
+        for loop in loop_items:
+            if _safe_value(lambda loop=loop: loop.isOuter):
+                return loop, loop_items.index(loop)
+        return loop_items[0], 0
+    index = int(loop_index or 0)
+    if index < 0 or index >= len(loop_items):
+        raise ValueError(f"loop_index {index} is out of range for profile with {len(loop_items)} loop(s).")
+    return loop_items[index], index
+
+
+def _loop_profile_curves(profile_loop):
+    curves = (
+        _safe_value(lambda: profile_loop.profileCurves)
+        or _safe_value(lambda: profile_loop.profileCurves)
+        or _safe_value(lambda: profile_loop.curves)
+    )
+    items = _collection_items(curves)
+    if not items:
+        raise ValueError("Selected profile loop does not expose profile curves.")
+    return items
+
+
+def _profile_curve_entity(profile_curve):
+    return (
+        _safe_value(lambda: profile_curve.sketchEntity)
+        or _safe_value(lambda: profile_curve.curve)
+        or _safe_value(lambda: profile_curve.geometry)
+        or profile_curve
+    )
+
+
+def _object_collection(entities):
+    collection = adsk.core.ObjectCollection.create()
+    for entity in entities:
+        add = _safe_value(lambda: collection.add)
+        if callable(add):
+            add(entity)
+        elif hasattr(collection, "append"):
+            collection.append(entity)
+        else:
+            raise ValueError("Fusion ObjectCollection did not expose add/append.")
+    return collection
+
+
+def _curve_summary(entity, index):
+    return {
+        "index": index,
+        "name": _safe_value(lambda: entity.name),
+        "objectType": _safe_value(lambda: entity.objectType),
+        "entityToken": _safe_value(lambda: entity.entityToken),
+        "isConstruction": _safe_value(lambda: entity.isConstruction),
+    }
+
+
+def _ensure_destination_sketch(source_sketch, destination_sketch_name=None, destination_plane=None):
+    if destination_sketch_name:
+        existing = _find_sketch_by_name(destination_sketch_name)
+        if existing:
+            return existing, False
+    component = _safe_value(lambda: source_sketch.parentComponent) or get_active_design().rootComponent
+    sketches = _safe_value(lambda: component.sketches)
+    if not sketches:
+        raise ValueError("Source sketch component does not expose a sketches collection.")
+    plane = None
+    if destination_plane:
+        key = str(destination_plane).lower()
+        if key in ("xy", "xyconstructionplane"):
+            plane = _safe_value(lambda: component.xYConstructionPlane)
+        elif key in ("xz", "xzconstructionplane"):
+            plane = _safe_value(lambda: component.xZConstructionPlane)
+        elif key in ("yz", "yzconstructionplane"):
+            plane = _safe_value(lambda: component.yZConstructionPlane)
+        else:
+            for candidate in _collection_items(_safe_value(lambda: component.constructionPlanes)):
+                if _safe_value(lambda candidate=candidate: candidate.name) == destination_plane:
+                    plane = candidate
+                    break
+    plane = plane or _safe_value(lambda: source_sketch.referencePlane) or _safe_value(lambda: source_sketch.parentConstructionPlane) or _safe_value(lambda: component.xYConstructionPlane)
+    if not plane:
+        raise ValueError("Could not resolve a destination sketch plane.")
+    sketch = sketches.add(plane)
+    sketch.name = destination_sketch_name or f"{_safe_value(lambda: source_sketch.name) or 'Profile'}_LoopCopy"
+    return sketch, True
+
+
+def _require_reason(reason, operation):
+    if not isinstance(reason, str) or not reason.strip():
+        return {"error": f"reason is required before {operation}. State why this model change is intentional."}
+    return None
+
+
+def _nonzero_length_expression(design, expression):
+    if expression is None:
+        return False
+    try:
+        return abs(float(design.unitsManager.evaluateExpression(str(expression), "cm"))) > 1e-9
+    except Exception:
+        return bool(str(expression).strip() not in {"0", "0mm", "0 mm", "0.0", "0.0 mm"})
+
+
 def _profiles_from_sections(sections):
     if not isinstance(sections, list) or len(sections) < 2:
         raise ValueError("sections must contain at least two items with sketch_name and optional profile_index.")
@@ -673,6 +779,433 @@ def extrude_feature(sketch_name, distance, operation, name=None, profile_index=0
         err = traceback.format_exc()
         adsk.core.Application.get().log(f"Error creating extrude feature: {e}\n{err}")
         return {"error": f"Failed to create extrude feature: {str(e)}"}
+
+
+@register_tool("extrude_existing_profile")
+def extrude_existing_profile(sketch_name, distance, operation, name=None, profile_index=0, body_name=None, participant_body_names=None):
+    """
+    Hardened wrapper for extruding an existing sketch profile.
+
+    Compared with extrude_feature, this reports profile counts, createInput/add
+    failure stage, participant resolution, and likely recovery actions so agents
+    do not fall back to raw scripts just to learn why profile reuse failed.
+    """
+    diagnostics = {
+        "sketchName": sketch_name,
+        "profileIndex": profile_index,
+        "operation": operation,
+        "distance": distance,
+        "stage": "start",
+        "profileCount": None,
+        "participantBodies": [],
+        "recoveryActions": [],
+    }
+    try:
+        if not operation:
+            return {"error": "operation is required and must be one of NewBody, Join, Cut, or Intersect.", "diagnostics": diagnostics}
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            diagnostics["stage"] = "resolve_sketch"
+            return {"error": f"Sketch '{sketch_name}' not found.", "diagnostics": diagnostics}
+        profiles = _safe_value(lambda: sketch.profiles)
+        diagnostics["profileCount"] = _safe_value(lambda: profiles.count, 0) or 0
+        diagnostics["isSketchVisible"] = _safe_value(lambda: sketch.isVisible)
+        diagnostics["isSketchComputeDeferred"] = _safe_value(lambda: sketch.isComputeDeferred)
+
+        diagnostics["stage"] = "resolve_profile"
+        profile = _profile_by_index(sketch, profile_index)
+        diagnostics["profileObjectType"] = _safe_value(lambda: profile.objectType)
+        diagnostics["profileAreaPropertiesAvailable"] = bool(_safe_value(lambda: profile.areaProperties()))
+
+        before = _design_state_snapshot(include_selections=False)
+        op = _feature_operation(operation)
+        component = _safe_value(lambda: sketch.parentComponent) or get_active_design().rootComponent
+        extrudes = _safe_value(lambda: component.features.extrudeFeatures)
+        if not extrudes:
+            diagnostics["stage"] = "resolve_extrude_features"
+            return {"error": "Target component does not expose extrudeFeatures.", "diagnostics": diagnostics}
+        try:
+            diagnostics["stage"] = "create_input"
+            ext_input = extrudes.createInput(profile, op)
+        except Exception as exc:
+            diagnostics["recoveryActions"] = [
+                "Run copy_profile_loop with outer_loop=true into a fresh sketch and retry extrude_existing_profile on that copied profile.",
+                "Run offset_profile_loop only on the intended loop if reference/projection curves are polluting the source sketch.",
+                "Inspect the sketch profile count and choose the intended profile_index explicitly.",
+            ]
+            return {"error": f"Fusion rejected the existing profile during extrude input creation: {exc}", "diagnostics": diagnostics}
+
+        diagnostics["stage"] = "participant_bodies"
+        diagnostics["participantBodies"] = _set_participant_bodies(ext_input, participant_body_names)
+        diagnostics["stage"] = "set_extent"
+        ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByString(distance))
+        try:
+            diagnostics["stage"] = "add_feature"
+            extrude = extrudes.add(ext_input)
+        except Exception as exc:
+            diagnostics["recoveryActions"] = [
+                "If this is a Cut/Join/Intersect, supply participant_body_names explicitly.",
+                "If Fusion reports profile instability, copy the desired loop into a fresh sketch and extrude that profile.",
+                "Run preflight_model_change and inspect_feature on nearby timeline items before retrying.",
+            ]
+            return {"error": f"Fusion created the extrude input but failed to add the feature: {exc}", "diagnostics": diagnostics}
+        if name:
+            extrude.name = name
+
+        result_body_names = []
+        bodies = _safe_value(lambda: extrude.bodies)
+        for index, body in enumerate(_collection_items(bodies)):
+            if body_name:
+                body.name = body_name if index == 0 else f"{body_name}_{index}"
+            result_body_names.append(_safe_value(lambda body=body: body.name))
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result") if before and after else None
+        feature_name = _safe_value(lambda: extrude.name) or name
+        inspected = inspect_feature(feature_name).get("result") if feature_name else None
+        diagnostics["stage"] = "complete"
+        return {
+            "result": {
+                "featureName": feature_name,
+                "sketchName": sketch.name,
+                "profileIndex": int(profile_index),
+                "operation": _operation_label(op),
+                "distance": distance,
+                "participantBodies": diagnostics["participantBodies"] or _body_names(_safe_value(lambda: extrude.participantBodies)),
+                "resultBodies": result_body_names,
+                "diagnostics": diagnostics,
+                "feature": inspected,
+                "stateComparison": comparison,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error extruding existing profile: {e}\n{err}")
+        return {"error": f"Failed to extrude existing profile: {str(e)}", "diagnostics": diagnostics}
+
+
+@register_tool("copy_profile_loop")
+def copy_profile_loop(source_sketch_name, profile_index=0, loop_index=0, outer_loop=False, destination_sketch_name=None, destination_plane=None, construction=False):
+    try:
+        source_sketch = _find_sketch_by_name(source_sketch_name)
+        if not source_sketch:
+            return {"error": f"Source sketch '{source_sketch_name}' not found."}
+        profile = _profile_by_index(source_sketch, profile_index)
+        profile_loop, resolved_loop_index = _profile_loop_by_index(profile, loop_index=loop_index, outer_loop=outer_loop)
+        loop_curves = _loop_profile_curves(profile_loop)
+        entities = [_profile_curve_entity(curve) for curve in loop_curves]
+        if not entities:
+            return {"error": "Selected profile loop did not resolve any sketch entities."}
+
+        before = _design_state_snapshot(include_selections=False)
+        destination_sketch, created_destination = _ensure_destination_sketch(
+            source_sketch,
+            destination_sketch_name=destination_sketch_name,
+            destination_plane=destination_plane,
+        )
+        copied = []
+        unsupported = []
+        for entity in entities:
+            result = _safe_value(lambda entity=entity: destination_sketch.project(entity))
+            result_items = _collection_items(result)
+            if not result_items and destination_sketch == source_sketch:
+                copy_method = _safe_value(lambda: destination_sketch.copy)
+                if callable(copy_method):
+                    result = copy_method(_object_collection([entity]))
+                    result_items = _collection_items(result)
+            if not result_items:
+                unsupported.append(_curve_summary(entity, len(unsupported)))
+                continue
+            for item in result_items:
+                _safe_value(lambda item=item: setattr(item, "isConstruction", bool(construction)))
+                copied.append(_curve_summary(item, len(copied)))
+        after = _design_state_snapshot(include_selections=False)
+        if unsupported and not copied:
+            return {
+                "error": "Fusion did not expose project/copy support for any curve in the selected profile loop.",
+                "sourceSketchName": _safe_value(lambda: source_sketch.name),
+                "profileIndex": int(profile_index),
+                "loopIndex": resolved_loop_index,
+                "unsupportedCurves": unsupported,
+            }
+        return {
+            "result": {
+                "sourceSketchName": _safe_value(lambda: source_sketch.name),
+                "destinationSketchName": _safe_value(lambda: destination_sketch.name),
+                "createdDestinationSketch": bool(created_destination),
+                "profileIndex": int(profile_index),
+                "loopIndex": resolved_loop_index,
+                "outerLoop": bool(_safe_value(lambda: profile_loop.isOuter)),
+                "sourceCurveCount": len(entities),
+                "copiedCurveCount": len(copied),
+                "copiedCurves": copied,
+                "unsupportedCurves": unsupported,
+                "stateComparison": compare_design_state(before, after).get("result") if before and after else None,
+                "warnings": [
+                    "Fusion projects/copies the loop curves exposed by the profile; constraints and dimensions from the source sketch are not guaranteed to copy.",
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error copying profile loop: {e}\n{err}")
+        return {"error": f"Failed to copy profile loop: {str(e)}"}
+
+
+@register_tool("create_insert_socket")
+def create_insert_socket(source_sketch_name, target_body_name, insert_thickness, clearance="0 mm", mode="flush", profile_index=0, loop_index=0, outer_loop=True, work_sketch_name=None, destination_plane=None, plate_body_name=None, plate_feature_name=None, cutter_body_name=None, cutter_feature_name=None, socket_feature_name=None, socket_depth=None, cutter_profile_index=0, keep_cutter_body=False, allow_alignment_blockers=False, reason=None):
+    """
+    Create a removable insert plate and matching target-body socket cut.
+
+    The workflow is intentionally structured: copy one profile loop, create a
+    plate body, create a cutter body, verify broad-phase alignment, then use the
+    cutter to cut the target body. If Fusion fails after creating intermediates,
+    the returned recovery action points to delete_named_experiment.
+    """
+    diagnostics = {
+        "stage": "start",
+        "sourceSketchName": source_sketch_name,
+        "targetBodyName": target_body_name,
+        "profileIndex": profile_index,
+        "loopIndex": loop_index,
+        "outerLoop": bool(outer_loop),
+        "createdArtifacts": [],
+        "warnings": [],
+        "recoveryActions": [],
+    }
+    try:
+        reason_error = _require_reason(reason, "creating an insert plate and socket cut")
+        if reason_error:
+            return reason_error
+        if not insert_thickness:
+            return {"error": "insert_thickness is required, e.g. '2 mm'.", "diagnostics": diagnostics}
+        mode_key = str(mode or "flush").strip().lower()
+        if mode_key not in {"flush", "proud", "recessed"}:
+            return {"error": "mode must be one of flush, proud, or recessed.", "diagnostics": diagnostics}
+        if mode_key != "flush" and not socket_depth:
+            diagnostics["warnings"].append("mode is proud/recessed but socket_depth was not supplied; using insert_thickness as the cut depth.")
+        socket_depth = socket_depth or insert_thickness
+
+        design = get_active_design()
+        source_sketch = _find_sketch_by_name(source_sketch_name)
+        if not source_sketch:
+            diagnostics["stage"] = "resolve_source_sketch"
+            return {"error": f"Source sketch '{source_sketch_name}' not found.", "diagnostics": diagnostics}
+        target_body = _find_body_by_name(target_body_name)
+        if not target_body:
+            diagnostics["stage"] = "resolve_target_body"
+            return {"error": f"Target body '{target_body_name}' not found.", "diagnostics": diagnostics}
+
+        component = _safe_value(lambda: source_sketch.parentComponent) or get_active_design().rootComponent
+        extrudes = _safe_value(lambda: component.features.extrudeFeatures)
+        combines = _safe_value(lambda: component.features.combineFeatures)
+        if not extrudes:
+            return {"error": "Target component does not expose extrudeFeatures.", "diagnostics": diagnostics}
+        if not combines:
+            return {"error": "Target component does not expose combineFeatures.", "diagnostics": diagnostics}
+
+        diagnostics["stage"] = "resolve_profile_loop"
+        profile = _profile_by_index(source_sketch, profile_index)
+        profile_loop, resolved_loop_index = _profile_loop_by_index(profile, loop_index=loop_index, outer_loop=outer_loop)
+        loop_curves = _loop_profile_curves(profile_loop)
+        entities = [_profile_curve_entity(curve) for curve in loop_curves]
+        if not entities:
+            return {"error": "Selected profile loop did not resolve any sketch entities.", "diagnostics": diagnostics}
+
+        artifact_prefix = work_sketch_name or f"{source_sketch_name}_InsertSocket"
+        work_sketch_name = work_sketch_name or f"{artifact_prefix}_Sketch"
+        plate_body_name = plate_body_name or f"{artifact_prefix}_Plate"
+        cutter_body_name = cutter_body_name or f"{artifact_prefix}_Cutter"
+        plate_feature_name = plate_feature_name or f"{artifact_prefix}_PlateExtrude"
+        cutter_feature_name = cutter_feature_name or f"{artifact_prefix}_CutterExtrude"
+        socket_feature_name = socket_feature_name or f"{artifact_prefix}_SocketCut"
+
+        before = _design_state_snapshot(include_selections=False)
+        diagnostics["stage"] = "copy_loop"
+        work_sketch, created_work_sketch = _ensure_destination_sketch(
+            source_sketch,
+            destination_sketch_name=work_sketch_name,
+            destination_plane=destination_plane,
+        )
+        diagnostics["createdWorkSketch"] = bool(created_work_sketch)
+        if created_work_sketch:
+            diagnostics["createdArtifacts"].append({"kind": "sketch", "name": _safe_value(lambda: work_sketch.name)})
+        copied_entities = []
+        unsupported = []
+        for entity in entities:
+            result = _safe_value(lambda entity=entity: work_sketch.project(entity))
+            result_items = _collection_items(result)
+            if not result_items:
+                unsupported.append(_curve_summary(entity, len(unsupported)))
+            copied_entities.extend(result_items)
+        diagnostics["copiedCurveCount"] = len(copied_entities)
+        diagnostics["unsupportedCurves"] = unsupported
+        if not copied_entities:
+            return {"error": "Fusion did not project any curves from the selected profile loop.", "diagnostics": diagnostics}
+
+        offset_items = []
+        if _nonzero_length_expression(design, clearance):
+            diagnostics["stage"] = "offset_clearance_loop"
+            distance_cm = design.unitsManager.evaluateExpression(str(clearance), "cm")
+            direction_point = _safe_value(lambda: profile.areaProperties().centroid) or adsk.core.Point3D.create(0, 0, 0)
+            offset_result = work_sketch.offset(_object_collection(copied_entities), direction_point, distance_cm)
+            offset_items = _collection_items(offset_result)
+            diagnostics["clearanceApplied"] = bool(offset_items)
+            diagnostics["offsetCurveCount"] = len(offset_items)
+            if not offset_items:
+                diagnostics["warnings"].append("Fusion did not return offset curves for clearance; cutter_profile_index must target the intended profile explicitly.")
+        else:
+            diagnostics["clearanceApplied"] = False
+            diagnostics["offsetCurveCount"] = 0
+
+        diagnostics["stage"] = "create_plate"
+        plate_profile = _profile_by_index(work_sketch, 0)
+        plate_input = extrudes.createInput(plate_profile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+        plate_input.setDistanceExtent(False, adsk.core.ValueInput.createByString(str(insert_thickness)))
+        plate_feature = extrudes.add(plate_input)
+        plate_feature.name = plate_feature_name
+        plate_bodies = _collection_items(_safe_value(lambda: plate_feature.bodies))
+        if not plate_bodies:
+            return {"error": "Plate extrusion did not return a result body.", "diagnostics": diagnostics}
+        plate_body = plate_bodies[0]
+        plate_body.name = plate_body_name
+        diagnostics["createdArtifacts"].append({"kind": "feature", "name": plate_feature_name})
+        diagnostics["createdArtifacts"].append({"kind": "body", "name": plate_body_name})
+
+        diagnostics["stage"] = "create_cutter"
+        cutter_profile = _profile_by_index(work_sketch, cutter_profile_index)
+        cutter_input = extrudes.createInput(cutter_profile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+        cutter_input.setDistanceExtent(False, adsk.core.ValueInput.createByString(str(socket_depth)))
+        cutter_feature = extrudes.add(cutter_input)
+        cutter_feature.name = cutter_feature_name
+        cutter_bodies = _collection_items(_safe_value(lambda: cutter_feature.bodies))
+        if not cutter_bodies:
+            return {"error": "Cutter extrusion did not return a result body.", "diagnostics": diagnostics}
+        cutter_body = cutter_bodies[0]
+        cutter_body.name = cutter_body_name
+        diagnostics["createdArtifacts"].append({"kind": "feature", "name": cutter_feature_name})
+        diagnostics["createdArtifacts"].append({"kind": "body", "name": cutter_body_name})
+
+        diagnostics["stage"] = "verify_alignment"
+        try:
+            from .inspection import verify_insert_alignment
+        except ImportError:
+            from inspection import verify_insert_alignment
+        alignment = verify_insert_alignment(
+            plate_body_name=plate_body_name,
+            socket_body_name=cutter_body_name,
+            thickness_axis="z",
+            expected_plate_thickness=str(insert_thickness),
+            flush_mode=mode_key,
+        )
+        alignment_result = alignment.get("result") if isinstance(alignment, dict) else None
+        if alignment_result and not alignment_result.get("okToExport", False) and not allow_alignment_blockers:
+            diagnostics["recoveryActions"] = [
+                f"Call delete_named_experiment with prefixes='{artifact_prefix}' and confirm_delete=true if the generated plate/cutter artifacts should be removed.",
+                "Inspect verify_insert_alignment blockingReasons before retrying with explicit socket_depth, cutter_profile_index, or clearance.",
+            ]
+            return {
+                "error": "Insert socket alignment verification failed before cutting the target body.",
+                "alignmentVerification": alignment_result,
+                "diagnostics": diagnostics,
+            }
+
+        diagnostics["stage"] = "combine_cut"
+        tool_collection = _object_collection([cutter_body])
+        combine_input = combines.createInput(target_body, tool_collection)
+        combine_input.operation = adsk.fusion.FeatureOperations.CutFeatureOperation
+        combine_input.isKeepToolBodies = bool(keep_cutter_body)
+        combine_feature = combines.add(combine_input)
+        combine_feature.name = socket_feature_name
+        diagnostics["createdArtifacts"].append({"kind": "feature", "name": socket_feature_name})
+        if not keep_cutter_body:
+            diagnostics["cutterCleanup"] = "combine_cut_consumed_tool_body"
+
+        after = _design_state_snapshot(include_selections=False)
+        comparison = compare_design_state(before, after).get("result") if before and after else None
+        diagnostics["stage"] = "complete"
+        return {
+            "result": {
+                "created": True,
+                "sourceSketchName": _safe_value(lambda: source_sketch.name),
+                "workSketchName": _safe_value(lambda: work_sketch.name),
+                "targetBodyName": target_body_name,
+                "plateBodyName": plate_body_name,
+                "cutterBodyName": cutter_body_name,
+                "plateFeatureName": plate_feature_name,
+                "cutterFeatureName": cutter_feature_name,
+                "socketFeatureName": socket_feature_name,
+                "insertThickness": str(insert_thickness),
+                "socketDepth": str(socket_depth),
+                "clearance": str(clearance),
+                "mode": mode_key,
+                "keepCutterBody": bool(keep_cutter_body),
+                "loopIndex": resolved_loop_index,
+                "alignmentVerification": alignment_result,
+                "diagnostics": diagnostics,
+                "stateComparison": comparison,
+                "warnings": diagnostics["warnings"] + [
+                    "Profile-loop constraints and dimensions are not guaranteed to copy into the generated work sketch.",
+                    "If clearance creates multiple work-sketch profiles, set cutter_profile_index explicitly after inspecting the work sketch.",
+                ],
+            }
+        }
+    except Exception as e:
+        diagnostics["recoveryActions"] = [
+            "Run inspect_sketch on the generated work sketch and inspect_feature on generated features before retrying.",
+            "Use delete_named_experiment with the generated artifact prefix to clean up partial plate/cutter/socket attempts.",
+        ]
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error creating insert socket: {e}\n{err}")
+        return {"error": f"Failed to create insert socket: {str(e)}", "diagnostics": diagnostics}
+
+
+@register_tool("offset_profile_loop")
+def offset_profile_loop(sketch_name, profile_index=0, loop_index=0, outer_loop=False, offset_distance=None, construction=False):
+    try:
+        if not offset_distance:
+            return {"error": "offset_distance is required, e.g. '0.2 mm' or '-0.15 mm'."}
+        design = get_active_design()
+        sketch = _find_sketch_by_name(sketch_name)
+        if not sketch:
+            return {"error": f"Sketch '{sketch_name}' not found."}
+        profile = _profile_by_index(sketch, profile_index)
+        profile_loop, resolved_loop_index = _profile_loop_by_index(profile, loop_index=loop_index, outer_loop=outer_loop)
+        loop_curves = _loop_profile_curves(profile_loop)
+        entities = [_profile_curve_entity(curve) for curve in loop_curves]
+        if not entities:
+            return {"error": "Selected profile loop did not resolve any sketch entities."}
+        distance_cm = design.unitsManager.evaluateExpression(str(offset_distance), "cm")
+        direction_point = _safe_value(lambda: profile.areaProperties().centroid)
+        if not direction_point:
+            direction_point = adsk.core.Point3D.create(0, 0, 0)
+
+        before = _design_state_snapshot(include_selections=False)
+        offset_result = sketch.offset(_object_collection(entities), direction_point, distance_cm)
+        offset_items = _collection_items(offset_result)
+        for item in offset_items:
+            _safe_value(lambda item=item: setattr(item, "isConstruction", bool(construction)))
+        after = _design_state_snapshot(include_selections=False)
+        return {
+            "result": {
+                "sketchName": _safe_value(lambda: sketch.name),
+                "profileIndex": int(profile_index),
+                "loopIndex": resolved_loop_index,
+                "outerLoop": bool(_safe_value(lambda: profile_loop.isOuter)),
+                "offsetDistance": str(offset_distance),
+                "sourceCurveCount": len(entities),
+                "offsetCurveCount": len(offset_items),
+                "offsetCurves": [_curve_summary(item, index) for index, item in enumerate(offset_items)],
+                "stateComparison": compare_design_state(before, after).get("result") if before and after else None,
+                "warnings": [
+                    "Only curves from the selected profile loop were offset; unrelated projected/reference curves in the sketch were not included.",
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error offsetting profile loop: {e}\n{err}")
+        return {"error": f"Failed to offset profile loop: {str(e)}"}
 
 
 @register_tool("revolve_feature")

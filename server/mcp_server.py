@@ -13,6 +13,8 @@ import secrets
 import traceback
 import socket
 import time
+import string
+import hashlib
 from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -32,6 +34,17 @@ server_instance = None
 auth_token = secrets.token_urlsafe(32)
 MAX_REQUEST_BYTES = 1024 * 1024
 DEFAULT_PORT = 9100
+SOURCE_FINGERPRINT_FILES = (
+    "FusionMCP.py",
+    "FusionMCP.manifest",
+    "tool_profiles.json",
+    os.path.join("server", "mcp_server.py"),
+    os.path.join("tools", "__init__.py"),
+    os.path.join("tools", "features.py"),
+    os.path.join("tools", "inspection.py"),
+    os.path.join("tools", "utilities.py"),
+    os.path.join("tools", "parametric.py"),
+)
 MAX_SSE_SESSIONS = 1
 HTTP_SESSION_TTL_SECONDS = 60 * 60
 STREAMABLE_HTTP_PATH = "/mcp"
@@ -55,6 +68,7 @@ subscriptions_lock = threading.Lock()
 subscriptions = {} # session_id -> set of URIs
 http_sessions_lock = threading.Lock()
 http_sessions = {}
+_SESSION_ID_HEXDIGITS = set(string.hexdigits)
 
 def discovery_file_path():
     return os.path.join(os.path.expanduser("~"), ".fusion_mcp.json")
@@ -64,6 +78,49 @@ def runtime_dir_path():
 
 def journal_file_path():
     return os.path.join(runtime_dir_path(), "journal.jsonl")
+
+def source_root_path():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+
+def source_fingerprint(root_dir=None):
+    root_dir = root_dir or source_root_path()
+    digest = hashlib.sha256()
+    files = []
+    for rel_path in SOURCE_FINGERPRINT_FILES:
+        normalized = rel_path.replace("\\", "/")
+        path = os.path.join(root_dir, rel_path)
+        item = {"path": normalized, "exists": os.path.exists(path)}
+        digest.update(normalized.encode("utf-8"))
+        if item["exists"]:
+            try:
+                with open(path, "rb") as handle:
+                    data = handle.read()
+                digest.update(data)
+                item["sizeBytes"] = len(data)
+                item["sha256"] = hashlib.sha256(data).hexdigest()
+            except Exception as exc:
+                item["error"] = str(exc)
+                digest.update(str(exc).encode("utf-8"))
+        else:
+            digest.update(b"<missing>")
+        files.append(item)
+    return {
+        "algorithm": "sha256",
+        "fingerprint": digest.hexdigest(),
+        "fileCount": len(files),
+        "files": files,
+    }
+
+def install_metadata():
+    path = os.path.join(source_root_path(), ".fusion_mcp_install.json")
+    result = {"path": path, "exists": os.path.exists(path)}
+    if result["exists"]:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                result["payload"] = json.load(handle)
+        except Exception as exc:
+            result["error"] = str(exc)
+    return result
 
 def antigravity_config_path():
     return os.path.join(os.path.expanduser("~"), ".gemini", "config", "mcp_config.json")
@@ -142,6 +199,23 @@ def touch_http_session(session_id, now=None):
             return False
         http_sessions[session_id] = time.time() if now is None else now
         return True
+
+def normalize_http_session_id(value):
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    text = str(value).strip()
+    if "," in text:
+        text = text.split(",", 1)[0].strip()
+    return text
+
+def is_valid_http_session_id(session_id):
+    return (
+        isinstance(session_id, str)
+        and len(session_id) == 32
+        and all(ch in _SESSION_ID_HEXDIGITS for ch in session_id)
+    )
 
 def get_task_manager_stats():
     if hasattr(TaskManager, "get_pending_task_stats"):
@@ -319,7 +393,7 @@ def make_initialize_result():
             "prompts": {},
             "logging": {}
         },
-        "serverInfo": {"name": "fusion-mcp", "version": "1.0.0"},
+        "serverInfo": {"name": "fusion-mcp", "version": "1.1.0"},
         "instructions": SERVER_INSTRUCTIONS,
     }
 
@@ -367,6 +441,19 @@ class MCPServerHandler(BaseHTTPRequestHandler):
     def _session_exists(self, session_id):
         with sessions_lock:
             return session_id in sessions
+
+    def _http_session_id(self):
+        return normalize_http_session_id(
+            self.headers.get("Mcp-Session-Id") or self.headers.get("mcp-session-id")
+        )
+
+    def _send_invalid_http_session(self, req_id=None):
+        self._send_json(make_jsonrpc_error(
+            req_id,
+            -32600,
+            "Invalid Mcp-Session-Id header. Send the scalar session id string returned by initialize; "
+            "PowerShell users should use @($response.Headers['Mcp-Session-Id'])[0]."
+        ), status=400)
 
     def _send_empty(self, status):
         self.send_response(status)
@@ -487,10 +574,13 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "status": "ok",
                 "server": "fusion-mcp",
-                "version": "1.0.0",
+                "version": "1.1.0",
                 "transport": "sse",
                 "transports": ["sse", "streamable_http"],
                 "discovery": discovery_file_path(),
+                "source_root": source_root_path(),
+                "source_fingerprint": source_fingerprint(),
+                "install_metadata": install_metadata(),
                 "active_sessions": active_sessions,
                 "active_http_sessions": active_http_sessions,
                 "task_manager_running": TaskManager.is_running(),
@@ -592,8 +682,11 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             self._send_empty(403)
             return
 
-        session_id = self.headers.get("Mcp-Session-Id") or self.headers.get("mcp-session-id")
+        session_id = self._http_session_id()
         if not session_id:
+            self._send_empty(400)
+            return
+        if not is_valid_http_session_id(session_id):
             self._send_empty(400)
             return
 
@@ -635,7 +728,11 @@ class MCPServerHandler(BaseHTTPRequestHandler):
                 return
 
             method = request_data.get("method") if isinstance(request_data, dict) else None
-            session_id = self.headers.get("Mcp-Session-Id") or self.headers.get("mcp-session-id")
+            session_id = self._http_session_id()
+            request_id = request_data.get("id") if isinstance(request_data, dict) else None
+            if session_id and not is_valid_http_session_id(session_id):
+                self._send_invalid_http_session(request_id)
+                return
 
             prune_http_sessions()
             if method == "initialize" and not session_id:
@@ -643,7 +740,7 @@ class MCPServerHandler(BaseHTTPRequestHandler):
             else:
                 if not touch_http_session(session_id):
                     self._send_json(make_jsonrpc_error(
-                        request_data.get("id") if isinstance(request_data, dict) else None,
+                        request_id,
                         -32001,
                         "Session not found."
                     ), status=404)

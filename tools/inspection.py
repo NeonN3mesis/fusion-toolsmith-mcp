@@ -3,8 +3,10 @@ Inspection and selection tools/resources package.
 """
 
 import adsk.core, adsk.fusion
+import importlib
 import json
 import math
+import os
 import re
 import traceback
 from . import register_tool, register_resource
@@ -577,6 +579,188 @@ def _printability_body_report(body, component_name, thresholds, max_items, inclu
     }
 
 
+def _iter_mesh_bodies(root):
+    component_entries = [(root, None)]
+    for occ in _collection_items(_safe_value(lambda: root.allOccurrences)):
+        component = _safe_value(lambda occ=occ: occ.component)
+        if component:
+            component_entries.append((component, occ))
+    seen = set()
+    for component, occ in component_entries:
+        component_name = _safe_value(lambda component=component: component.name)
+        occurrence_name = _safe_value(lambda occ=occ: occ.name) if occ else None
+        for mesh_body in _collection_items(_safe_value(lambda component=component: component.meshBodies)):
+            token = _safe_value(lambda mesh_body=mesh_body: mesh_body.entityToken)
+            identity = token or id(mesh_body)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            yield component, component_name, occurrence_name, mesh_body
+
+
+def _mesh_body_snapshot(mesh_body, component_name, occurrence_name=None, mesh_quality="low"):
+    mesh = _triangle_mesh(mesh_body, mesh_quality)
+    points = _mesh_points(mesh) if mesh else []
+    indices = _mesh_indices(mesh) if mesh else []
+    node_count = len(points) if points else _safe_value(lambda: mesh.nodeCount if mesh else None)
+    triangle_count = len(indices) // 3 if indices else _safe_value(lambda: mesh.triangleCount if mesh else None)
+    bbox = _bbox_to_dict(mesh_body)
+    return {
+        "name": _safe_value(lambda: mesh_body.name),
+        "componentName": component_name,
+        "occurrenceName": occurrence_name,
+        "entityToken": _safe_value(lambda: mesh_body.entityToken),
+        "isVisible": _safe_value(lambda: mesh_body.isVisible),
+        "isLightBulbOn": _safe_value(lambda: mesh_body.isLightBulbOn),
+        "objectType": _safe_value(lambda: mesh_body.objectType),
+        "boundingBox": bbox,
+        "sizeMm": _bbox_size_mm(bbox),
+        "meshAnalysis": {
+            "status": "available" if mesh else "unavailable",
+            "quality": mesh_quality,
+            "nodeCount": node_count,
+            "triangleCount": triangle_count,
+            "indexCount": len(indices) if indices else None,
+        },
+        "conversionBlockers": [
+            "Run plan_mesh_conversion with explicit target, intent, operation, quality-loss acknowledgement, and reason before conversion.",
+        ],
+    }
+
+
+def _mesh_conversion_capabilities(root):
+    features = _safe_value(lambda: root.features)
+    return {
+        "meshToBrepAvailable": bool(_safe_value(lambda: features.meshToBREPFeatures) if features else None),
+        "repairAvailable": bool(_safe_value(lambda: features.meshRepairFeatures) if features else None),
+        "reduceAvailable": bool(_safe_value(lambda: features.meshReduceFeatures) if features else None),
+        "remeshAvailable": bool(_safe_value(lambda: features.remeshFeatures) if features else None),
+    }
+
+
+@register_tool("inspect_mesh_bodies")
+def inspect_mesh_bodies(body_names=None, include_invisible=False, mesh_quality="low"):
+    """
+    Read-only inspection of mesh bodies before any mesh conversion or repair workflow.
+    """
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        name_filter = _name_filter(body_names)
+        mesh_quality = str(mesh_quality or "low")
+        mesh_bodies = []
+        skipped = []
+
+        for _component, component_name, occurrence_name, mesh_body in _iter_mesh_bodies(root):
+            name = _safe_value(lambda mesh_body=mesh_body: mesh_body.name)
+            visible = _safe_value(lambda mesh_body=mesh_body: mesh_body.isVisible, True)
+            if name_filter and name not in name_filter:
+                continue
+            if not include_invisible and visible is False:
+                skipped.append({"name": name, "componentName": component_name, "reason": "invisible"})
+                continue
+            mesh_bodies.append(_mesh_body_snapshot(mesh_body, component_name, occurrence_name, mesh_quality))
+
+        return {
+            "result": {
+                "readOnly": True,
+                "units": _safe_value(lambda: design.unitsManager.defaultLengthUnits),
+                "meshBodyCount": len(mesh_bodies),
+                "meshBodies": sorted(mesh_bodies, key=lambda item: (item.get("componentName") or "", item.get("name") or "")),
+                "skippedBodies": skipped,
+                "conversionCapabilities": _mesh_conversion_capabilities(root),
+                "notes": [
+                    "This tool does not convert or repair mesh bodies.",
+                    "Mesh-to-BRep conversion can lose detail and should be gated by plan_mesh_conversion.",
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error inspecting mesh bodies: {e}\n{err}")
+        return {"error": f"Failed to inspect mesh bodies: {str(e)}"}
+
+
+@register_tool("plan_mesh_conversion")
+def plan_mesh_conversion(body_name=None, body_entity_token=None, conversion_intent="convert_to_brep", operation="new_body", tolerance=None, detail_level=None, acknowledge_quality_loss=False, reason=None):
+    """
+    Read-only preflight for mesh conversion, repair, reduction, or remeshing.
+    """
+    try:
+        design = get_active_design()
+        root = design.rootComponent
+        intent = str(conversion_intent or "convert_to_brep")
+        op = str(operation or "new_body")
+        blockers = []
+        warnings = []
+        supported_intents = {"convert_to_brep", "repair_mesh", "reduce_mesh", "remesh"}
+        supported_operations = {"new_body", "join", "cut"}
+
+        if intent not in supported_intents:
+            blockers.append(f"Unsupported conversion_intent '{intent}'. Use one of: {', '.join(sorted(supported_intents))}.")
+        if op not in supported_operations:
+            blockers.append(f"Unsupported operation '{op}'. Use one of: {', '.join(sorted(supported_operations))}.")
+        if not body_name and not body_entity_token:
+            blockers.append("Provide body_name or body_entity_token from inspect_mesh_bodies.")
+        if not reason:
+            blockers.append("Provide a reason explaining why mesh conversion or repair is needed.")
+        if not acknowledge_quality_loss:
+            blockers.append("Set acknowledge_quality_loss=true after accepting that mesh conversion can lose detail or create heavy BRep geometry.")
+
+        matches = []
+        for _component, component_name, occurrence_name, mesh_body in _iter_mesh_bodies(root):
+            name = _safe_value(lambda mesh_body=mesh_body: mesh_body.name)
+            token = _safe_value(lambda mesh_body=mesh_body: mesh_body.entityToken)
+            if (body_name and name == body_name) or (body_entity_token and token == body_entity_token):
+                matches.append(_mesh_body_snapshot(mesh_body, component_name, occurrence_name, "low"))
+
+        if body_name or body_entity_token:
+            if not matches:
+                blockers.append("Target mesh body was not found in the active design.")
+            elif len(matches) > 1:
+                blockers.append("Target matched multiple mesh bodies; use body_entity_token for an exact target.")
+
+        capabilities = _mesh_conversion_capabilities(root)
+        capability_key = {
+            "convert_to_brep": "meshToBrepAvailable",
+            "repair_mesh": "repairAvailable",
+            "reduce_mesh": "reduceAvailable",
+            "remesh": "remeshAvailable",
+        }.get(intent)
+        if capability_key and not capabilities.get(capability_key):
+            blockers.append(f"Fusion runtime does not expose a compatible {intent} API surface.")
+
+        if intent == "convert_to_brep":
+            warnings.append("Mesh-to-BRep conversion may create very large timeline features; inspect triangle count before proceeding.")
+
+        return {
+            "result": {
+                "readOnly": True,
+                "ready": len(blockers) == 0,
+                "blockers": blockers,
+                "warnings": warnings,
+                "target": matches[0] if len(matches) == 1 else None,
+                "conversionCapabilities": capabilities,
+                "normalizedRequest": {
+                    "conversionIntent": intent,
+                    "operation": op,
+                    "tolerance": tolerance,
+                    "detailLevel": detail_level,
+                    "acknowledgeQualityLoss": bool(acknowledge_quality_loss),
+                    "reason": reason,
+                },
+                "notes": [
+                    "This preflight does not mutate the design.",
+                    "Run inspect_mesh_bodies first and use entity-token targeting when names are ambiguous.",
+                ],
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error planning mesh conversion: {e}\n{err}")
+        return {"error": f"Failed to plan mesh conversion: {str(e)}"}
+
+
 @register_tool("inspect_printability")
 def inspect_printability(body_names=None, include_invisible=False, build_axis="z", nozzle_diameter="0.4 mm", layer_height="0.2 mm", minimum_wall_thickness=None, minimum_hole_diameter="2.0 mm", minimum_slot_width="1.0 mm", minimum_feature_size=None, overhang_angle_degrees=45, max_items_per_warning=25, include_mesh_analysis=True, mesh_quality="low"):
     """
@@ -830,6 +1014,3075 @@ def _physical_properties_report(body, component_name):
     }
 
 
+def _rule_report(rule, index=None, active=False):
+    if not rule:
+        return None
+    fields = {
+        "index": index,
+        "active": bool(active),
+        "name": _safe_value(lambda: rule.name),
+        "objectType": _safe_value(lambda: rule.objectType),
+        "entityToken": _safe_value(lambda: rule.entityToken),
+        "thicknessExpression": _safe_value(lambda: rule.thickness.expression),
+        "thicknessValue": _safe_value(lambda: rule.thickness.value),
+        "bendRadiusExpression": _safe_value(lambda: rule.bendRadius.expression),
+        "bendRadiusValue": _safe_value(lambda: rule.bendRadius.value),
+        "kFactorExpression": _safe_value(lambda: rule.kFactor.expression),
+        "kFactorValue": _safe_value(lambda: rule.kFactor.value),
+        "reliefWidthExpression": _safe_value(lambda: rule.reliefWidth.expression),
+        "reliefDepthExpression": _safe_value(lambda: rule.reliefDepth.expression),
+        "description": _safe_value(lambda: rule.description),
+    }
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _body_sheet_metal_report(body, component_name):
+    object_type = str(_safe_value(lambda: body.objectType) or "")
+    is_sheet_metal = _safe_value(lambda: body.isSheetMetal)
+    if is_sheet_metal is None:
+        is_sheet_metal = "sheetmetal" in object_type.replace(" ", "").lower()
+    return {
+        "bodyName": _safe_value(lambda: body.name),
+        "componentName": component_name,
+        "entityToken": _safe_value(lambda: body.entityToken),
+        "objectType": object_type or None,
+        "isVisible": _safe_value(lambda: body.isVisible),
+        "isSolid": _safe_value(lambda: body.isSolid),
+        "isSheetMetal": bool(is_sheet_metal),
+        "boundingBox": _bbox_to_dict(body),
+    }
+
+
+def _surface_body_report(body, component_name, include_edges=False):
+    faces = _collection_items(_safe_value(lambda: body.faces))
+    edges = _collection_items(_safe_value(lambda: body.edges))
+    is_solid = _safe_value(lambda: body.isSolid)
+    open_edges = []
+    for index, edge in enumerate(edges):
+        adjacent_faces = _collection_items(_safe_value(lambda edge=edge: edge.faces))
+        face_count = len(adjacent_faces)
+        if face_count and face_count >= 2:
+            continue
+        if face_count == 0:
+            co_edges = _collection_items(_safe_value(lambda edge=edge: edge.coEdges))
+            face_count = len(co_edges)
+            if face_count >= 2:
+                continue
+        entry = {
+            "index": index,
+            "name": _safe_value(lambda edge=edge: edge.name),
+            "entityToken": _safe_value(lambda edge=edge: edge.entityToken),
+            "objectType": _safe_value(lambda edge=edge: edge.objectType),
+            "adjacentFaceCount": face_count,
+            "length": _safe_value(lambda edge=edge: edge.length),
+        }
+        open_edges.append({key: value for key, value in entry.items() if value is not None})
+    candidate_repairs = []
+    if is_solid is False:
+        candidate_repairs.extend(["patch_surface", "stitch_surfaces", "thicken_surface"])
+        if open_edges:
+            candidate_repairs.extend(["extend_surface", "trim_surface"])
+    return {
+        "bodyName": _safe_value(lambda: body.name),
+        "componentName": component_name,
+        "entityToken": _safe_value(lambda: body.entityToken),
+        "objectType": _safe_value(lambda: body.objectType),
+        "isVisible": _safe_value(lambda: body.isVisible),
+        "isSolid": is_solid,
+        "classification": "solid" if is_solid else "surface",
+        "faceCount": len(faces),
+        "edgeCount": len(edges),
+        "openEdgeCount": len(open_edges),
+        "openEdges": open_edges if include_edges else open_edges[:10],
+        "openEdgesTruncated": (not include_edges and len(open_edges) > 10),
+        "boundingBox": _bbox_to_dict(body),
+        "candidateRepairTools": candidate_repairs,
+        "warnings": [] if is_solid is not None else ["Fusion did not expose isSolid for this body; classification is best-effort."],
+    }
+
+
+def _active_manufacturing_product():
+    app = adsk.core.Application.get()
+    design = get_active_design()
+    products = []
+    for candidate in (
+        _safe_value(lambda: app.activeProduct),
+        _safe_value(lambda: design.cam),
+        _safe_value(lambda: design.manufacturingProduct),
+        _safe_value(lambda: app.activeDocument.products.itemByProductType("CAMProductType")),
+        _safe_value(lambda: app.activeDocument.products.itemByProductType("CAM")),
+        _safe_value(lambda: app.activeDocument.products.itemByProductType("ManufactureProductType")),
+    ):
+        if candidate and candidate not in products:
+            products.append(candidate)
+    for product in products:
+        text = f"{_safe_value(lambda product=product: product.objectType)} {product.__class__.__name__}".lower()
+        if "cam" in text or "manufactur" in text:
+            return product
+    return None
+
+
+def _cam_setup_collection(cam_product):
+    for attr in ("setups", "allSetups", "setupSheets"):
+        collection = _safe_value(lambda attr=attr: getattr(cam_product, attr))
+        if collection:
+            return collection
+    return None
+
+
+def _operation_report(operation, index=None, setup_name=None):
+    if not operation:
+        return None
+    tool = _safe_value(lambda: operation.tool)
+    strategy = _safe_value(lambda: operation.strategy)
+    return {
+        "index": index,
+        "setupName": setup_name,
+        "name": _safe_value(lambda: operation.name),
+        "objectType": _safe_value(lambda: operation.objectType),
+        "entityToken": _safe_value(lambda: operation.entityToken),
+        "operationType": _safe_value(lambda: operation.operationType),
+        "strategy": _safe_value(lambda: strategy.name) or _safe_value(lambda: operation.strategyType),
+        "isValid": _safe_value(lambda: operation.isValid),
+        "isSuppressed": _safe_value(lambda: operation.isSuppressed),
+        "hasToolpath": _safe_value(lambda: operation.hasToolpath),
+        "toolpathState": _safe_value(lambda: operation.toolpathState),
+        "tool": _entity_ref(tool) if tool else None,
+    }
+
+
+def _setup_report(setup, index=None, include_operations=True):
+    operations = []
+    if include_operations:
+        for op_index, operation in enumerate(_collection_items(_safe_value(lambda: setup.operations))):
+            operations.append(_operation_report(operation, index=op_index, setup_name=_safe_value(lambda: setup.name)))
+    return {
+        "index": index,
+        "name": _safe_value(lambda: setup.name),
+        "objectType": _safe_value(lambda: setup.objectType),
+        "entityToken": _safe_value(lambda: setup.entityToken),
+        "isActive": _safe_value(lambda: setup.isActive),
+        "isValid": _safe_value(lambda: setup.isValid),
+        "operationType": _safe_value(lambda: setup.operationType),
+        "stockMode": _safe_value(lambda: setup.stockMode),
+        "wcsOrientationMode": _safe_value(lambda: setup.wcsOrientationMode),
+        "machine": _entity_ref(_safe_value(lambda: setup.machine)),
+        "operationCount": len(operations),
+        "operations": operations,
+    }
+
+
+def _drawing_document_report(doc, index=None, include_sheets=True):
+    drawing_doc = None
+    drawing_error = None
+    try:
+        adsk_drawing = importlib.import_module("adsk.drawing")
+        drawing_doc = _safe_value(lambda: adsk_drawing.DrawingDocument.cast(doc))
+    except Exception as exc:
+        drawing_error = str(exc)
+    drawing = _safe_value(lambda: drawing_doc.drawing) if drawing_doc else None
+    sheets = []
+    if include_sheets and drawing:
+        for sheet_index, sheet in enumerate(_collection_items(_safe_value(lambda: drawing.sheets))):
+            views = []
+            for view_index, view in enumerate(_collection_items(_safe_value(lambda sheet=sheet: sheet.drawingViews))):
+                views.append({
+                    "index": view_index,
+                    "name": _safe_value(lambda view=view: view.name),
+                    "objectType": _safe_value(lambda view=view: view.objectType),
+                    "scale": _safe_value(lambda view=view: view.scale),
+                    "orientation": _safe_value(lambda view=view: view.orientation),
+                    "viewStyle": _safe_value(lambda view=view: view.viewStyle),
+                })
+            sheets.append({
+                "index": sheet_index,
+                "name": _safe_value(lambda sheet=sheet: sheet.name),
+                "objectType": _safe_value(lambda sheet=sheet: sheet.objectType),
+                "size": _safe_value(lambda sheet=sheet: sheet.size),
+                "orientation": _safe_value(lambda sheet=sheet: sheet.orientation),
+                "viewCount": len(views),
+                "views": views,
+                "titleBlock": _entity_ref(_safe_value(lambda sheet=sheet: sheet.titleBlock)),
+                "partsListsCount": len(_collection_items(_safe_value(lambda sheet=sheet: sheet.partsLists))),
+                "tablesCount": len(_collection_items(_safe_value(lambda sheet=sheet: sheet.tables))),
+                "dimensionsCount": len(_collection_items(_safe_value(lambda sheet=sheet: sheet.dimensions))),
+            })
+    data_file = _safe_value(lambda: doc.dataFile)
+    app = adsk.core.Application.get()
+    return {
+        "index": index,
+        "name": _safe_value(lambda: doc.name),
+        "documentType": _safe_value(lambda: doc.documentType),
+        "isActive": doc is _safe_value(lambda: app.activeDocument),
+        "isModified": _safe_value(lambda: doc.isModified),
+        "isSaved": bool(data_file),
+        "dataFileName": _safe_value(lambda: data_file.name),
+        "isDrawingDocument": bool(drawing_doc),
+        "drawingObjectType": _safe_value(lambda: drawing.objectType) if drawing else None,
+        "sheetCount": len(sheets),
+        "sheets": sheets,
+        "drawingApiError": drawing_error if not drawing_doc else None,
+    }
+
+
+@register_tool("inspect_drawing_documents")
+def inspect_drawing_documents(include_sheets=True):
+    try:
+        app = adsk.core.Application.get()
+        docs = _collection_items(_safe_value(lambda: app.documents))
+        reports = [_drawing_document_report(doc, index=index, include_sheets=include_sheets) for index, doc in enumerate(docs)]
+        drawing_docs = [doc for doc in reports if doc.get("isDrawingDocument")]
+        return {
+            "result": {
+                "readOnly": True,
+                "openDocumentCount": len(reports),
+                "drawingDocumentCount": len(drawing_docs),
+                "activeDocument": _safe_value(lambda: app.activeDocument.name),
+                "documents": reports,
+                "warnings": [
+                    "This tool inspects open drawing documents only; it does not create sheets, views, dimensions, callouts, BOMs, or exports.",
+                    "Drawing API availability depends on the Fusion runtime and document type.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect drawing documents: {str(e)}"}
+
+
+@register_tool("preflight_drawing_creation")
+def preflight_drawing_creation(export_pdf_path=None):
+    try:
+        app = adsk.core.Application.get()
+        doc = _safe_value(lambda: app.activeDocument)
+        blockers = []
+        warnings = []
+        if not doc:
+            blockers.append("No active Fusion document is open.")
+        data_file = _safe_value(lambda: doc.dataFile) if doc else None
+        if not data_file:
+            blockers.append("The active design must be saved to Fusion before a drawing can be created.")
+        if export_pdf_path is not None:
+            if not isinstance(export_pdf_path, str) or not export_pdf_path.strip():
+                blockers.append("export_pdf_path must be a non-empty string when supplied.")
+            elif "\x00" in export_pdf_path:
+                blockers.append("export_pdf_path contains an invalid null byte.")
+            elif not os.path.isabs(export_pdf_path):
+                blockers.append("export_pdf_path must be absolute.")
+        drawing_manager_available = False
+        drawing_api_error = None
+        try:
+            adsk_drawing = importlib.import_module("adsk.drawing")
+            drawing_manager_available = bool(_safe_value(lambda: adsk_drawing.DrawingManager.get()))
+        except Exception as exc:
+            drawing_api_error = str(exc)
+        if not drawing_manager_available:
+            blockers.append("Fusion DrawingManager is not available in this runtime.")
+        if _safe_value(lambda: doc.isModified):
+            warnings.append("Active document has unsaved changes; save before creating production drawing output.")
+        active_design_available = False
+        try:
+            active_design_available = bool(get_active_design())
+        except Exception:
+            active_design_available = False
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": not blockers,
+                "riskLevel": "low" if not blockers else "high",
+                "blockingReasons": blockers,
+                "warnings": warnings,
+                "activeDocument": {
+                    "name": _safe_value(lambda: doc.name),
+                    "isModified": _safe_value(lambda: doc.isModified),
+                    "isSaved": bool(data_file),
+                    "dataFileName": _safe_value(lambda: data_file.name),
+                },
+                "activeDesignAvailable": active_design_available,
+                "exportPdfPath": export_pdf_path,
+                "drawingManagerAvailable": drawing_manager_available,
+                "drawingApiError": drawing_api_error,
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to preflight drawing creation: {str(e)}"}
+
+
+_DRAWING_STANDARDS = {
+    "ASME": "ASME",
+    "ISO": "ISO",
+}
+_DRAWING_SHEET_SIZES = {"A", "B", "C", "D", "E", "A4", "A3", "A2", "A1", "A0"}
+_DRAWING_SHEET_ORIENTATIONS = {"landscape", "portrait"}
+_DRAWING_VIEW_ORIENTATIONS = {"front", "back", "left", "right", "top", "bottom", "iso", "current"}
+_DRAWING_VIEW_STYLES = {"visible", "visible_hidden", "shaded", "shaded_hidden"}
+
+
+def _normalize_drawing_views(views):
+    if views is None:
+        views = [{"name": "Base View", "orientation": "front", "scale": 1.0, "style": "visible", "placement": "center"}]
+    if isinstance(views, dict):
+        views = [views]
+    if not isinstance(views, list) or not views:
+        raise ValueError("views must be a non-empty object or array of objects.")
+
+    normalized = []
+    blockers = []
+    for index, view in enumerate(views):
+        if not isinstance(view, dict):
+            blockers.append(f"View {index} must be an object.")
+            continue
+        name = str(view.get("name") or f"View {index + 1}").strip()
+        orientation = str(view.get("orientation") or "front").lower()
+        style = str(view.get("style") or "visible").lower()
+        placement = str(view.get("placement") or ("center" if index == 0 else f"auto_{index + 1}")).strip()
+        try:
+            scale = float(view.get("scale", 1.0))
+        except (TypeError, ValueError):
+            scale = None
+        if not name:
+            blockers.append(f"View {index} name must be non-empty.")
+        if orientation not in _DRAWING_VIEW_ORIENTATIONS:
+            blockers.append(f"View '{name}' orientation must be one of {sorted(_DRAWING_VIEW_ORIENTATIONS)}.")
+        if style not in _DRAWING_VIEW_STYLES:
+            blockers.append(f"View '{name}' style must be one of {sorted(_DRAWING_VIEW_STYLES)}.")
+        if scale is None or scale <= 0:
+            blockers.append(f"View '{name}' scale must be a positive number.")
+        normalized.append({
+            "index": index,
+            "name": name,
+            "orientation": orientation,
+            "style": style,
+            "scale": scale,
+            "placement": placement,
+            "source": str(view.get("source") or "active_design").strip(),
+        })
+    return normalized, blockers
+
+
+@register_tool("plan_drawing_views")
+def plan_drawing_views(standard="ASME", sheet_size="A", sheet_orientation="landscape", units="mm", views=None, title_block=None, export_pdf_path=None):
+    """
+    Read-only drawing plan validator.
+
+    This normalizes explicit sheet and view intent with documented defaults. It
+    does not create drawing documents, views, dimensions, callouts, or exports.
+    """
+    try:
+        normalized_standard = str(standard or "ASME").upper()
+        normalized_sheet_size = str(sheet_size or "A").upper()
+        normalized_orientation = str(sheet_orientation or "landscape").lower()
+        normalized_units = str(units or "mm").lower()
+        blockers = []
+        warnings = []
+
+        if normalized_standard not in _DRAWING_STANDARDS:
+            blockers.append(f"standard must be one of {sorted(_DRAWING_STANDARDS)}.")
+        if normalized_sheet_size not in _DRAWING_SHEET_SIZES:
+            blockers.append(f"sheet_size must be one of {sorted(_DRAWING_SHEET_SIZES)}.")
+        if normalized_orientation not in _DRAWING_SHEET_ORIENTATIONS:
+            blockers.append(f"sheet_orientation must be one of {sorted(_DRAWING_SHEET_ORIENTATIONS)}.")
+        if normalized_units not in {"mm", "in"}:
+            blockers.append("units must be 'mm' or 'in'.")
+        if export_pdf_path and not os.path.isabs(export_pdf_path):
+            blockers.append("export_pdf_path must be absolute when supplied.")
+        normalized_views, view_blockers = _normalize_drawing_views(views)
+        blockers.extend(view_blockers)
+
+        preflight = preflight_drawing_creation(export_pdf_path=export_pdf_path).get("result")
+        if preflight:
+            warnings.extend(preflight.get("warnings") or [])
+        else:
+            warnings.append("Drawing creation preflight could not be evaluated in this runtime.")
+
+        ok_to_proceed = not blockers and bool(preflight and preflight.get("okToProceed"))
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": ok_to_proceed,
+                "riskLevel": "low" if ok_to_proceed else "medium",
+                "blockingReasons": blockers + ((preflight or {}).get("blockingReasons") or []),
+                "sheet": {
+                    "standard": normalized_standard,
+                    "sheetSize": normalized_sheet_size,
+                    "orientation": normalized_orientation,
+                    "units": normalized_units,
+                    "titleBlock": title_block,
+                },
+                "views": normalized_views,
+                "exportPdfPath": export_pdf_path,
+                "preflight": preflight,
+                "warnings": warnings + [
+                    "This tool plans drawing views only; it does not create sheets, views, dimensions, callouts, BOMs, revision tables, or files.",
+                    "Defaults are documented for planning and must still be accepted explicitly by any mutating drawing tool.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan drawing views: {str(e)}"}
+
+
+def _cam_product_report(cam_product):
+    if not cam_product:
+        return None
+    setups = _collection_items(_cam_setup_collection(cam_product))
+    return {
+        "objectType": _safe_value(lambda: cam_product.objectType),
+        "productName": _safe_value(lambda: cam_product.productType) or _safe_value(lambda: cam_product.name),
+        "setupCount": len(setups),
+        "setupsAvailable": _cam_setup_collection(cam_product) is not None,
+    }
+
+
+def _active_simulation_product():
+    app = adsk.core.Application.get()
+    doc = _safe_value(lambda: app.activeDocument)
+    products = _safe_value(lambda: doc.products) if doc else None
+    for product_type in (
+        "SimulationProductType",
+        "SIMProductType",
+        "Simulation",
+        "adsk::fusion::SimulationProduct",
+    ):
+        product = _safe_value(lambda product_type=product_type: products.itemByProductType(product_type)) if products else None
+        if product:
+            return product
+    design = _safe_value(lambda: app.activeProduct)
+    for attr in ("simulation", "simulationProduct", "simulationManager", "studies"):
+        product = _safe_value(lambda attr=attr: getattr(design, attr))
+        if product:
+            return product
+    return None
+
+
+def _simulation_study_collection(sim_product):
+    if not sim_product:
+        return None
+    for attr in ("studies", "simulationStudies", "studyCollection", "analyses"):
+        collection = _safe_value(lambda attr=attr: getattr(sim_product, attr))
+        if collection is not None:
+            return collection
+    return None
+
+
+def _simulation_product_report(sim_product):
+    if not sim_product:
+        return None
+    studies = _collection_items(_simulation_study_collection(sim_product))
+    return {
+        "objectType": _safe_value(lambda: sim_product.objectType),
+        "productName": _safe_value(lambda: sim_product.productType) or _safe_value(lambda: sim_product.name),
+        "studyCount": len(studies),
+        "studiesAvailable": _simulation_study_collection(sim_product) is not None,
+    }
+
+
+def _simulation_study_report(study, index=0):
+    loads = _collection_items(_safe_value(lambda: study.loads))
+    constraints = _collection_items(_safe_value(lambda: study.constraints))
+    materials = _collection_items(_safe_value(lambda: study.materials))
+    contacts = _collection_items(_safe_value(lambda: study.contacts))
+    results = _collection_items(_safe_value(lambda: study.results))
+    mesh = _safe_value(lambda: study.mesh) or _safe_value(lambda: study.meshData)
+    return {
+        "index": index,
+        "name": _safe_value(lambda: study.name),
+        "objectType": _safe_value(lambda: study.objectType),
+        "entityToken": _safe_value(lambda: study.entityToken),
+        "studyType": _safe_value(lambda: study.studyType) or _safe_value(lambda: study.analysisType),
+        "isValid": _safe_value(lambda: study.isValid),
+        "solveStatus": _safe_value(lambda: study.solveStatus) or _safe_value(lambda: study.status),
+        "isSolved": _safe_value(lambda: study.isSolved),
+        "loadCount": len(loads),
+        "constraintCount": len(constraints),
+        "materialCount": len(materials),
+        "contactCount": len(contacts),
+        "resultCount": len(results),
+        "meshAvailable": bool(mesh),
+        "meshStatus": _safe_value(lambda: mesh.status) if mesh else None,
+    }
+
+
+def _active_electronics_product():
+    app = adsk.core.Application.get()
+    doc = _safe_value(lambda: app.activeDocument)
+    products = _safe_value(lambda: doc.products) if doc else None
+    for product_type in (
+        "ElectronicsProductType",
+        "PCBProductType",
+        "BoardProductType",
+        "adsk::electronics::ElectronicsProduct",
+    ):
+        product = _safe_value(lambda product_type=product_type: products.itemByProductType(product_type)) if products else None
+        if product:
+            return product
+    active_product = _safe_value(lambda: app.activeProduct)
+    for attr in ("electronics", "electronicsProduct", "pcb", "board", "pcbProduct"):
+        product = _safe_value(lambda attr=attr: getattr(active_product, attr))
+        if product:
+            return product
+    return None
+
+
+def _electronics_collection(product, names):
+    if not product:
+        return []
+    for attr in names:
+        collection = _safe_value(lambda attr=attr: getattr(product, attr))
+        items = _collection_items(collection)
+        if items:
+            return items
+    return []
+
+
+def _electronics_item_report(item, index=0):
+    bbox = _bbox_to_dict(item)
+    return {
+        "index": index,
+        "name": _safe_value(lambda: item.name),
+        "objectType": _safe_value(lambda: item.objectType),
+        "entityToken": _safe_value(lambda: item.entityToken),
+        "boundingBox": bbox,
+        "sizeMm": _bbox_size_mm(bbox),
+        "designator": _safe_value(lambda: item.designator) or _safe_value(lambda: item.refDes),
+        "value": _safe_value(lambda: item.value),
+        "packageName": _safe_value(lambda: item.packageName) or _safe_value(lambda: item.footprintName),
+        "netName": _safe_value(lambda: item.netName),
+        "isVisible": _safe_value(lambda: item.isVisible),
+    }
+
+
+def _electronics_product_report(product):
+    if not product:
+        return None
+    boards = _electronics_collection(product, ("boards", "pcbBoards", "boardDocuments"))
+    board_outlines = _electronics_collection(product, ("boardOutlines", "outlines", "profiles"))
+    components = _electronics_collection(product, ("components", "pcbComponents", "devices", "instances"))
+    nets = _electronics_collection(product, ("nets", "signals", "electricalNets"))
+    connectors = [
+        item for item in components
+        if any(token in str(_safe_value(lambda item=item: item.name) or _safe_value(lambda item=item: item.designator) or "").lower() for token in ("conn", "j", "usb", "header"))
+    ]
+    return {
+        "objectType": _safe_value(lambda: product.objectType),
+        "productName": _safe_value(lambda: product.productType) or _safe_value(lambda: product.name),
+        "boardCount": len(boards),
+        "boardOutlineCount": len(board_outlines),
+        "componentCount": len(components),
+        "netCount": len(nets),
+        "connectorCandidateCount": len(connectors),
+        "boards": [_electronics_item_report(item, index=index) for index, item in enumerate(boards[:25])],
+        "boardOutlines": [_electronics_item_report(item, index=index) for index, item in enumerate(board_outlines[:25])],
+        "components": [_electronics_item_report(item, index=index) for index, item in enumerate(components[:50])],
+        "nets": [_electronics_item_report(item, index=index) for index, item in enumerate(nets[:50])],
+        "connectorCandidates": [_electronics_item_report(item, index=index) for index, item in enumerate(connectors[:25])],
+    }
+
+
+def _configuration_collection(design):
+    for attr in ("configurations", "configurationRows", "configurationTable", "configurationTableRows"):
+        collection = _safe_value(lambda attr=attr: getattr(design, attr))
+        if collection is not None:
+            return collection, attr
+    root = _safe_value(lambda: design.rootComponent)
+    for attr in ("configurations", "configurationRows"):
+        collection = _safe_value(lambda attr=attr: getattr(root, attr))
+        if collection is not None:
+            return collection, f"rootComponent.{attr}"
+    return None, None
+
+
+def _configuration_item_report(item, index=0):
+    parameters = []
+    for attr in ("parameters", "parameterValues", "configurationParameters", "values"):
+        collection = _collection_items(_safe_value(lambda attr=attr: getattr(item, attr)))
+        if collection:
+            for param_index, param in enumerate(collection):
+                parameters.append({
+                    "index": param_index,
+                    "name": _safe_value(lambda param=param: param.name),
+                    "expression": _safe_value(lambda param=param: param.expression),
+                    "value": _safe_value(lambda param=param: param.value),
+                    "unit": _safe_value(lambda param=param: param.unit),
+                    "role": _safe_value(lambda param=param: param.role),
+                })
+            break
+    return {
+        "index": index,
+        "name": _safe_value(lambda: item.name),
+        "objectType": _safe_value(lambda: item.objectType),
+        "entityToken": _safe_value(lambda: item.entityToken),
+        "isActive": bool(_safe_value(lambda: item.isActive, False)),
+        "description": _safe_value(lambda: item.description),
+        "parameterCount": len(parameters),
+        "parameters": parameters,
+    }
+
+
+def _camera_report(camera, index=0, name=None):
+    return {
+        "index": index,
+        "name": name or _safe_value(lambda: camera.name),
+        "objectType": _safe_value(lambda: camera.objectType),
+        "eye": _point_to_list(_safe_value(lambda: camera.eye)),
+        "target": _point_to_list(_safe_value(lambda: camera.target)),
+        "upVector": _vector_to_list(_safe_value(lambda: camera.upVector)),
+        "viewOrientation": _safe_value(lambda: camera.viewOrientation),
+        "isFitView": _safe_value(lambda: camera.isFitView),
+        "isPerspective": _safe_value(lambda: camera.isPerspective),
+    }
+
+
+def _render_product():
+    app = adsk.core.Application.get()
+    doc = _safe_value(lambda: app.activeDocument)
+    products = _safe_value(lambda: doc.products) if doc else None
+    for product_type in ("RenderProductType", "RenderingProductType", "adsk::fusion::RenderProduct"):
+        product = _safe_value(lambda product_type=product_type: products.itemByProductType(product_type)) if products else None
+        if product:
+            return product
+    active_product = _safe_value(lambda: app.activeProduct)
+    for attr in ("render", "renderProduct", "renderManager", "rendering"):
+        product = _safe_value(lambda attr=attr: getattr(active_product, attr))
+        if product:
+            return product
+    return None
+
+
+def _data_file_report(data_file):
+    if not data_file:
+        return None
+    parent_project = _safe_value(lambda: data_file.parentProject)
+    parent_folder = _safe_value(lambda: data_file.parentFolder)
+    versions = _collection_items(_safe_value(lambda: data_file.versions))
+    latest_version = _safe_value(lambda: data_file.latestVersion) or (versions[-1] if versions else None)
+    return {
+        "name": _safe_value(lambda: data_file.name),
+        "id": _safe_value(lambda: data_file.id),
+        "urn": _safe_value(lambda: data_file.urn),
+        "versionId": _safe_value(lambda: data_file.versionId),
+        "versionNumber": _safe_value(lambda: data_file.versionNumber),
+        "isComplete": _safe_value(lambda: data_file.isComplete),
+        "isReadOnly": _safe_value(lambda: data_file.isReadOnly),
+        "isInUse": _safe_value(lambda: data_file.isInUse),
+        "fileExtension": _safe_value(lambda: data_file.fileExtension),
+        "description": _safe_value(lambda: data_file.description),
+        "createdBy": _safe_value(lambda: data_file.createdBy),
+        "lastUpdatedBy": _safe_value(lambda: data_file.lastUpdatedBy),
+        "dateCreated": str(_safe_value(lambda: data_file.dateCreated)) if _safe_value(lambda: data_file.dateCreated) else None,
+        "dateModified": str(_safe_value(lambda: data_file.dateModified)) if _safe_value(lambda: data_file.dateModified) else None,
+        "parentProject": {
+            "name": _safe_value(lambda: parent_project.name),
+            "id": _safe_value(lambda: parent_project.id),
+        } if parent_project else None,
+        "parentFolder": {
+            "name": _safe_value(lambda: parent_folder.name),
+            "id": _safe_value(lambda: parent_folder.id),
+        } if parent_folder else None,
+        "versionCount": len(versions),
+        "latestVersion": {
+            "name": _safe_value(lambda: latest_version.name),
+            "versionNumber": _safe_value(lambda: latest_version.versionNumber),
+            "id": _safe_value(lambda: latest_version.id),
+        } if latest_version else None,
+    }
+
+
+def _document_management_doc_report(doc, index=0, active_doc=None):
+    data_file = _safe_value(lambda: doc.dataFile)
+    references = []
+    for attr in ("references", "externalReferences", "referencedDataFiles"):
+        for ref_index, ref in enumerate(_collection_items(_safe_value(lambda attr=attr: getattr(doc, attr)))):
+            references.append({
+                "index": ref_index,
+                "name": _safe_value(lambda ref=ref: ref.name),
+                "objectType": _safe_value(lambda ref=ref: ref.objectType),
+                "dataFile": _data_file_report(_safe_value(lambda ref=ref: ref.dataFile)),
+                "isOutOfDate": _safe_value(lambda ref=ref: ref.isOutOfDate),
+                "isBroken": _safe_value(lambda ref=ref: ref.isBroken),
+            })
+        if references:
+            break
+    return {
+        "index": index,
+        "name": _safe_value(lambda: doc.name),
+        "documentType": _safe_value(lambda: doc.documentType),
+        "isActive": doc == active_doc,
+        "isModified": _safe_value(lambda: doc.isModified),
+        "isSaved": bool(data_file),
+        "dataFile": _data_file_report(data_file),
+        "externalReferenceCount": len(references),
+        "externalReferences": references[:50],
+    }
+
+
+@register_tool("inspect_document_management_state")
+def inspect_document_management_state(include_open_documents=True, include_external_references=True):
+    try:
+        app = adsk.core.Application.get()
+        active_doc = _safe_value(lambda: app.activeDocument)
+        docs = _collection_items(_safe_value(lambda: app.documents)) if include_open_documents else []
+        if active_doc and active_doc not in docs:
+            docs.insert(0, active_doc)
+        reports = [
+            _document_management_doc_report(doc, index=index, active_doc=active_doc)
+            for index, doc in enumerate(docs)
+        ]
+        if not include_external_references:
+            for report in reports:
+                report["externalReferenceCount"] = None
+                report["externalReferences"] = []
+        active_report = _document_management_doc_report(active_doc, index=None, active_doc=active_doc) if active_doc else None
+        cloud_available = bool(active_report and active_report.get("dataFile"))
+        warnings = []
+        blockers = []
+        if not active_doc:
+            blockers.append("No active Fusion document is available.")
+        elif not active_report.get("dataFile"):
+            warnings.append("Active document is not associated with a Fusion dataFile; cloud/version metadata is unavailable.")
+        if active_report and active_report.get("isModified"):
+            warnings.append("Active document has unsaved modifications.")
+        return {
+            "result": {
+                "readOnly": True,
+                "activeDocument": active_report,
+                "openDocumentCount": len(reports),
+                "openDocuments": reports,
+                "cloudDataAvailable": cloud_available,
+                "blockingReasons": blockers,
+                "warnings": warnings + [
+                    "This tool does not save, upload, version, promote, or relink documents.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect document management state: {str(e)}"}
+
+
+_DOCUMENT_MANAGEMENT_ACTIONS = {
+    "close",
+    "new_design",
+    "save",
+    "save_as",
+    "export_copy",
+    "version_snapshot",
+    "promote_version",
+    "relink_reference",
+    "open_data_file",
+}
+
+
+@register_tool("plan_document_management_action")
+def plan_document_management_action(action=None, document_name=None, data_file_id=None, target_path=None, target_folder_id=None, reference_name=None, version_id=None, dry_run=True, reason=None, requires_user_approval=False):
+    """
+    Read-only preflight for save/version/export/relink/cloud document actions.
+    """
+    try:
+        action_value = str(action or "").strip().lower()
+        blockers = []
+        warnings = []
+        if action_value not in _DOCUMENT_MANAGEMENT_ACTIONS:
+            blockers.append(f"action must be one of {sorted(_DOCUMENT_MANAGEMENT_ACTIONS)}.")
+        if not reason:
+            blockers.append("reason is required for document-management planning.")
+        if requires_user_approval is not True:
+            blockers.append("requires_user_approval must be true before any close, save, upload, version, relink, or cloud document action.")
+        if dry_run is not True:
+            blockers.append("dry_run must remain true for planning; mutation tools must perform a separate explicit action.")
+
+        if action_value in {"export_copy", "save_as"}:
+            if not target_path:
+                blockers.append(f"target_path is required for {action_value}.")
+            elif not os.path.isabs(str(target_path)):
+                blockers.append("target_path must be absolute.")
+            elif not os.path.isdir(os.path.dirname(str(target_path))):
+                blockers.append(f"target_path directory does not exist: {os.path.dirname(str(target_path))}")
+        if action_value in {"save_as", "open_data_file"} and not (target_folder_id or data_file_id):
+            blockers.append(f"target_folder_id or data_file_id is required for {action_value}.")
+        if action_value in {"promote_version", "open_data_file"} and not (data_file_id or version_id):
+            blockers.append(f"data_file_id or version_id is required for {action_value}.")
+        if action_value == "relink_reference" and not reference_name:
+            blockers.append("reference_name is required for relink_reference.")
+        if action_value == "relink_reference" and not data_file_id:
+            blockers.append("data_file_id is required for relink_reference.")
+
+        inspection = inspect_document_management_state()
+        inspection_result = inspection.get("result") if isinstance(inspection, dict) else None
+        if not inspection_result:
+            blockers.append("Document-management inspection failed before planning action.")
+        else:
+            warnings.extend(inspection_result.get("warnings") or [])
+            active_doc = inspection_result.get("activeDocument")
+            documents = inspection_result.get("openDocuments") or []
+            if document_name and action_value != "new_design":
+                matches = [doc for doc in documents if doc.get("name") == document_name]
+                if not matches:
+                    blockers.append(f"document_name '{document_name}' was not found among open documents.")
+            elif action_value in {"close", "save", "save_as", "export_copy", "version_snapshot"} and not active_doc:
+                blockers.append("An active document is required for this action.")
+            if action_value in {"version_snapshot", "promote_version"} and active_doc and not active_doc.get("dataFile"):
+                blockers.append("Cloud dataFile metadata is required for version actions.")
+
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": len(blockers) == 0,
+                "riskLevel": "medium" if not blockers else "high",
+                "blockingReasons": blockers,
+                "actionPlan": {
+                    "action": action_value,
+                    "documentName": document_name,
+                    "dataFileId": data_file_id,
+                    "targetPath": target_path,
+                    "targetFolderId": target_folder_id,
+                    "referenceName": reference_name,
+                    "versionId": version_id,
+                    "dryRun": bool(dry_run),
+                    "reason": reason,
+                },
+                "requiresUserApproval": bool(requires_user_approval),
+                "inspection": inspection_result,
+                "warnings": warnings + [
+                    "This is a read-only document-management plan; it does not save, upload, version, open, promote, or relink data.",
+                    "Cloud and version actions affect user data outside the active model and require a separate guarded mutation path.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan document management action: {str(e)}"}
+
+
+@register_tool("inspect_render_workspace")
+def inspect_render_workspace():
+    try:
+        app = adsk.core.Application.get()
+        design = get_active_design()
+        viewport = _safe_value(lambda: app.activeViewport)
+        active_camera = _safe_value(lambda: viewport.camera) if viewport else None
+        render_product = _render_product()
+        named_views = []
+        for index, view in enumerate(_collection_items(_safe_value(lambda: design.namedViews))):
+            named_views.append({
+                "index": index,
+                "name": _safe_value(lambda view=view: view.name),
+                "objectType": _safe_value(lambda view=view: view.objectType),
+                "camera": _camera_report(_safe_value(lambda view=view: view.camera), index=index) if _safe_value(lambda view=view: view.camera) else None,
+            })
+        cameras = []
+        for index, camera in enumerate(_collection_items(_safe_value(lambda: design.cameras))):
+            cameras.append(_camera_report(camera, index=index))
+        if active_camera:
+            cameras.insert(0, _camera_report(active_camera, index=None, name="activeViewport"))
+        environments = [
+            _entity_ref(env)
+            for env in _collection_items(_safe_value(lambda: design.environments))
+        ]
+        render_settings = _safe_value(lambda: render_product.renderSettings) if render_product else None
+        warnings = []
+        if not render_product:
+            warnings.append("Fusion did not expose a dedicated render product/manager in this runtime.")
+        if not named_views:
+            warnings.append("No named views were exposed; render planning should use an explicit camera or standard view.")
+        return {
+            "result": {
+                "readOnly": True,
+                "renderWorkspaceAvailable": bool(render_product),
+                "activeViewportAvailable": bool(viewport),
+                "activeCamera": _camera_report(active_camera, index=None, name="activeViewport") if active_camera else None,
+                "cameraCount": len(cameras),
+                "cameras": cameras[:50],
+                "namedViewCount": len(named_views),
+                "namedViews": named_views[:50],
+                "appearanceCount": len(_collection_items(_safe_value(lambda: design.appearances))),
+                "environmentCount": len(environments),
+                "environments": environments[:50],
+                "renderProduct": _entity_ref(render_product) if render_product else None,
+                "renderSettings": {
+                    "objectType": _safe_value(lambda: render_settings.objectType),
+                    "quality": _safe_value(lambda: render_settings.quality),
+                    "resolution": _safe_value(lambda: render_settings.resolution),
+                } if render_settings else None,
+                "warnings": warnings + [
+                    "This tool only inspects render-related metadata; it does not render images or change viewport state.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect render workspace: {str(e)}"}
+
+
+@register_tool("plan_render_output")
+def plan_render_output(camera_name=None, named_view=None, output_path=None, width=1920, height=1080, visual_style="shaded", environment=None, background=None, reason=None, requires_user_approval=False):
+    """
+    Read-only render/output plan validator.
+    """
+    try:
+        blockers = []
+        warnings = []
+        camera_value = str(camera_name or "").strip()
+        named_view_value = str(named_view or "").strip()
+        if not camera_value and not named_view_value:
+            blockers.append("camera_name or named_view is required.")
+        if not output_path:
+            blockers.append("output_path is required and must be absolute.")
+            output_value = None
+        else:
+            output_value = os.path.abspath(str(output_path)) if not os.path.isabs(str(output_path)) else str(output_path)
+            if not os.path.isabs(str(output_path)):
+                blockers.append("output_path must be absolute; relative render paths are not allowed.")
+            output_dir = os.path.dirname(output_value)
+            if output_dir and not os.path.isdir(output_dir):
+                blockers.append(f"output_path directory does not exist: {output_dir}")
+        try:
+            width_value = int(width)
+            height_value = int(height)
+        except (TypeError, ValueError):
+            width_value = height_value = 0
+            blockers.append("width and height must be integers.")
+        if width_value <= 0 or height_value <= 0:
+            blockers.append("width and height must be greater than zero.")
+        if width_value > 8192 or height_value > 8192:
+            blockers.append("width and height must be 8192 or less until output validation is implemented.")
+        if not reason:
+            blockers.append("reason is required for render output planning.")
+        if requires_user_approval is not True:
+            blockers.append("requires_user_approval must be true before any render/export action.")
+
+        workspace = inspect_render_workspace()
+        workspace_result = workspace.get("result") if isinstance(workspace, dict) else None
+        if not workspace_result:
+            blockers.append("Render workspace inspection failed before planning output.")
+        else:
+            warnings.extend(workspace_result.get("warnings") or [])
+            named_view_names = {
+                item.get("name")
+                for item in workspace_result.get("namedViews", [])
+                if item.get("name")
+            }
+            camera_names = {
+                item.get("name")
+                for item in workspace_result.get("cameras", [])
+                if item.get("name")
+            }
+            if named_view_value and named_view_names and named_view_value not in named_view_names:
+                blockers.append(f"named_view '{named_view_value}' was not found in inspected named views.")
+            if camera_value and camera_names and camera_value not in camera_names:
+                blockers.append(f"camera_name '{camera_value}' was not found in inspected cameras.")
+
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": len(blockers) == 0,
+                "riskLevel": "low" if not blockers else "high",
+                "blockingReasons": blockers,
+                "renderPlan": {
+                    "cameraName": camera_value or None,
+                    "namedView": named_view_value or None,
+                    "outputPath": output_value,
+                    "width": width_value,
+                    "height": height_value,
+                    "visualStyle": visual_style,
+                    "environment": environment,
+                    "background": background,
+                    "reason": reason,
+                },
+                "requiresUserApproval": bool(requires_user_approval),
+                "workspace": workspace_result,
+                "warnings": warnings + [
+                    "This is a read-only render plan; it does not render, export, change cameras, or alter scene settings.",
+                    "Validate generated files separately for existence and nonblank output before publishing.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan render output: {str(e)}"}
+
+
+@register_tool("inspect_design_configurations")
+def inspect_design_configurations(include_parameters=True):
+    try:
+        design = get_active_design()
+        collection, source = _configuration_collection(design)
+        items = _collection_items(collection)
+        active = (
+            _safe_value(lambda: design.activeConfiguration)
+            or _safe_value(lambda: design.activeConfigurationRow)
+            or _safe_value(lambda: design.configuration)
+        )
+        configs = [_configuration_item_report(item, index=index) for index, item in enumerate(items)]
+        active_name = _safe_value(lambda: active.name)
+        for config in configs:
+            if active_name and config.get("name") == active_name:
+                config["isActive"] = True
+        warnings = []
+        blockers = []
+        if collection is None:
+            blockers.append("Fusion did not expose a design configuration collection in this runtime.")
+        if collection is not None and not items:
+            warnings.append("A configuration collection was exposed, but it did not contain rows/items.")
+        parameter_report = []
+        if include_parameters:
+            parameter_report = [
+                _parameter_snapshot(param, "user")
+                for param in _collection_items(_safe_value(lambda: design.userParameters))
+            ]
+        return {
+            "result": {
+                "readOnly": True,
+                "configurationCollectionAvailable": collection is not None,
+                "collectionSource": source,
+                "activeConfiguration": _configuration_item_report(active, index=None) if active else None,
+                "configurationCount": len(configs),
+                "configurations": configs,
+                "userParameters": sorted(parameter_report, key=lambda item: item.get("name") or ""),
+                "blockingReasons": blockers,
+                "warnings": warnings + [
+                    "This tool only inspects exposed configuration metadata; it does not create, activate, or edit design variants.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect design configurations: {str(e)}"}
+
+
+@register_tool("plan_design_variant")
+def plan_design_variant(variant_name=None, base_configuration=None, parameter_changes=None, expected_affected_bodies=None, expected_affected_features=None, reason=None, requires_user_approval=False):
+    """
+    Read-only design-variant plan validator.
+
+    This validates target configuration and explicit parameter changes before
+    any future configuration creation or parameter-set mutation.
+    """
+    try:
+        blockers = []
+        warnings = []
+        variant_name_value = str(variant_name or "").strip()
+        base_config_value = str(base_configuration or "").strip()
+        if not variant_name_value:
+            blockers.append("variant_name is required.")
+        if not isinstance(parameter_changes, dict) or not parameter_changes:
+            blockers.append("parameter_changes must be a non-empty object mapping parameter names to explicit expressions.")
+            parameter_data = {}
+        else:
+            parameter_data = dict(parameter_changes)
+            empty_values = [key for key, value in parameter_data.items() if value in (None, "")]
+            if empty_values:
+                blockers.append(f"parameter_changes contains empty values for: {', '.join(str(key) for key in empty_values)}.")
+        if not reason:
+            blockers.append("reason is required for design-variant planning.")
+        if requires_user_approval is not True:
+            blockers.append("requires_user_approval must be true before any configuration or parameter-set mutation.")
+
+        inspection = inspect_design_configurations(include_parameters=True)
+        inspection_result = inspection.get("result") if isinstance(inspection, dict) else None
+        if not inspection_result:
+            blockers.append("Configuration inspection failed before variant planning.")
+        elif not inspection_result.get("configurationCollectionAvailable"):
+            blockers.extend(inspection_result.get("blockingReasons") or [])
+        else:
+            warnings.extend(inspection_result.get("warnings") or [])
+
+        config_names = {
+            config.get("name")
+            for config in (inspection_result or {}).get("configurations", [])
+            if config.get("name")
+        }
+        if base_config_value and config_names and base_config_value not in config_names:
+            blockers.append(f"base_configuration '{base_config_value}' was not found in inspected configurations.")
+
+        user_parameters = {
+            param.get("name"): param
+            for param in (inspection_result or {}).get("userParameters", [])
+            if param.get("name")
+        }
+        missing_parameters = [
+            name for name in parameter_data
+            if user_parameters and name not in user_parameters
+        ]
+        if missing_parameters:
+            blockers.append(f"parameter_changes reference unknown user parameters: {', '.join(sorted(missing_parameters))}.")
+
+        affected_body_names = _normalize_name_list(expected_affected_bodies)
+        affected_feature_names = _normalize_name_list(expected_affected_features)
+        if not affected_body_names and not affected_feature_names:
+            warnings.append("No expected affected bodies or features were supplied; downstream impact should be checked before mutation.")
+
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": len(blockers) == 0,
+                "riskLevel": "medium" if not blockers else "high",
+                "blockingReasons": blockers,
+                "variant": {
+                    "name": variant_name_value,
+                    "baseConfiguration": base_config_value or None,
+                    "parameterChanges": parameter_data,
+                    "expectedAffectedBodies": affected_body_names,
+                    "expectedAffectedFeatures": affected_feature_names,
+                },
+                "requiresUserApproval": bool(requires_user_approval),
+                "inspection": inspection_result,
+                "reason": reason,
+                "warnings": warnings + [
+                    "This is a read-only variant plan; it does not create configurations, activate rows, or edit parameters.",
+                    "Run dependency and design-state checks before applying any planned variant.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan design variant: {str(e)}"}
+
+
+@register_tool("inspect_electronics_workspace")
+def inspect_electronics_workspace():
+    try:
+        product = _active_electronics_product()
+        blockers = []
+        warnings = []
+        if not product:
+            blockers.append("Fusion did not expose an active Electronics or PCB product for this document.")
+        report = _electronics_product_report(product)
+        if product and report and not report.get("boardOutlineCount"):
+            warnings.append("An electronics-like product was found, but no board outline collection was exposed.")
+        if product and report and not report.get("componentCount"):
+            warnings.append("An electronics-like product was found, but no component collection was exposed.")
+        return {
+            "result": {
+                "readOnly": True,
+                "workspaceAvailable": bool(product),
+                "okToInspectBoards": bool(product),
+                "blockingReasons": blockers,
+                "electronicsProduct": report,
+                "warnings": warnings,
+                "notes": [
+                    "This tool does not edit boards, components, nets, or mechanical links.",
+                    "Mechanical enclosure-fit work should be routed through plan_pcb_enclosure_fit before any bridge action.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect electronics workspace: {str(e)}"}
+
+
+@register_tool("plan_pcb_enclosure_fit")
+def plan_pcb_enclosure_fit(board_outline=None, keepouts=None, connectors=None, mounting_holes=None, clearance_rules=None, enclosure_body_name=None, enclosure_body_entity_token=None, linked_mechanical_reference=None, reason=None, requires_user_approval=False):
+    """
+    Read-only planner for PCB-to-enclosure fit work.
+
+    Requires explicit board outline, keepouts, connectors, mounting holes, and
+    clearance rules before any future electronics/mechanical bridge mutation.
+    """
+    try:
+        blockers = []
+        warnings = []
+        if not isinstance(board_outline, dict) or not board_outline:
+            blockers.append("board_outline must be a non-empty object with explicit dimensions or entity references.")
+            board_outline_data = {}
+        else:
+            board_outline_data = dict(board_outline)
+        keepout_data = _non_empty_mapping(keepouts, "keepouts", blockers)
+        connector_data = _non_empty_mapping(connectors, "connectors", blockers)
+        hole_data = _non_empty_mapping(mounting_holes, "mounting_holes", blockers)
+        clearance_data = _non_empty_mapping(clearance_rules, "clearance_rules", blockers)
+        if not reason:
+            blockers.append("reason is required for PCB enclosure-fit planning.")
+        if requires_user_approval is not True:
+            blockers.append("requires_user_approval must be true before any electronics/mechanical bridge action.")
+
+        target_names = _normalize_name_list(enclosure_body_name)
+        target_tokens = _normalize_name_list(enclosure_body_entity_token)
+        target_matches = _resolve_named_body_set(names=target_names, entity_tokens=target_tokens, include_all=False)[0] if (target_names or target_tokens) else []
+        if enclosure_body_name or enclosure_body_entity_token:
+            if not target_matches:
+                blockers.append("No matching enclosure body was found for the supplied enclosure body target.")
+        else:
+            warnings.append("No enclosure body target was supplied; plan is limited to PCB-side fit requirements.")
+
+        workspace = inspect_electronics_workspace()
+        workspace_result = workspace.get("result") if isinstance(workspace, dict) else None
+        if not workspace_result or not workspace_result.get("workspaceAvailable"):
+            blockers.append("Electronics workspace is unavailable in the active document.")
+        else:
+            warnings.extend(workspace_result.get("warnings") or [])
+
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": len(blockers) == 0,
+                "riskLevel": "medium" if not blockers else "high",
+                "blockingReasons": blockers,
+                "boardOutline": board_outline_data,
+                "keepouts": keepout_data,
+                "connectors": connector_data,
+                "mountingHoles": hole_data,
+                "clearanceRules": clearance_data,
+                "targetEnclosureBodies": [
+                    _body_snapshot(body, component_name)
+                    for body, component_name in target_matches
+                ],
+                "linkedMechanicalReference": linked_mechanical_reference,
+                "reason": reason,
+                "requiresUserApproval": bool(requires_user_approval),
+                "workspace": workspace_result,
+                "warnings": warnings + [
+                    "This is a read-only PCB enclosure-fit plan; it does not sync boards, move components, or edit mechanical geometry.",
+                    "Connector, keepout, mounting-hole, and clearance data must come from explicit user input or inspected electronics metadata.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan PCB enclosure fit: {str(e)}"}
+
+
+@register_tool("inspect_simulation_workspace")
+def inspect_simulation_workspace():
+    try:
+        sim_product = _active_simulation_product()
+        blockers = []
+        warnings = []
+        if not sim_product:
+            blockers.append("Fusion did not expose an active Simulation product for this document.")
+        report = _simulation_product_report(sim_product)
+        if sim_product and report and not report.get("studiesAvailable"):
+            warnings.append("A simulation-like product was found, but no study collection was exposed.")
+        return {
+            "result": {
+                "readOnly": True,
+                "workspaceAvailable": bool(sim_product),
+                "okToInspectStudies": bool(sim_product and report and report.get("studiesAvailable")),
+                "blockingReasons": blockers,
+                "simulationProduct": report,
+                "warnings": warnings,
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect simulation workspace: {str(e)}"}
+
+
+@register_tool("list_simulation_studies")
+def list_simulation_studies(include_details=True):
+    try:
+        workspace = inspect_simulation_workspace()
+        if "error" in workspace:
+            return workspace
+        sim_product = _active_simulation_product()
+        if not sim_product:
+            return {
+                "result": {
+                    "readOnly": True,
+                    "studyCount": 0,
+                    "studies": [],
+                    "blockingReasons": (workspace.get("result") or {}).get("blockingReasons") or ["Simulation workspace unavailable."],
+                    "warnings": (workspace.get("result") or {}).get("warnings") or [],
+                }
+            }
+        studies = _collection_items(_simulation_study_collection(sim_product))
+        return {
+            "result": {
+                "readOnly": True,
+                "studyCount": len(studies),
+                "includeDetails": bool(include_details),
+                "studies": [
+                    _simulation_study_report(study, index=index) if include_details else {
+                        "index": index,
+                        "name": _safe_value(lambda study=study: study.name),
+                        "studyType": _safe_value(lambda study=study: study.studyType) or _safe_value(lambda study=study: study.analysisType),
+                    }
+                    for index, study in enumerate(studies)
+                ],
+                "blockingReasons": [],
+                "warnings": [
+                    "This tool only inspects exposed Simulation study metadata; it does not mesh, solve, or export results.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to list simulation studies: {str(e)}"}
+
+
+_SIMULATION_STUDY_TYPES = {
+    "static_stress",
+    "modal_frequencies",
+    "thermal",
+    "thermal_stress",
+    "buckling",
+    "shape_optimization",
+    "event_simulation",
+}
+
+
+@register_tool("plan_simulation_study")
+def plan_simulation_study(study_name=None, study_type=None, target_body_names=None, target_body_entity_tokens=None, materials=None, loads=None, constraints=None, contacts=None, mesh_settings=None, result_outputs=None, requires_user_approval=False):
+    """
+    Read-only simulation study plan validator.
+
+    This deliberately requires study scope, materials, loads, constraints, mesh
+    settings, requested outputs, and explicit approval before future mutators
+    could create, mesh, solve, or export a Simulation study.
+    """
+    try:
+        blockers = []
+        warnings = []
+        study_name = str(study_name or "").strip()
+        study_type_value = str(study_type or "").strip().lower()
+        if not study_name:
+            blockers.append("study_name is required.")
+        if study_type_value not in _SIMULATION_STUDY_TYPES:
+            blockers.append(f"study_type must be one of {sorted(_SIMULATION_STUDY_TYPES)}.")
+
+        target_names = _normalize_name_list(target_body_names)
+        target_tokens = _normalize_name_list(target_body_entity_tokens)
+        target_matches = _resolve_named_body_set(names=target_names, entity_tokens=target_tokens, include_all=False)[0] if (target_names or target_tokens) else []
+        if not target_names and not target_tokens:
+            blockers.append("target_body_names or target_body_entity_tokens are required.")
+        elif not target_matches:
+            blockers.append("No matching target bodies were found for the simulation study.")
+
+        material_data = _non_empty_mapping(materials, "materials", blockers)
+        load_data = _non_empty_mapping(loads, "loads", blockers)
+        constraint_data = _non_empty_mapping(constraints, "constraints", blockers)
+        mesh_data = _non_empty_mapping(mesh_settings, "mesh_settings", blockers)
+        output_data = _non_empty_mapping(result_outputs, "result_outputs", blockers)
+        contact_data = dict(contacts or {}) if isinstance(contacts, dict) else {}
+        if contacts is not None and not isinstance(contacts, dict):
+            blockers.append("contacts must be an object when supplied.")
+        if requires_user_approval is not True:
+            blockers.append("requires_user_approval must be true before any simulation study creation, meshing, solving, or result export.")
+
+        workspace = inspect_simulation_workspace()
+        workspace_result = workspace.get("result") if isinstance(workspace, dict) else None
+        if not workspace_result or not workspace_result.get("workspaceAvailable"):
+            blockers.append("Simulation workspace is unavailable in the active document.")
+        else:
+            warnings.extend(workspace_result.get("warnings") or [])
+
+        target_reports = [
+            _body_snapshot(body, component_name)
+            for body, component_name in target_matches
+        ]
+        ok_to_proceed = not blockers
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": ok_to_proceed,
+                "riskLevel": "medium" if ok_to_proceed else "high",
+                "blockingReasons": blockers,
+                "study": {
+                    "name": study_name,
+                    "type": study_type_value,
+                    "targetBodies": target_reports,
+                    "materials": material_data,
+                    "loads": load_data,
+                    "constraints": constraint_data,
+                    "contacts": contact_data,
+                    "meshSettings": mesh_data,
+                    "resultOutputs": output_data,
+                },
+                "requiresUserApproval": bool(requires_user_approval),
+                "workspace": workspace_result,
+                "warnings": warnings + [
+                    "This is a read-only simulation plan; it does not create studies, apply loads, mesh, solve, or export results.",
+                    "Simulation assumptions must be explicit and verified by a qualified user before relying on results.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan simulation study: {str(e)}"}
+
+
+@register_tool("inspect_manufacturing_workspace")
+def inspect_manufacturing_workspace():
+    try:
+        cam_product = _active_manufacturing_product()
+        blockers = []
+        warnings = []
+        if not cam_product:
+            blockers.append("Fusion did not expose an active CAM/manufacturing product for this document.")
+        report = _cam_product_report(cam_product)
+        if cam_product and not report.get("setupsAvailable"):
+            warnings.append("A manufacturing-like product was found, but no setup collection was exposed.")
+        return {
+            "result": {
+                "readOnly": True,
+                "workspaceAvailable": bool(cam_product),
+                "okToInspectSetups": bool(cam_product and report and report.get("setupsAvailable")),
+                "blockingReasons": blockers,
+                "manufacturingProduct": report,
+                "warnings": warnings,
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect manufacturing workspace: {str(e)}"}
+
+
+@register_tool("list_manufacturing_setups")
+def list_manufacturing_setups(include_operations=True):
+    try:
+        workspace = inspect_manufacturing_workspace()
+        if "error" in workspace:
+            return workspace
+        cam_product = _active_manufacturing_product()
+        if not cam_product:
+            return {
+                "result": {
+                    "readOnly": True,
+                    "setupCount": 0,
+                    "setups": [],
+                    "blockingReasons": (workspace.get("result") or {}).get("blockingReasons") or ["Manufacturing workspace unavailable."],
+                    "warnings": (workspace.get("result") or {}).get("warnings") or [],
+                }
+            }
+        setups = _collection_items(_cam_setup_collection(cam_product))
+        return {
+            "result": {
+                "readOnly": True,
+                "setupCount": len(setups),
+                "includeOperations": bool(include_operations),
+                "setups": [_setup_report(setup, index=index, include_operations=include_operations) for index, setup in enumerate(setups)],
+                "blockingReasons": [],
+                "warnings": [],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to list manufacturing setups: {str(e)}"}
+
+
+@register_tool("inspect_operation")
+def inspect_operation(operation_name=None, setup_name=None, operation_index=None):
+    try:
+        setups_result = list_manufacturing_setups(include_operations=True)
+        if "error" in setups_result:
+            return setups_result
+        result = setups_result.get("result") or {}
+        matches = []
+        for setup in result.get("setups") or []:
+            if setup_name and setup.get("name") != setup_name:
+                continue
+            for operation in setup.get("operations") or []:
+                if operation_name and operation.get("name") != operation_name:
+                    continue
+                if operation_index is not None:
+                    try:
+                        if int(operation_index) != int(operation.get("index")):
+                            continue
+                    except Exception:
+                        continue
+                matches.append(operation)
+        blockers = []
+        if result.get("blockingReasons"):
+            blockers.extend(result.get("blockingReasons"))
+        if not operation_name and operation_index is None:
+            blockers.append("operation_name or operation_index is required.")
+        if not matches and not blockers:
+            blockers.append("No matching manufacturing operation was found.")
+        return {
+            "result": {
+                "readOnly": True,
+                "matchCount": len(matches),
+                "operations": matches,
+                "blockingReasons": blockers,
+                "warnings": [
+                    "This tool only inspects exposed CAM operation metadata; it does not generate toolpaths or post-process output.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect manufacturing operation: {str(e)}"}
+
+
+_MANUFACTURING_OPERATION_TYPES = {
+    "2d_contour",
+    "2d_pocket",
+    "adaptive",
+    "drill",
+    "face",
+    "trace",
+}
+
+
+def _non_empty_mapping(value, label, blockers):
+    if not isinstance(value, dict) or not value:
+        blockers.append(f"{label} must be a non-empty object.")
+        return {}
+    missing = [key for key, item in value.items() if item in (None, "")]
+    if missing:
+        blockers.append(f"{label} contains empty values for: {', '.join(str(key) for key in missing)}.")
+    return dict(value)
+
+
+def _numeric_positive_mapping(value, label, blockers):
+    data = _non_empty_mapping(value, label, blockers)
+    for key, item in data.items():
+        try:
+            number = float(item)
+        except (TypeError, ValueError):
+            blockers.append(f"{label}.{key} must be numeric.")
+            continue
+        if number <= 0:
+            blockers.append(f"{label}.{key} must be greater than zero.")
+    return data
+
+
+@register_tool("plan_manufacturing_operation")
+def plan_manufacturing_operation(setup_name=None, operation_name=None, operation_type=None, machine=None, stock=None, wcs=None, tool=None, feeds=None, speeds=None, post_processor=None, requires_user_approval=False):
+    """
+    Read-only CAM setup/operation plan validator.
+
+    This deliberately requires production-critical inputs and never infers
+    machines, stock, WCS, tools, feeds, speeds, or post processors.
+    """
+    try:
+        blockers = []
+        warnings = []
+        setup_name = str(setup_name or "").strip()
+        operation_name = str(operation_name or "").strip()
+        operation_type = str(operation_type or "").strip().lower()
+        if not setup_name:
+            blockers.append("setup_name is required.")
+        if not operation_name:
+            blockers.append("operation_name is required.")
+        if operation_type not in _MANUFACTURING_OPERATION_TYPES:
+            blockers.append(f"operation_type must be one of {sorted(_MANUFACTURING_OPERATION_TYPES)}.")
+
+        machine_data = _non_empty_mapping(machine, "machine", blockers)
+        stock_data = _non_empty_mapping(stock, "stock", blockers)
+        wcs_data = _non_empty_mapping(wcs, "wcs", blockers)
+        tool_data = _non_empty_mapping(tool, "tool", blockers)
+        feed_data = _numeric_positive_mapping(feeds, "feeds", blockers)
+        speed_data = _numeric_positive_mapping(speeds, "speeds", blockers)
+        post_data = _non_empty_mapping(post_processor, "post_processor", blockers)
+
+        workspace = inspect_manufacturing_workspace().get("result")
+        if workspace:
+            warnings.extend(workspace.get("warnings") or [])
+        else:
+            warnings.append("Manufacturing workspace preflight could not be evaluated in this runtime.")
+        if workspace and workspace.get("blockingReasons"):
+            blockers.extend(workspace.get("blockingReasons"))
+
+        approved = bool(requires_user_approval)
+        if not approved:
+            blockers.append("requires_user_approval must be true before any future toolpath generation or post-processing step.")
+
+        ok_to_proceed = not blockers
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": ok_to_proceed,
+                "riskLevel": "medium" if ok_to_proceed else "high",
+                "blockingReasons": blockers,
+                "setup": {
+                    "name": setup_name,
+                    "machine": machine_data,
+                    "stock": stock_data,
+                    "wcs": wcs_data,
+                },
+                "operation": {
+                    "name": operation_name,
+                    "type": operation_type,
+                    "tool": tool_data,
+                    "feeds": feed_data,
+                    "speeds": speed_data,
+                },
+                "postProcessor": post_data,
+                "requiresUserApproval": approved,
+                "workspace": workspace,
+                "warnings": warnings + [
+                    "This is a read-only manufacturing plan; it does not create setups, create operations, generate toolpaths, or post-process output.",
+                    "Production parameters must come from the user or verified shop data; FusionMCP does not infer them.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan manufacturing operation: {str(e)}"}
+
+
+def _manufacturing_plan_or_error(setup_name=None, operation_name=None, operation_type=None, machine=None, stock=None, wcs=None, tool=None, feeds=None, speeds=None, post_processor=None, requires_user_approval=False, action="manufacturing action"):
+    plan = plan_manufacturing_operation(
+        setup_name=setup_name,
+        operation_name=operation_name,
+        operation_type=operation_type,
+        machine=machine,
+        stock=stock,
+        wcs=wcs,
+        tool=tool,
+        feeds=feeds,
+        speeds=speeds,
+        post_processor=post_processor,
+        requires_user_approval=requires_user_approval,
+    )
+    if "error" in plan:
+        return None, plan
+    plan_result = plan.get("result") or {}
+    if not plan_result.get("okToProceed"):
+        return None, {
+            "error": f"Manufacturing preflight failed before {action}.",
+            "preflight": plan_result,
+        }
+    return plan_result, None
+
+
+def _cam_collection_add(collection, payload):
+    if not collection or not hasattr(collection, "add"):
+        return None, "CAM collection did not expose add()."
+    if hasattr(collection, "createInput"):
+        variants = [(payload,), tuple()]
+        last_error = None
+        for args in variants:
+            try:
+                input_obj = collection.createInput(*args)
+                if input_obj is not None:
+                    for key, value in payload.items():
+                        if hasattr(input_obj, key):
+                            setattr(input_obj, key, value)
+                    return collection.add(input_obj), None
+            except TypeError as exc:
+                last_error = str(exc)
+            except Exception as exc:
+                last_error = str(exc)
+                break
+        if last_error:
+            return None, f"CAM collection createInput failed: {last_error}"
+    variants = [(payload,), tuple(payload.values()), tuple()]
+    last_error = None
+    for args in variants:
+        try:
+            return collection.add(*args), None
+        except TypeError as exc:
+            last_error = str(exc)
+        except Exception as exc:
+            last_error = str(exc)
+            break
+    return None, f"CAM collection did not accept a compatible add() signature: {last_error}"
+
+
+def _find_cam_setup(cam_product, setup_name=None):
+    for setup in _collection_items(_cam_setup_collection(cam_product)):
+        if not setup_name or _safe_value(lambda setup=setup: setup.name) == setup_name:
+            return setup
+    return None
+
+
+def _find_cam_operation(cam_product, setup_name=None, operation_name=None):
+    setup = _find_cam_setup(cam_product, setup_name=setup_name)
+    if not setup:
+        return None, None
+    for operation in _collection_items(_safe_value(lambda: setup.operations)):
+        if not operation_name or _safe_value(lambda operation=operation: operation.name) == operation_name:
+            return setup, operation
+    return setup, None
+
+
+def _compare_manufacturing_mutation(before):
+    try:
+        after = _design_state_snapshot(include_selections=False)
+        return compare_design_state(before, after).get("result")
+    except Exception:
+        return None
+
+
+@register_tool("create_manufacturing_setup")
+def create_manufacturing_setup(setup_name=None, operation_name=None, operation_type=None, machine=None, stock=None, wcs=None, tool=None, feeds=None, speeds=None, post_processor=None, requires_user_approval=False):
+    try:
+        plan_result, error = _manufacturing_plan_or_error(
+            setup_name=setup_name,
+            operation_name=operation_name,
+            operation_type=operation_type,
+            machine=machine,
+            stock=stock,
+            wcs=wcs,
+            tool=tool,
+            feeds=feeds,
+            speeds=speeds,
+            post_processor=post_processor,
+            requires_user_approval=requires_user_approval,
+            action="creating manufacturing setup",
+        )
+        if error:
+            return error
+        cam_product = _active_manufacturing_product()
+        setups = _cam_setup_collection(cam_product)
+        if not setups:
+            return {
+                "error": "Fusion did not expose a writable CAM setup collection.",
+                "unsupported": True,
+                "preflight": plan_result,
+            }
+        before = _design_state_snapshot(include_selections=False)
+        setup, add_error = _cam_collection_add(setups, {"setup": plan_result.get("setup"), "operation": plan_result.get("operation"), "postProcessor": plan_result.get("postProcessor")})
+        if add_error:
+            return {"error": add_error, "unsupported": True, "preflight": plan_result}
+        if setup_name and hasattr(setup, "name"):
+            setup.name = setup_name
+        return {
+            "result": {
+                "message": "Created manufacturing setup from explicit plan.",
+                "setupName": _safe_value(lambda: setup.name) or setup_name,
+                "setupObjectType": _safe_value(lambda: setup.objectType),
+                "preflight": plan_result,
+                "stateComparison": _compare_manufacturing_mutation(before),
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to create manufacturing setup: {str(e)}"}
+
+
+@register_tool("create_manufacturing_operation")
+def create_manufacturing_operation(setup_name=None, operation_name=None, operation_type=None, machine=None, stock=None, wcs=None, tool=None, feeds=None, speeds=None, post_processor=None, requires_user_approval=False):
+    try:
+        plan_result, error = _manufacturing_plan_or_error(
+            setup_name=setup_name,
+            operation_name=operation_name,
+            operation_type=operation_type,
+            machine=machine,
+            stock=stock,
+            wcs=wcs,
+            tool=tool,
+            feeds=feeds,
+            speeds=speeds,
+            post_processor=post_processor,
+            requires_user_approval=requires_user_approval,
+            action="creating manufacturing operation",
+        )
+        if error:
+            return error
+        cam_product = _active_manufacturing_product()
+        setup = _find_cam_setup(cam_product, setup_name=setup_name)
+        if not setup:
+            return {"error": f"Manufacturing setup '{setup_name}' was not found.", "preflight": plan_result}
+        operations = _safe_value(lambda: setup.operations)
+        if not operations:
+            return {"error": "Fusion did not expose a writable operation collection for this setup.", "unsupported": True, "preflight": plan_result}
+        before = _design_state_snapshot(include_selections=False)
+        operation, add_error = _cam_collection_add(operations, {"setup": plan_result.get("setup"), "operation": plan_result.get("operation"), "postProcessor": plan_result.get("postProcessor")})
+        if add_error:
+            return {"error": add_error, "unsupported": True, "preflight": plan_result}
+        if operation_name and hasattr(operation, "name"):
+            operation.name = operation_name
+        return {
+            "result": {
+                "message": "Created manufacturing operation from explicit plan.",
+                "setupName": _safe_value(lambda: setup.name),
+                "operationName": _safe_value(lambda: operation.name) or operation_name,
+                "operationObjectType": _safe_value(lambda: operation.objectType),
+                "preflight": plan_result,
+                "stateComparison": _compare_manufacturing_mutation(before),
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to create manufacturing operation: {str(e)}"}
+
+
+@register_tool("generate_toolpaths")
+def generate_toolpaths(setup_name=None, operation_name=None, operation_type=None, machine=None, stock=None, wcs=None, tool=None, feeds=None, speeds=None, post_processor=None, requires_user_approval=False):
+    try:
+        plan_result, error = _manufacturing_plan_or_error(
+            setup_name=setup_name,
+            operation_name=operation_name,
+            operation_type=operation_type,
+            machine=machine,
+            stock=stock,
+            wcs=wcs,
+            tool=tool,
+            feeds=feeds,
+            speeds=speeds,
+            post_processor=post_processor,
+            requires_user_approval=requires_user_approval,
+            action="generating toolpaths",
+        )
+        if error:
+            return error
+        cam_product = _active_manufacturing_product()
+        setup, operation = _find_cam_operation(cam_product, setup_name=setup_name, operation_name=operation_name)
+        target = operation or setup
+        if not target:
+            return {"error": "Target setup or operation was not found for toolpath generation.", "preflight": plan_result}
+        method = _safe_value(lambda: target.generateToolpath) or _safe_value(lambda: cam_product.generateToolpath)
+        if not callable(method):
+            return {"error": "Fusion did not expose a compatible toolpath generation method.", "unsupported": True, "preflight": plan_result}
+        before = _design_state_snapshot(include_selections=False)
+        try:
+            generated = method(target)
+        except TypeError:
+            generated = method()
+        return {
+            "result": {
+                "message": "Generated manufacturing toolpaths from explicit approved plan.",
+                "setupName": _safe_value(lambda: setup.name),
+                "operationName": _safe_value(lambda: operation.name),
+                "generated": bool(True if generated is None else generated),
+                "preflight": plan_result,
+                "stateComparison": _compare_manufacturing_mutation(before),
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to generate toolpaths: {str(e)}"}
+
+
+@register_tool("post_process")
+def post_process(output_path=None, setup_name=None, operation_name=None, operation_type=None, machine=None, stock=None, wcs=None, tool=None, feeds=None, speeds=None, post_processor=None, requires_user_approval=False):
+    try:
+        if not isinstance(output_path, str) or not output_path.strip():
+            return {"error": "output_path must be a non-empty absolute path."}
+        if "\x00" in output_path:
+            return {"error": "output_path contains an invalid null byte."}
+        if not os.path.isabs(output_path):
+            return {"error": "output_path must be absolute."}
+        plan_result, error = _manufacturing_plan_or_error(
+            setup_name=setup_name,
+            operation_name=operation_name,
+            operation_type=operation_type,
+            machine=machine,
+            stock=stock,
+            wcs=wcs,
+            tool=tool,
+            feeds=feeds,
+            speeds=speeds,
+            post_processor=post_processor,
+            requires_user_approval=requires_user_approval,
+            action="post-processing manufacturing output",
+        )
+        if error:
+            return error
+        cam_product = _active_manufacturing_product()
+        setup, operation = _find_cam_operation(cam_product, setup_name=setup_name, operation_name=operation_name)
+        target = operation or setup
+        if not target:
+            return {"error": "Target setup or operation was not found for post-processing.", "preflight": plan_result}
+        method = _safe_value(lambda: target.postProcess) or _safe_value(lambda: cam_product.postProcess)
+        if not callable(method):
+            return {"error": "Fusion did not expose a compatible post-processing method.", "unsupported": True, "preflight": plan_result}
+        output_dir = os.path.dirname(output_path)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+        before = _design_state_snapshot(include_selections=False)
+        payload = {"outputPath": output_path, "postProcessor": plan_result.get("postProcessor"), "target": target}
+        try:
+            posted = method(payload)
+        except TypeError:
+            try:
+                posted = method(output_path)
+            except TypeError:
+                posted = method()
+        return {
+            "result": {
+                "message": "Post-processed manufacturing output from explicit approved plan.",
+                "setupName": _safe_value(lambda: setup.name),
+                "operationName": _safe_value(lambda: operation.name),
+                "outputPath": output_path,
+                "posted": bool(True if posted is None else posted),
+                "preflight": plan_result,
+                "stateComparison": _compare_manufacturing_mutation(before),
+                "warnings": ["Verify posted code in the target controller/simulator before running any machine."],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to post-process manufacturing output: {str(e)}"}
+
+
+@register_tool("inspect_surface_bodies")
+def inspect_surface_bodies(body_names=None, body_entity_tokens=None, include_invisible=False, include_edges=False):
+    try:
+        requested_names = set(_normalize_name_list(body_names))
+        requested_tokens = set(_normalize_name_list(body_entity_tokens))
+        include_all = not requested_names and not requested_tokens
+        bodies, missing_names, missing_tokens = _resolve_named_body_set(
+            names=requested_names,
+            entity_tokens=requested_tokens,
+            include_all=include_all,
+        )
+        reports = []
+        for body, component_name in bodies:
+            if not include_invisible and _safe_value(lambda body=body: body.isVisible) is False:
+                continue
+            reports.append(_surface_body_report(body, component_name, include_edges=include_edges))
+        surface_reports = [report for report in reports if report.get("classification") == "surface"]
+        warnings = [
+            "This is a read-only classification report. Repair tools must require explicit targets and reasons.",
+            "Open-edge counts are best-effort and depend on Fusion exposing edge-to-face adjacency.",
+        ]
+        if missing_names:
+            warnings.append(f"Body names not found: {', '.join(missing_names)}")
+        if missing_tokens:
+            warnings.append(f"Body entity tokens not found: {', '.join(missing_tokens)}")
+        return {
+            "result": {
+                "readOnly": True,
+                "bodyCount": len(reports),
+                "surfaceBodyCount": len(surface_reports),
+                "solidBodyCount": len([report for report in reports if report.get("classification") == "solid"]),
+                "bodies": reports,
+                "missingBodyNames": missing_names,
+                "missingBodyEntityTokens": missing_tokens,
+                "recommendedWorkflow": [
+                    "Use entityToken/bodyName from this report before any surface repair.",
+                    "Run patch/stitch/thicken/trim/extend only as explicit separate mutations with reason fields.",
+                    "Validate model health after every repair mutation.",
+                ],
+                "warnings": warnings,
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect surface bodies: {str(e)}"}
+
+
+_SURFACE_REPAIR_OPERATIONS = {
+    "patch_surface",
+    "stitch_surfaces",
+    "thicken_surface",
+    "trim_surface",
+    "extend_surface",
+    "create_ruled_surface",
+}
+_SURFACE_REPAIR_REASONED_OPERATIONS = {
+    "stitch_surfaces",
+    "thicken_surface",
+    "trim_surface",
+    "extend_surface",
+}
+
+
+@register_tool("plan_surface_repair")
+def plan_surface_repair(operation=None, body_name=None, body_entity_token=None, edge_entity_tokens=None, face_entity_tokens=None, parameters=None, reason=None, allow_solid_body=False):
+    """
+    Read-only surface repair/creation plan validator.
+
+    This verifies explicit targets and reason fields before any future surface
+    mutator is allowed. It does not patch, stitch, thicken, trim, extend, or
+    create ruled surfaces.
+    """
+    try:
+        operation_name = str(operation or "").strip().lower()
+        blockers = []
+        warnings = []
+        if operation_name not in _SURFACE_REPAIR_OPERATIONS:
+            blockers.append(f"operation must be one of {sorted(_SURFACE_REPAIR_OPERATIONS)}.")
+        if not body_name and not body_entity_token:
+            blockers.append("body_name or body_entity_token is required.")
+        if operation_name in _SURFACE_REPAIR_REASONED_OPERATIONS and (not isinstance(reason, str) or not reason.strip()):
+            blockers.append(f"reason is required for {operation_name}.")
+        if parameters is not None and not isinstance(parameters, dict):
+            blockers.append("parameters must be an object when supplied.")
+
+        edge_tokens = _normalize_name_list(edge_entity_tokens)
+        face_tokens = _normalize_name_list(face_entity_tokens)
+        if operation_name in {"patch_surface", "stitch_surfaces", "extend_surface"} and not edge_tokens:
+            blockers.append(f"edge_entity_tokens are required for {operation_name}.")
+        if operation_name in {"trim_surface", "create_ruled_surface"} and not face_tokens and not edge_tokens:
+            blockers.append(f"face_entity_tokens or edge_entity_tokens are required for {operation_name}.")
+
+        inspection = inspect_surface_bodies(
+            body_names=[body_name] if body_name else None,
+            body_entity_tokens=[body_entity_token] if body_entity_token else None,
+            include_edges=True,
+        )
+        inspection_result = inspection.get("result") if isinstance(inspection, dict) else None
+        target = None
+        if inspection_result:
+            warnings.extend(inspection_result.get("warnings") or [])
+            bodies = inspection_result.get("bodies") or []
+            if bodies:
+                target = bodies[0]
+                if target.get("classification") == "solid" and not allow_solid_body:
+                    blockers.append("Target body is solid; set allow_solid_body=true only when the selected operation intentionally works on solid-body faces.")
+                candidate_tools = set(target.get("candidateRepairTools") or [])
+                if operation_name in _SURFACE_REPAIR_OPERATIONS and operation_name not in candidate_tools and operation_name != "create_ruled_surface":
+                    warnings.append(f"Operation '{operation_name}' was not listed as a candidate repair for the target body.")
+            else:
+                blockers.append("No matching target body was found.")
+        else:
+            blockers.append("Surface inspection failed before planning repair.")
+
+        ok_to_proceed = not blockers
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": ok_to_proceed,
+                "riskLevel": "medium" if ok_to_proceed else "high",
+                "blockingReasons": blockers,
+                "operation": operation_name,
+                "target": target,
+                "edgeEntityTokens": edge_tokens,
+                "faceEntityTokens": face_tokens,
+                "parameters": dict(parameters or {}),
+                "reason": reason,
+                "allowSolidBody": bool(allow_solid_body),
+                "inspection": inspection_result,
+                "warnings": warnings + [
+                    "This is a read-only surface repair plan; it does not patch, stitch, thicken, trim, extend, or create ruled surfaces.",
+                    "Future repair tools must compare design state after mutation and validate model health.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan surface repair: {str(e)}"}
+
+
+def _sheet_metal_rules(design):
+    rules = []
+    for attr in ("sheetMetalRules", "sheetMetalRuleLibrary", "sheetMetalRuleLibraries"):
+        exposed = _safe_value(lambda attr=attr: getattr(design, attr))
+        if not exposed:
+            continue
+        if hasattr(exposed, "rules"):
+            exposed = _safe_value(lambda exposed=exposed: exposed.rules)
+        rules.extend(_collection_items(exposed))
+    seen = set()
+    unique = []
+    for rule in rules:
+        key = _safe_value(lambda rule=rule: rule.name) or id(rule)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(rule)
+    return unique
+
+
+@register_tool("inspect_sheet_metal_rules")
+def inspect_sheet_metal_rules():
+    try:
+        design = get_active_design()
+        active_rule = (
+            _safe_value(lambda: design.activeSheetMetalRule)
+            or _safe_value(lambda: design.sheetMetalRule)
+            or _safe_value(lambda: design.defaultSheetMetalRule)
+        )
+        rules = _sheet_metal_rules(design)
+        active_name = _safe_value(lambda: active_rule.name)
+        bodies = [_body_sheet_metal_report(body, component_name) for body, component_name in _body_objects(design.rootComponent)]
+        sheet_bodies = [body for body in bodies if body.get("isSheetMetal")]
+        warnings = []
+        if not active_rule:
+            warnings.append("Fusion did not expose an active sheet-metal rule for this design.")
+        if not rules:
+            warnings.append("Fusion did not expose a sheet-metal rule collection through this API surface.")
+        if not sheet_bodies:
+            warnings.append("No sheet-metal bodies were detected by exposed body metadata.")
+        return {
+            "result": {
+                "readOnly": True,
+                "designType": _safe_value(lambda: design.designType),
+                "activeRule": _rule_report(active_rule, active=True),
+                "ruleCount": len(rules),
+                "rules": [
+                    _rule_report(rule, index=index, active=(_safe_value(lambda rule=rule: rule.name) == active_name))
+                    for index, rule in enumerate(rules)
+                ],
+                "bodyCount": len(bodies),
+                "sheetMetalBodyCount": len(sheet_bodies),
+                "bodies": bodies,
+                "warnings": warnings,
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect sheet-metal rules: {str(e)}"}
+
+
+@register_tool("preflight_flat_pattern")
+def preflight_flat_pattern(body_name=None, body_entity_token=None):
+    try:
+        inspection = inspect_sheet_metal_rules()
+        if "error" in inspection:
+            return inspection
+        result = inspection.get("result") or {}
+        matches = _resolve_bodies(body_name=body_name, body_entity_token=body_entity_token, include_all=False)
+        if body_name is None and body_entity_token is None:
+            matches = [
+                (body, component_name)
+                for body, component_name in _body_objects(get_active_design().rootComponent)
+                if _body_sheet_metal_report(body, component_name).get("isSheetMetal")
+            ]
+        blockers = []
+        warnings = list(result.get("warnings") or [])
+        if not result.get("activeRule"):
+            blockers.append("No active sheet-metal rule was exposed.")
+        if not matches:
+            blockers.append("No target sheet-metal body was found. Provide body_name/body_entity_token from inspection or create a sheet-metal body first.")
+        target_reports = [_body_sheet_metal_report(body, component_name) for body, component_name in matches]
+        for target in target_reports:
+            if not target.get("isSheetMetal"):
+                blockers.append(f"Target body '{target.get('bodyName')}' is not identified as sheet metal by exposed metadata.")
+
+        design = get_active_design()
+        flat_pattern = _safe_value(lambda: design.flatPattern) or _safe_value(lambda: design.rootComponent.flatPattern)
+        if not flat_pattern and matches:
+            flat_pattern = _safe_value(lambda: matches[0][0].flatPattern)
+        can_export = bool(flat_pattern) and not blockers
+        if not flat_pattern:
+            warnings.append("Fusion did not expose an existing flatPattern object; unfold/export tooling should remain blocked until a reliable API path is verified.")
+
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": can_export,
+                "riskLevel": "low" if can_export else "high",
+                "blockingReasons": blockers,
+                "activeRule": result.get("activeRule"),
+                "targetBodies": target_reports,
+                "flatPatternAvailable": bool(flat_pattern),
+                "flatPattern": _entity_ref(flat_pattern) if flat_pattern else None,
+                "warnings": warnings,
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to preflight flat pattern: {str(e)}"}
+
+
+_SHEET_METAL_OPERATIONS = {
+    "create_flange",
+    "create_bend",
+    "unfold_sheet_metal",
+    "refold_sheet_metal",
+    "export_flat_pattern",
+}
+
+
+@register_tool("plan_sheet_metal_workflow")
+def plan_sheet_metal_workflow(operation=None, body_name=None, body_entity_token=None, edge_entity_tokens=None, face_entity_tokens=None, rule_name=None, parameters=None, reason=None):
+    """
+    Read-only sheet-metal workflow planner.
+
+    This validates explicit operation intent, targets, rule selection, and
+    parameters before future sheet-metal mutators are allowed. It does not
+    create flanges/bends, unfold/refold, or export files.
+    """
+    try:
+        operation_name = str(operation or "").strip().lower()
+        blockers = []
+        warnings = []
+        if operation_name not in _SHEET_METAL_OPERATIONS:
+            blockers.append(f"operation must be one of {sorted(_SHEET_METAL_OPERATIONS)}.")
+        if parameters is not None and not isinstance(parameters, dict):
+            blockers.append("parameters must be an object when supplied.")
+        if operation_name in {"create_flange", "create_bend"} and not rule_name:
+            blockers.append("rule_name is required for creation operations; do not infer sheet-metal rules.")
+        if operation_name in {"create_flange", "create_bend", "unfold_sheet_metal", "refold_sheet_metal"} and (not isinstance(reason, str) or not reason.strip()):
+            blockers.append(f"reason is required for {operation_name}.")
+
+        edge_tokens = _normalize_name_list(edge_entity_tokens)
+        face_tokens = _normalize_name_list(face_entity_tokens)
+        if operation_name == "create_flange" and not edge_tokens:
+            blockers.append("edge_entity_tokens are required for create_flange.")
+        if operation_name == "create_bend" and not face_tokens and not edge_tokens:
+            blockers.append("face_entity_tokens or edge_entity_tokens are required for create_bend.")
+
+        inspection = inspect_sheet_metal_rules()
+        inspection_result = inspection.get("result") if isinstance(inspection, dict) else None
+        target_report = None
+        if inspection_result:
+            warnings.extend(inspection_result.get("warnings") or [])
+            rules = inspection_result.get("rules") or []
+            active_rule = inspection_result.get("activeRule")
+            rule_names = {rule.get("name") for rule in rules if rule.get("name")}
+            if active_rule and active_rule.get("name"):
+                rule_names.add(active_rule.get("name"))
+            if rule_name and rule_name not in rule_names:
+                blockers.append(f"rule_name '{rule_name}' was not found in inspected sheet-metal rules.")
+            matches = []
+            for body in inspection_result.get("bodies") or []:
+                if body_name and body.get("bodyName") != body_name and body.get("key") != body_name:
+                    continue
+                if body_entity_token and body.get("entityToken") != body_entity_token:
+                    continue
+                if body_name or body_entity_token:
+                    matches.append(body)
+            if body_name or body_entity_token:
+                if not matches:
+                    blockers.append("No matching target sheet-metal body was found.")
+                else:
+                    target_report = matches[0]
+                    if not target_report.get("isSheetMetal"):
+                        blockers.append(f"Target body '{target_report.get('bodyName')}' is not identified as sheet metal by exposed metadata.")
+            elif operation_name in {"unfold_sheet_metal", "refold_sheet_metal", "export_flat_pattern"}:
+                blockers.append("body_name or body_entity_token is required for existing sheet-metal body operations.")
+        else:
+            blockers.append("Sheet-metal inspection failed before planning workflow.")
+
+        flat_preflight = None
+        if operation_name in {"unfold_sheet_metal", "refold_sheet_metal", "export_flat_pattern"}:
+            flat = preflight_flat_pattern(body_name=body_name, body_entity_token=body_entity_token)
+            flat_preflight = flat.get("result") if isinstance(flat, dict) else None
+            if flat_preflight:
+                warnings.extend(flat_preflight.get("warnings") or [])
+                if flat_preflight.get("blockingReasons") and operation_name == "export_flat_pattern":
+                    blockers.extend(flat_preflight.get("blockingReasons"))
+            else:
+                blockers.append("Flat-pattern preflight failed before planning workflow.")
+
+        ok_to_proceed = not blockers
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": ok_to_proceed,
+                "riskLevel": "medium" if ok_to_proceed else "high",
+                "blockingReasons": blockers,
+                "operation": operation_name,
+                "targetBody": target_report,
+                "ruleName": rule_name,
+                "edgeEntityTokens": edge_tokens,
+                "faceEntityTokens": face_tokens,
+                "parameters": dict(parameters or {}),
+                "reason": reason,
+                "inspection": inspection_result,
+                "flatPatternPreflight": flat_preflight,
+                "warnings": warnings + [
+                    "This is a read-only sheet-metal workflow plan; it does not create flanges, create bends, unfold, refold, or export files.",
+                    "Sheet-metal rules, material, bend allowances, and manufacturing parameters must be explicit; FusionMCP does not infer them.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan sheet-metal workflow: {str(e)}"}
+
+
+def _normalize_name_list(names):
+    if names is None:
+        return []
+    if isinstance(names, str):
+        return [names]
+    try:
+        return [str(name) for name in names if str(name).strip()]
+    except TypeError:
+        return [str(names)]
+
+
+def _body_key(body, component_name):
+    return f"{component_name}/{_safe_value(lambda: body.name)}"
+
+
+def _resolve_named_body_set(names=None, entity_tokens=None, include_all=False):
+    design = get_active_design()
+    requested_names = set(_normalize_name_list(names))
+    requested_tokens = set(_normalize_name_list(entity_tokens))
+    include_everything = bool(include_all) or (not requested_names and not requested_tokens)
+    matches = []
+    missing_names = set(requested_names)
+    missing_tokens = set(requested_tokens)
+
+    for body, component_name in _body_objects(design.rootComponent):
+        body_name = _safe_value(lambda body=body: body.name)
+        key = _body_key(body, component_name)
+        token = _safe_value(lambda body=body: body.entityToken)
+        name_match = body_name in requested_names or key in requested_names
+        token_match = token in requested_tokens if token else False
+        if include_everything or name_match or token_match:
+            matches.append((body, component_name))
+            missing_names.discard(body_name)
+            missing_names.discard(key)
+            if token:
+                missing_tokens.discard(token)
+
+    return matches, sorted(missing_names), sorted(missing_tokens)
+
+
+def _bbox_axis_gap_cm(a, b, axis):
+    if a["max"][axis] < b["min"][axis]:
+        return b["min"][axis] - a["max"][axis]
+    if b["max"][axis] < a["min"][axis]:
+        return a["min"][axis] - b["max"][axis]
+    return 0.0
+
+
+def _bbox_axis_overlap_cm(a, b, axis):
+    return min(a["max"][axis], b["max"][axis]) - max(a["min"][axis], b["min"][axis])
+
+
+def _bbox_axis_size_mm(bbox, axis):
+    if not bbox:
+        return None
+    return round((bbox["max"][axis] - bbox["min"][axis]) * 10.0, 6)
+
+
+def _bbox_axis_center_mm(bbox, axis):
+    if not bbox:
+        return None
+    return round(((bbox["min"][axis] + bbox["max"][axis]) / 2.0) * 10.0, 6)
+
+
+def _axis_index(axis):
+    key = str(axis or "z").strip().lower().lstrip("+-")
+    return {"x": 0, "y": 1, "z": 2}.get(key, 2)
+
+
+def _footprint_axes(thickness_axis):
+    axis = _axis_index(thickness_axis)
+    return [index for index in range(3) if index != axis]
+
+
+def _bbox_footprint_overlap_report(a, b, footprint_axes):
+    overlaps_cm = [_bbox_axis_overlap_cm(a, b, axis) for axis in footprint_axes]
+    overlaps_mm = [round(max(0.0, overlap) * 10.0, 6) for overlap in overlaps_cm]
+    return {
+        "overlaps": all(overlap > 0 for overlap in overlaps_cm),
+        "overlapMm": overlaps_mm,
+        "overlapAreaMm2": round(overlaps_mm[0] * overlaps_mm[1], 6) if len(overlaps_mm) == 2 else None,
+    }
+
+
+def _bbox_pair_report(body_a, component_a, body_b, component_b, minimum_clearance_mm=0.0):
+    bbox_a = _bbox_to_dict(body_a)
+    bbox_b = _bbox_to_dict(body_b)
+    if not bbox_a or not bbox_b:
+        return None
+    gaps_cm = [_bbox_axis_gap_cm(bbox_a, bbox_b, axis) for axis in range(3)]
+    overlaps_cm = [_bbox_axis_overlap_cm(bbox_a, bbox_b, axis) for axis in range(3)]
+    distance_cm = math.sqrt(sum(gap * gap for gap in gaps_cm))
+    distance_mm = round(distance_cm * 10.0, 6)
+    bbox_intersects = all(overlap >= 0 for overlap in overlaps_cm)
+    overlap_mm = [round(max(0.0, overlap) * 10.0, 6) for overlap in overlaps_cm]
+    overlap_volume_mm3 = round(overlap_mm[0] * overlap_mm[1] * overlap_mm[2], 6) if bbox_intersects else 0.0
+    clearance_ok = not bbox_intersects and distance_mm >= float(minimum_clearance_mm)
+    return {
+        "bodyA": {
+            "bodyName": _safe_value(lambda: body_a.name),
+            "componentName": component_a,
+            "entityToken": _safe_value(lambda: body_a.entityToken),
+            "boundingBox": bbox_a,
+        },
+        "bodyB": {
+            "bodyName": _safe_value(lambda: body_b.name),
+            "componentName": component_b,
+            "entityToken": _safe_value(lambda: body_b.entityToken),
+            "boundingBox": bbox_b,
+        },
+        "bboxIntersects": bool(bbox_intersects),
+        "bboxOverlapMm": overlap_mm if bbox_intersects else [0.0, 0.0, 0.0],
+        "bboxOverlapVolumeMm3": overlap_volume_mm3,
+        "bboxDistanceMm": distance_mm,
+        "minimumClearanceMm": float(minimum_clearance_mm),
+        "clearanceOk": bool(clearance_ok),
+        "method": "axis_aligned_bounding_box",
+    }
+
+
+def _unique_body_pairs(targets, tools=None):
+    if tools is None:
+        pairs = []
+        for i, first in enumerate(targets):
+            for second in targets[i + 1:]:
+                pairs.append((first, second))
+        return pairs
+    pairs = []
+    seen = set()
+    for first in targets:
+        for second in tools:
+            if first[0] is second[0]:
+                continue
+            key = tuple(sorted((id(first[0]), id(second[0]))))
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append((first, second))
+    return pairs
+
+
+def _api_candidate_status(owner, method_names):
+    if owner is None:
+        return {"available": False, "method": None}
+    for method_name in method_names:
+        method = getattr(owner, method_name, None)
+        if callable(method):
+            return {"available": True, "method": method_name}
+    return {"available": False, "method": None}
+
+
+def _exact_analysis_context():
+    app = adsk.core.Application.get()
+    design = get_active_design()
+    root = design.rootComponent
+    temp_brep_cls = getattr(adsk.fusion, "TemporaryBRepManager", None)
+    temp_brep_manager = _safe_value(lambda: temp_brep_cls.get()) if temp_brep_cls is not None else None
+    boolean_candidate = _api_candidate_status(
+        temp_brep_manager,
+        (
+            "booleanOperation",
+            "executeBooleanOperation",
+            "booleanOperations",
+            "intersect",
+        ),
+    )
+    copy_candidate = _api_candidate_status(temp_brep_manager, ("copy", "copyBody"))
+    measure_manager = (
+        _safe_value(lambda: app.measureManager)
+        or _safe_value(lambda: design.measureManager)
+        or _safe_value(lambda: root.measureManager)
+    )
+    distance_candidate = _api_candidate_status(
+        measure_manager,
+        (
+            "measureMinimumDistance",
+            "measureDistance",
+            "minimumDistance",
+        ),
+    )
+    return {
+        "design": design,
+        "root": root,
+        "temporaryBRepManager": temp_brep_manager,
+        "booleanCandidate": boolean_candidate,
+        "copyCandidate": copy_candidate,
+        "measureManager": measure_manager,
+        "distanceCandidate": distance_candidate,
+        "exactInterferenceSupported": bool(temp_brep_manager and boolean_candidate["available"] and copy_candidate["available"]),
+        "exactMinimumDistanceSupported": bool(measure_manager and distance_candidate["available"]),
+    }
+
+
+def _temporary_copy(temp_brep_manager, copy_method_name, body):
+    method = getattr(temp_brep_manager, copy_method_name, None)
+    if not callable(method):
+        return None
+    return method(body)
+
+
+def _intersection_operation_type():
+    for enum_name in ("BooleanTypes", "FeatureOperations"):
+        enum = getattr(adsk.fusion, enum_name, None)
+        for attr in ("IntersectionBooleanType", "IntersectBooleanType", "IntersectFeatureOperation"):
+            value = getattr(enum, attr, None) if enum is not None else None
+            if value is not None:
+                return value
+    return None
+
+
+def _truthy_exact_body_result(result):
+    if result is None:
+        return False
+    if isinstance(result, bool):
+        return result
+    for attr in ("volume", "area"):
+        value = _safe_value(lambda attr=attr: getattr(result, attr))
+        if isinstance(value, (int, float)) and value > 0:
+            return True
+    return True
+
+
+def _run_exact_boolean_intersection(context, body_a, body_b):
+    temp_brep_manager = context["temporaryBRepManager"]
+    copy_method = context["copyCandidate"]["method"]
+    boolean_method = context["booleanCandidate"]["method"]
+    copy_a = _temporary_copy(temp_brep_manager, copy_method, body_a)
+    copy_b = _temporary_copy(temp_brep_manager, copy_method, body_b)
+    if copy_a is None or copy_b is None:
+        return None, "TemporaryBRepManager copy method did not return both body copies."
+    method = getattr(temp_brep_manager, boolean_method, None)
+    if not callable(method):
+        return None, f"TemporaryBRepManager method '{boolean_method}' is not callable."
+    op_type = _intersection_operation_type()
+    variants = []
+    if op_type is not None:
+        variants.extend([(copy_a, copy_b, op_type), (copy_a, op_type, copy_b)])
+    variants.extend([(copy_a, copy_b), (copy_b,), tuple()])
+    last_error = None
+    for args in variants:
+        try:
+            result = method(*args)
+            return _truthy_exact_body_result(result if result is not None else copy_a), None
+        except TypeError as exc:
+            last_error = str(exc)
+        except Exception as exc:
+            last_error = str(exc)
+            break
+    return None, f"Exact Boolean intersection candidate did not accept a supported signature: {last_error}"
+
+
+def _distance_value_mm(result):
+    if result is None:
+        return None
+    if isinstance(result, (int, float)):
+        return float(result) * 10.0
+    for attr in ("value", "distance", "minimumDistance"):
+        value = _safe_value(lambda attr=attr: getattr(result, attr))
+        if isinstance(value, (int, float)):
+            return float(value) * 10.0
+    return None
+
+
+def _run_exact_minimum_distance(context, body_a, body_b):
+    measure_manager = context["measureManager"]
+    method_name = context["distanceCandidate"]["method"]
+    method = getattr(measure_manager, method_name, None)
+    if not callable(method):
+        return None, f"MeasureManager method '{method_name}' is not callable."
+    variants = [(body_a, body_b), ([body_a], [body_b]), (body_a,), tuple()]
+    last_error = None
+    for args in variants:
+        try:
+            result = method(*args)
+            distance_mm = _distance_value_mm(result)
+            if distance_mm is None:
+                return None, "Exact distance candidate returned no numeric distance value."
+            return round(distance_mm, 6), None
+        except TypeError as exc:
+            last_error = str(exc)
+        except Exception as exc:
+            last_error = str(exc)
+            break
+    return None, f"Exact minimum-distance candidate did not accept a supported signature: {last_error}"
+
+
+@register_tool("inspect_analysis_capabilities")
+def inspect_analysis_capabilities():
+    """
+    Read-only capability probe for exact analysis APIs.
+
+    This does not run exact BRep analysis. It reports whether the current Fusion
+    runtime exposes API candidates that would be required before exact
+    interference or minimum-distance tools can be implemented honestly.
+    """
+    try:
+        context = _exact_analysis_context()
+        root = context["root"]
+        bodies = [
+            body
+            for body, _component_name in _body_objects(root)
+            if _safe_value(lambda body=body: body.isVisible, True)
+        ]
+        exact_interference_ready = context["exactInterferenceSupported"]
+        exact_distance_ready = context["exactMinimumDistanceSupported"]
+        blockers = []
+        if not exact_interference_ready:
+            blockers.append("Exact interference is not enabled because a verified TemporaryBRepManager copy plus Boolean intersection path is not exposed.")
+        if not exact_distance_ready:
+            blockers.append("Exact minimum-distance analysis is not enabled because a verified measure-manager distance path is not exposed.")
+        if len(bodies) < 2:
+            blockers.append("At least two visible bodies are required for a live exact-analysis fixture probe.")
+
+        return {
+            "result": {
+                "readOnly": True,
+                "broadPhaseAvailable": True,
+                "visibleBodyCount": len(bodies),
+                "exactInterference": {
+                    "supported": exact_interference_ready,
+                    "status": "candidate_api_available" if exact_interference_ready else "unsupported",
+                    "temporaryBRepManagerAvailable": bool(context["temporaryBRepManager"]),
+                    "copyCandidate": context["copyCandidate"],
+                    "booleanCandidate": context["booleanCandidate"],
+                },
+                "exactMinimumDistance": {
+                    "supported": exact_distance_ready,
+                    "status": "candidate_api_available" if exact_distance_ready else "unsupported",
+                    "measureManagerAvailable": bool(context["measureManager"]),
+                    "distanceCandidate": context["distanceCandidate"],
+                },
+                "blockingReasons": blockers,
+                "nextStep": "Validate candidate APIs against a throwaway two-body fixture before enabling exact interference or minimum-distance tools.",
+                "warnings": [
+                    "Candidate API availability is not proof of exact-analysis correctness.",
+                    "Current interference_check and clearance_check remain broad-phase unless a verified exact-analysis implementation is added.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to inspect analysis capabilities: {str(e)}"}
+
+
+@register_tool("interference_check")
+def interference_check(body_names=None, body_entity_tokens=None, include_invisible=False, max_pairs=200):
+    """
+    Read-only broad-phase interference report.
+
+    This reports bounding-box intersections and overlap estimates. It does not
+    claim exact BRep Boolean intersection volume unless a future Fusion API path
+    is added explicitly.
+    """
+    try:
+        bodies, missing_names, missing_tokens = _resolve_named_body_set(
+            names=body_names,
+            entity_tokens=body_entity_tokens,
+            include_all=not body_names and not body_entity_tokens,
+        )
+        if not include_invisible:
+            bodies = [(body, component) for body, component in bodies if _safe_value(lambda body=body: body.isVisible, True)]
+        if len(bodies) < 2:
+            return {"error": "interference_check requires at least two matching bodies."}
+        try:
+            max_pairs = max(1, min(int(max_pairs), 1000))
+        except (TypeError, ValueError):
+            max_pairs = 200
+        checked_pairs = []
+        collisions = []
+        for first, second in _unique_body_pairs(bodies)[:max_pairs]:
+            report = _bbox_pair_report(first[0], first[1], second[0], second[1])
+            if not report:
+                continue
+            checked_pairs.append(report)
+            if report["bboxIntersects"]:
+                collisions.append(report)
+        return {
+            "result": {
+                "readOnly": True,
+                "method": "axis_aligned_bounding_box",
+                "bodyCount": len(bodies),
+                "pairCount": len(checked_pairs),
+                "interferenceCount": len(collisions),
+                "interferences": collisions,
+                "checkedPairs": checked_pairs,
+                "missingBodyNames": missing_names,
+                "missingEntityTokens": missing_tokens,
+                "warnings": [
+                    "This is a broad-phase bounding-box interference check, not an exact Boolean intersection report.",
+                    "Use inspect bodies/faces or a future exact-analysis tool before making manufacturing decisions.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to run interference check: {str(e)}"}
+
+
+@register_tool("clearance_check")
+def clearance_check(target_body_names=None, tool_body_names=None, target_body_entity_tokens=None, tool_body_entity_tokens=None, minimum_clearance="0 mm", include_invisible=False, max_pairs=200):
+    """
+    Read-only broad-phase clearance report between explicit target and tool sets.
+    """
+    try:
+        design = get_active_design()
+        minimum_clearance_mm = _length_expression_to_mm(design, minimum_clearance, 0.0)
+        targets, missing_target_names, missing_target_tokens = _resolve_named_body_set(
+            names=target_body_names,
+            entity_tokens=target_body_entity_tokens,
+            include_all=False,
+        )
+        tools, missing_tool_names, missing_tool_tokens = _resolve_named_body_set(
+            names=tool_body_names,
+            entity_tokens=tool_body_entity_tokens,
+            include_all=False,
+        )
+        if not include_invisible:
+            targets = [(body, component) for body, component in targets if _safe_value(lambda body=body: body.isVisible, True)]
+            tools = [(body, component) for body, component in tools if _safe_value(lambda body=body: body.isVisible, True)]
+        if not targets:
+            return {"error": "clearance_check requires at least one target body name or entity token."}
+        if not tools:
+            return {"error": "clearance_check requires at least one tool body name or entity token."}
+        try:
+            max_pairs = max(1, min(int(max_pairs), 1000))
+        except (TypeError, ValueError):
+            max_pairs = 200
+        checked_pairs = []
+        violations = []
+        for first, second in _unique_body_pairs(targets, tools)[:max_pairs]:
+            report = _bbox_pair_report(first[0], first[1], second[0], second[1], minimum_clearance_mm)
+            if not report:
+                continue
+            checked_pairs.append(report)
+            if report["bboxIntersects"] or report["bboxDistanceMm"] < minimum_clearance_mm:
+                violations.append(report)
+        return {
+            "result": {
+                "readOnly": True,
+                "method": "axis_aligned_bounding_box",
+                "minimumClearanceMm": round(minimum_clearance_mm, 6),
+                "targetCount": len(targets),
+                "toolCount": len(tools),
+                "pairCount": len(checked_pairs),
+                "violationCount": len(violations),
+                "violations": violations,
+                "checkedPairs": checked_pairs,
+                "missingTargetBodyNames": missing_target_names,
+                "missingTargetEntityTokens": missing_target_tokens,
+                "missingToolBodyNames": missing_tool_names,
+                "missingToolEntityTokens": missing_tool_tokens,
+                "warnings": [
+                    "This is a broad-phase bounding-box clearance check, not an exact minimum-distance BRep solver.",
+                    "Do not infer manufacturing tolerances; minimum_clearance must be supplied explicitly.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to run clearance check: {str(e)}"}
+
+
+@register_tool("verify_insert_alignment")
+def verify_insert_alignment(plate_body_name=None, socket_body_name=None, logo_body_names=None, plate_body_entity_token=None, socket_body_entity_token=None, logo_body_entity_tokens=None, thickness_axis="z", expected_plate_thickness=None, flush_mode="flush", tolerance="0.05 mm", include_invisible=False):
+    """
+    Read-only insert/socket pre-export alignment guard.
+
+    This uses axis-aligned bounding boxes as a conservative broad-phase check for
+    removable plates, matching sockets/pockets/cutters, and raised logo bodies.
+    It does not modify visibility, sketches, features, or bodies.
+    """
+    try:
+        design = get_active_design()
+        tolerance_mm = max(0.0, _length_expression_to_mm(design, tolerance, 0.05))
+        expected_thickness_mm = (
+            _length_expression_to_mm(design, expected_plate_thickness, 0.0)
+            if expected_plate_thickness is not None
+            else None
+        )
+        axis = _axis_index(thickness_axis)
+        footprint_axes = _footprint_axes(thickness_axis)
+
+        blockers = []
+        if not _normalize_name_list(plate_body_name) and not _normalize_name_list(plate_body_entity_token):
+            blockers.append("plate_body_name or plate_body_entity_token is required.")
+        if not _normalize_name_list(socket_body_name) and not _normalize_name_list(socket_body_entity_token):
+            blockers.append("socket_body_name or socket_body_entity_token is required.")
+        if blockers:
+            return {
+                "result": {
+                    "readOnly": True,
+                    "okToExport": False,
+                    "method": "axis_aligned_bounding_box",
+                    "blockingReasons": blockers,
+                    "warnings": [
+                        "This is a broad-phase axis-aligned bounding-box check, not exact BRep contact validation.",
+                        "Set thickness_axis to the plate/socket depth axis for the active model orientation.",
+                    ],
+                }
+            }
+
+        plate_matches, missing_plate_names, missing_plate_tokens = _resolve_named_body_set(
+            names=plate_body_name,
+            entity_tokens=plate_body_entity_token,
+            include_all=False,
+        )
+        socket_matches, missing_socket_names, missing_socket_tokens = _resolve_named_body_set(
+            names=socket_body_name,
+            entity_tokens=socket_body_entity_token,
+            include_all=False,
+        )
+        requested_logo_names = _normalize_name_list(logo_body_names)
+        requested_logo_tokens = _normalize_name_list(logo_body_entity_tokens)
+        if requested_logo_names or requested_logo_tokens:
+            logo_matches, missing_logo_names, missing_logo_tokens = _resolve_named_body_set(
+                names=requested_logo_names,
+                entity_tokens=requested_logo_tokens,
+                include_all=False,
+            )
+        else:
+            logo_matches, missing_logo_names, missing_logo_tokens = [], [], []
+        if not include_invisible:
+            plate_matches = [(body, component) for body, component in plate_matches if _safe_value(lambda body=body: body.isVisible, True)]
+            socket_matches = [(body, component) for body, component in socket_matches if _safe_value(lambda body=body: body.isVisible, True)]
+            logo_matches = [(body, component) for body, component in logo_matches if _safe_value(lambda body=body: body.isVisible, True)]
+
+        warnings = [
+            "This is a broad-phase axis-aligned bounding-box check, not exact BRep contact validation.",
+            "Set thickness_axis to the plate/socket depth axis for the active model orientation.",
+        ]
+        if len(plate_matches) != 1:
+            blockers.append(f"Expected exactly one plate body, found {len(plate_matches)}.")
+        if len(socket_matches) != 1:
+            blockers.append(f"Expected exactly one socket/cutter body, found {len(socket_matches)}.")
+        if missing_plate_names:
+            blockers.append(f"Missing plate body names: {', '.join(missing_plate_names)}.")
+        if missing_socket_names:
+            blockers.append(f"Missing socket body names: {', '.join(missing_socket_names)}.")
+        if missing_logo_names:
+            blockers.append(f"Missing logo body names: {', '.join(missing_logo_names)}.")
+        if missing_plate_tokens:
+            blockers.append(f"Missing plate body entity tokens: {', '.join(missing_plate_tokens)}.")
+        if missing_socket_tokens:
+            blockers.append(f"Missing socket body entity tokens: {', '.join(missing_socket_tokens)}.")
+        if missing_logo_tokens:
+            blockers.append(f"Missing logo body entity tokens: {', '.join(missing_logo_tokens)}.")
+        if blockers:
+            return {
+                "result": {
+                    "readOnly": True,
+                    "okToExport": False,
+                    "method": "axis_aligned_bounding_box",
+                    "blockingReasons": blockers,
+                    "warnings": warnings,
+                    "missingBodyNames": sorted(set(missing_plate_names + missing_socket_names + missing_logo_names)),
+                    "missingEntityTokens": sorted(set(missing_plate_tokens + missing_socket_tokens + missing_logo_tokens)),
+                }
+            }
+
+        plate, plate_component = plate_matches[0]
+        socket, socket_component = socket_matches[0]
+        plate_bbox = _bbox_to_dict(plate)
+        socket_bbox = _bbox_to_dict(socket)
+        if not plate_bbox:
+            blockers.append(f"Plate body '{_safe_value(lambda: plate.name)}' has no bounding box.")
+        if not socket_bbox:
+            blockers.append(f"Socket body '{_safe_value(lambda: socket.name)}' has no bounding box.")
+        if blockers:
+            return {
+                "result": {
+                    "readOnly": True,
+                    "okToExport": False,
+                    "method": "axis_aligned_bounding_box",
+                    "blockingReasons": blockers,
+                    "warnings": warnings,
+                }
+            }
+
+        footprint = _bbox_footprint_overlap_report(plate_bbox, socket_bbox, footprint_axes)
+        plate_thickness_mm = _bbox_axis_size_mm(plate_bbox, axis)
+        socket_depth_mm = _bbox_axis_size_mm(socket_bbox, axis)
+        depth_delta_mm = (
+            round(abs(socket_depth_mm - plate_thickness_mm), 6)
+            if plate_thickness_mm is not None and socket_depth_mm is not None
+            else None
+        )
+        expected_delta_mm = (
+            round(abs(plate_thickness_mm - expected_thickness_mm), 6)
+            if expected_thickness_mm is not None and plate_thickness_mm is not None
+            else None
+        )
+        center_delta_mm = [
+            round(abs(_bbox_axis_center_mm(plate_bbox, fp_axis) - _bbox_axis_center_mm(socket_bbox, fp_axis)), 6)
+            for fp_axis in footprint_axes
+        ]
+
+        checks = {
+            "plateSocketFootprintOverlap": bool(footprint["overlaps"]),
+            "socketDepthMatchesPlateThickness": depth_delta_mm is not None and depth_delta_mm <= tolerance_mm,
+            "expectedPlateThicknessMatches": True if expected_delta_mm is None else expected_delta_mm <= tolerance_mm,
+            "flushMode": str(flush_mode or "flush").lower(),
+            "centerOffsetMm": center_delta_mm,
+            "depthDeltaMm": depth_delta_mm,
+            "expectedThicknessDeltaMm": expected_delta_mm,
+            "toleranceMm": round(tolerance_mm, 6),
+            "thicknessAxis": str(thickness_axis or "z").lower(),
+        }
+        if not checks["plateSocketFootprintOverlap"]:
+            blockers.append("Plate footprint does not overlap socket footprint.")
+        if checks["flushMode"] == "flush" and not checks["socketDepthMatchesPlateThickness"]:
+            blockers.append("Socket depth does not match plate thickness within tolerance for flush mode.")
+        elif checks["flushMode"] not in {"flush", "proud", "recessed"}:
+            warnings.append("flush_mode should be one of flush, proud, or recessed; depth equality was still reported.")
+        if not checks["expectedPlateThicknessMatches"]:
+            blockers.append("Plate thickness does not match expected_plate_thickness within tolerance.")
+
+        logo_reports = []
+        separated_logos = []
+        non_overlapping_logos = []
+        for logo, logo_component in logo_matches:
+            logo_bbox = _bbox_to_dict(logo)
+            if not logo_bbox:
+                logo_reports.append({
+                    "bodyName": _safe_value(lambda logo=logo: logo.name),
+                    "componentName": logo_component,
+                    "hasBoundingBox": False,
+                })
+                warnings.append(f"Logo body '{_safe_value(lambda logo=logo: logo.name)}' has no bounding box.")
+                continue
+            logo_footprint = _bbox_footprint_overlap_report(logo_bbox, plate_bbox, footprint_axes)
+            separation_mm = round((logo_bbox["min"][axis] - plate_bbox["max"][axis]) * 10.0, 6)
+            below_plate_mm = round((plate_bbox["min"][axis] - logo_bbox["max"][axis]) * 10.0, 6)
+            separated = separation_mm > tolerance_mm
+            below_plate = below_plate_mm > tolerance_mm
+            if separated:
+                separated_logos.append(_safe_value(lambda logo=logo: logo.name))
+            if below_plate or not logo_footprint["overlaps"]:
+                non_overlapping_logos.append(_safe_value(lambda logo=logo: logo.name))
+            logo_reports.append({
+                "bodyName": _safe_value(lambda logo=logo: logo.name),
+                "componentName": logo_component,
+                "entityToken": _safe_value(lambda logo=logo: logo.entityToken),
+                "boundingBox": logo_bbox,
+                "sizeMm": _bbox_size_mm(logo_bbox),
+                "footprintOverlapWithPlate": logo_footprint,
+                "minAbovePlateTopMm": separation_mm,
+                "maxBelowPlateBottomMm": below_plate_mm,
+                "separatedFromPlate": bool(separated),
+                "belowPlate": bool(below_plate),
+            })
+        if separated_logos:
+            blockers.append(f"Logo bodies appear separated above the plate: {', '.join(separated_logos)}.")
+        if non_overlapping_logos:
+            blockers.append(f"Logo bodies do not have usable plate contact/footprint overlap: {', '.join(non_overlapping_logos)}.")
+        checks["logoBodiesOnOrIntersectPlate"] = not separated_logos and not non_overlapping_logos
+        checks["logoBodyCount"] = len(logo_reports)
+        checks["mirroredOrSeparatedGeometrySuspect"] = bool(blockers)
+
+        return {
+            "result": {
+                "readOnly": True,
+                "okToExport": not blockers,
+                "method": "axis_aligned_bounding_box",
+                "blockingReasons": blockers,
+                "warnings": warnings,
+                "checks": checks,
+                "plate": {
+                    "bodyName": _safe_value(lambda: plate.name),
+                    "componentName": plate_component,
+                    "entityToken": _safe_value(lambda: plate.entityToken),
+                    "boundingBox": plate_bbox,
+                    "sizeMm": _bbox_size_mm(plate_bbox),
+                },
+                "socket": {
+                    "bodyName": _safe_value(lambda: socket.name),
+                    "componentName": socket_component,
+                    "entityToken": _safe_value(lambda: socket.entityToken),
+                    "boundingBox": socket_bbox,
+                    "sizeMm": _bbox_size_mm(socket_bbox),
+                    "footprintOverlapWithPlate": footprint,
+                },
+                "logoBodies": logo_reports,
+                "nextActions": [
+                    "Fix blocking alignment issues before calling plan_multibody_3mf_export or export_asset.",
+                    "Use exact Fusion inspection or section analysis if bounding boxes are too coarse for the geometry.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to verify insert alignment: {str(e)}"}
+
+
+@register_tool("exact_interference_check")
+def exact_interference_check(body_names=None, body_entity_tokens=None, include_invisible=False, max_pairs=200):
+    """
+    Read-only exact BRep interference attempt using Fusion TemporaryBRepManager.
+
+    This refuses to run when candidate exact APIs are absent and returns
+    structured unsupported/error payloads instead of overstating broad-phase
+    bounding-box results.
+    """
+    try:
+        context = _exact_analysis_context()
+        if not context["exactInterferenceSupported"]:
+            return {
+                "error": "Exact interference APIs are not available in this Fusion runtime.",
+                "unsupported": True,
+                "capabilities": {
+                    "copyCandidate": context["copyCandidate"],
+                    "booleanCandidate": context["booleanCandidate"],
+                    "temporaryBRepManagerAvailable": bool(context["temporaryBRepManager"]),
+                },
+            }
+        bodies, missing_names, missing_tokens = _resolve_named_body_set(
+            names=body_names,
+            entity_tokens=body_entity_tokens,
+            include_all=not body_names and not body_entity_tokens,
+        )
+        if not include_invisible:
+            bodies = [(body, component) for body, component in bodies if _safe_value(lambda body=body: body.isVisible, True)]
+        if len(bodies) < 2:
+            return {"error": "exact_interference_check requires at least two matching bodies."}
+        try:
+            max_pairs = max(1, min(int(max_pairs), 1000))
+        except (TypeError, ValueError):
+            max_pairs = 200
+        checked_pairs = []
+        interferences = []
+        errors = []
+        for first, second in _unique_body_pairs(bodies)[:max_pairs]:
+            bbox_report = _bbox_pair_report(first[0], first[1], second[0], second[1])
+            exact_interferes, exact_error = _run_exact_boolean_intersection(context, first[0], second[0])
+            report = {
+                **(bbox_report or {}),
+                "method": "temporary_brep_boolean_intersection",
+                "exactInterferes": bool(exact_interferes) if exact_error is None else None,
+                "exactError": exact_error,
+            }
+            checked_pairs.append(report)
+            if exact_error:
+                errors.append(exact_error)
+            elif exact_interferes:
+                interferences.append(report)
+        return {
+            "result": {
+                "readOnly": True,
+                "method": "temporary_brep_boolean_intersection",
+                "validatedExact": False,
+                "bodyCount": len(bodies),
+                "pairCount": len(checked_pairs),
+                "interferenceCount": len(interferences),
+                "interferences": interferences,
+                "checkedPairs": checked_pairs,
+                "missingBodyNames": missing_names,
+                "missingEntityTokens": missing_tokens,
+                "errors": errors,
+                "warnings": [
+                    "This uses candidate Fusion exact-analysis APIs and still needs live fixture validation for this runtime.",
+                    "Use broad-phase interference_check first for fast triage; use this only when exact API capability is present.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to run exact interference check: {str(e)}"}
+
+
+@register_tool("exact_clearance_check")
+def exact_clearance_check(target_body_names=None, tool_body_names=None, target_body_entity_tokens=None, tool_body_entity_tokens=None, minimum_clearance="0 mm", include_invisible=False, max_pairs=200):
+    """
+    Read-only exact minimum-distance attempt using Fusion measure manager.
+    """
+    try:
+        context = _exact_analysis_context()
+        if not context["exactMinimumDistanceSupported"]:
+            return {
+                "error": "Exact minimum-distance APIs are not available in this Fusion runtime.",
+                "unsupported": True,
+                "capabilities": {
+                    "distanceCandidate": context["distanceCandidate"],
+                    "measureManagerAvailable": bool(context["measureManager"]),
+                },
+            }
+        design = get_active_design()
+        minimum_clearance_mm = _length_expression_to_mm(design, minimum_clearance, 0.0)
+        targets, missing_target_names, missing_target_tokens = _resolve_named_body_set(
+            names=target_body_names,
+            entity_tokens=target_body_entity_tokens,
+            include_all=False,
+        )
+        tools, missing_tool_names, missing_tool_tokens = _resolve_named_body_set(
+            names=tool_body_names,
+            entity_tokens=tool_body_entity_tokens,
+            include_all=False,
+        )
+        if not include_invisible:
+            targets = [(body, component) for body, component in targets if _safe_value(lambda body=body: body.isVisible, True)]
+            tools = [(body, component) for body, component in tools if _safe_value(lambda body=body: body.isVisible, True)]
+        if not targets:
+            return {"error": "exact_clearance_check requires at least one target body name or entity token."}
+        if not tools:
+            return {"error": "exact_clearance_check requires at least one tool body name or entity token."}
+        try:
+            max_pairs = max(1, min(int(max_pairs), 1000))
+        except (TypeError, ValueError):
+            max_pairs = 200
+        checked_pairs = []
+        violations = []
+        errors = []
+        for first, second in _unique_body_pairs(targets, tools)[:max_pairs]:
+            bbox_report = _bbox_pair_report(first[0], first[1], second[0], second[1], minimum_clearance_mm)
+            distance_mm, exact_error = _run_exact_minimum_distance(context, first[0], second[0])
+            clearance_ok = distance_mm is not None and distance_mm >= minimum_clearance_mm
+            report = {
+                **(bbox_report or {}),
+                "method": "measure_manager_minimum_distance",
+                "exactDistanceMm": distance_mm,
+                "minimumClearanceMm": round(minimum_clearance_mm, 6),
+                "clearanceOk": clearance_ok if exact_error is None else None,
+                "exactError": exact_error,
+            }
+            checked_pairs.append(report)
+            if exact_error:
+                errors.append(exact_error)
+            elif not clearance_ok:
+                violations.append(report)
+        return {
+            "result": {
+                "readOnly": True,
+                "method": "measure_manager_minimum_distance",
+                "validatedExact": False,
+                "minimumClearanceMm": round(minimum_clearance_mm, 6),
+                "targetCount": len(targets),
+                "toolCount": len(tools),
+                "pairCount": len(checked_pairs),
+                "violationCount": len(violations),
+                "violations": violations,
+                "checkedPairs": checked_pairs,
+                "missingTargetBodyNames": missing_target_names,
+                "missingTargetEntityTokens": missing_target_tokens,
+                "missingToolBodyNames": missing_tool_names,
+                "missingToolEntityTokens": missing_tool_tokens,
+                "errors": errors,
+                "warnings": [
+                    "This uses candidate Fusion exact minimum-distance APIs and still needs live fixture validation for this runtime.",
+                    "Do not infer manufacturing tolerances; minimum_clearance must be supplied explicitly.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to run exact clearance check: {str(e)}"}
+
+
 @register_tool("get_physical_properties")
 def get_physical_properties(body_name=None, body_entity_token=None, include_all=False):
     """
@@ -949,6 +4202,93 @@ def _selection_snapshot(app):
         info["selectionIndex"] = i
         selections.append(info)
     return {"count": len(selections), "items": selections}
+
+
+def _selection_set_collections(app, design, root):
+    candidates = [
+        _safe_value(lambda: design.selectionSets),
+        _safe_value(lambda: root.selectionSets),
+        _safe_value(lambda: app.userInterface.selectionSets),
+    ]
+    seen = set()
+    for collection in candidates:
+        if not collection:
+            continue
+        key = id(collection)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield collection
+
+
+def _selection_set_entities(selection_set):
+    candidates = [
+        _safe_value(lambda: selection_set.entities),
+        _safe_value(lambda: selection_set.selectionEntities),
+        _safe_value(lambda: selection_set.items),
+        selection_set,
+    ]
+    for collection in candidates:
+        items = _collection_items(collection)
+        if items:
+            entities = []
+            for item in items:
+                entities.append(_safe_value(lambda item=item: item.entity, item))
+            return [entity for entity in entities if entity is not None]
+    return []
+
+
+def _selection_set_snapshots(names=None, include_entities=True):
+    app = adsk.core.Application.get()
+    design = get_active_design()
+    root = design.rootComponent
+    name_filter = _name_filter(names)
+    sets = []
+    seen_names = set()
+    for collection in _selection_set_collections(app, design, root):
+        for index, selection_set in enumerate(_collection_items(collection)):
+            name = _safe_value(lambda selection_set=selection_set: selection_set.name) or f"Selection Set {index + 1}"
+            if name_filter and name not in name_filter:
+                continue
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            entities = _selection_set_entities(selection_set)
+            item = {
+                "name": name,
+                "entityCount": len(entities),
+            }
+            if include_entities:
+                item["entities"] = [_describe_selected_entity(entity) for entity in entities]
+            sets.append(item)
+    return sorted(sets, key=lambda item: item.get("name") or "")
+
+
+@register_tool("inspect_selection_sets")
+def inspect_selection_sets(names=None, include_entities=True):
+    """
+    Read named Fusion selection sets and their contents.
+
+    This covers export and targeting workflows where active UI selection is not
+    enough and agents should not fall back to raw scripts just to inspect saved
+    selection sets.
+    """
+    try:
+        sets = _selection_set_snapshots(names=names, include_entities=include_entities)
+        requested = sorted(_name_filter(names) or [])
+        found = {item.get("name") for item in sets}
+        missing = [name for name in requested if name not in found]
+        return {
+            "result": {
+                "count": len(sets),
+                "selectionSets": sets,
+                "missingSelectionSets": missing,
+            }
+        }
+    except Exception as e:
+        err = traceback.format_exc()
+        adsk.core.Application.get().log(f"Error inspecting selection sets: {e}\n{err}")
+        return {"error": f"Failed to inspect selection sets: {str(e)}"}
 
 
 def _design_state_snapshot(include_selections=True):
@@ -1337,6 +4677,22 @@ def _entity_ref(entity):
         "objectType": _safe_value(lambda: entity.objectType),
     }
 
+
+def _plane_to_dict(plane, index):
+    geometry = _safe_value(lambda: plane.geometry)
+    data = _entity_ref(plane)
+    data.update({
+        "index": index,
+        "origin": _point_to_list(_safe_value(lambda: geometry.origin)),
+        "normal": _vector_to_list(_safe_value(lambda: geometry.normal)),
+        "uDirection": _vector_to_list(_safe_value(lambda: geometry.uDirection)),
+        "vDirection": _vector_to_list(_safe_value(lambda: geometry.vDirection)),
+        "isLightBulbOn": _safe_value(lambda: plane.isLightBulbOn),
+        "isVisible": _safe_value(lambda: plane.isVisible),
+    })
+    return data
+
+
 def _component_reference_report(component):
     return {
         "componentName": _safe_value(lambda: component.name),
@@ -1355,6 +4711,23 @@ def _component_reference_report(component):
     }
 
 
+def _joint_limit_report(limits):
+    if not limits:
+        return None
+    fields = {
+        "isMinimumValueEnabled": _safe_value(lambda: limits.isMinimumValueEnabled),
+        "minimumValue": _safe_value(lambda: limits.minimumValue),
+        "minimumExpression": _safe_value(lambda: limits.minimumValue.expression),
+        "isMaximumValueEnabled": _safe_value(lambda: limits.isMaximumValueEnabled),
+        "maximumValue": _safe_value(lambda: limits.maximumValue),
+        "maximumExpression": _safe_value(lambda: limits.maximumValue.expression),
+        "isRestValueEnabled": _safe_value(lambda: limits.isRestValueEnabled),
+        "restValue": _safe_value(lambda: limits.restValue),
+        "restExpression": _safe_value(lambda: limits.restValue.expression),
+    }
+    return {key: value for key, value in fields.items() if value is not None}
+
+
 def _joint_motion_report(joint):
     motion = _safe_value(lambda: joint.jointMotion)
     return {
@@ -1362,6 +4735,10 @@ def _joint_motion_report(joint):
         "jointType": _safe_value(lambda: motion.jointType),
         "rotationAxis": _safe_value(lambda: motion.rotationAxis),
         "slideDirection": _safe_value(lambda: motion.slideDirection),
+        "normalDirection": _safe_value(lambda: motion.normalDirection),
+        "pitch": _safe_value(lambda: motion.pitch),
+        "rotationLimits": _joint_limit_report(_safe_value(lambda: motion.rotationLimits)),
+        "slideLimits": _joint_limit_report(_safe_value(lambda: motion.slideLimits)),
     } if motion else None
 
 
@@ -1458,6 +4835,96 @@ def get_assembly_joints(include_as_built=True):
         }
     except Exception as e:
         return {"error": f"Failed to inspect assembly joints: {str(e)}"}
+
+
+_JOINT_LIMIT_TYPES = {"rotation", "slide"}
+_JOINT_TYPES_WITH_ROTATION_LIMITS = {"revolute", "cylindrical", "pin_slot", "pin-slot", "planar", "ball"}
+_JOINT_TYPES_WITH_SLIDE_LIMITS = {"slider", "cylindrical", "pin_slot", "pin-slot", "planar"}
+
+
+@register_tool("plan_joint_limits")
+def plan_joint_limits(joint_name=None, joint_entity_token=None, limit_type=None, minimum=None, maximum=None, rest=None, enable_minimum=True, enable_maximum=True, enable_rest=False, reason=None):
+    """
+    Read-only assembly joint limit plan validator.
+
+    This validates target joint identity, motion type, limit expressions, and
+    reason before any future mutating limit setter can run.
+    """
+    try:
+        limit_kind = str(limit_type or "").strip().lower()
+        blockers = []
+        warnings = []
+        if not joint_name and not joint_entity_token:
+            blockers.append("joint_name or joint_entity_token is required.")
+        if limit_kind not in _JOINT_LIMIT_TYPES:
+            blockers.append(f"limit_type must be one of {sorted(_JOINT_LIMIT_TYPES)}.")
+        if not isinstance(reason, str) or not reason.strip():
+            blockers.append("reason is required for joint limit changes.")
+        if enable_minimum and (not isinstance(minimum, str) or not minimum.strip()):
+            blockers.append("minimum expression is required when enable_minimum=true.")
+        if enable_maximum and (not isinstance(maximum, str) or not maximum.strip()):
+            blockers.append("maximum expression is required when enable_maximum=true.")
+        if enable_rest and (not isinstance(rest, str) or not rest.strip()):
+            blockers.append("rest expression is required when enable_rest=true.")
+        if not enable_minimum and not enable_maximum and not enable_rest:
+            blockers.append("At least one of enable_minimum, enable_maximum, or enable_rest must be true.")
+
+        inspection = get_assembly_joints(include_as_built=True)
+        inspection_result = inspection.get("result") if isinstance(inspection, dict) else None
+        target = None
+        if inspection_result:
+            warnings.extend(inspection_result.get("warnings") or [])
+            candidates = list(inspection_result.get("joints") or []) + list(inspection_result.get("asBuiltJoints") or [])
+            for joint in candidates:
+                if joint_name and joint.get("name") != joint_name:
+                    continue
+                if joint_entity_token and joint.get("entityToken") != joint_entity_token:
+                    continue
+                target = joint
+                break
+            if not target and (joint_name or joint_entity_token):
+                blockers.append("No matching joint was found.")
+        else:
+            blockers.append("Assembly joint inspection failed before planning limits.")
+
+        motion = (target or {}).get("jointMotion") or {}
+        joint_type = str(motion.get("jointType") or "").strip().lower()
+        if target and limit_kind == "rotation" and joint_type and joint_type not in _JOINT_TYPES_WITH_ROTATION_LIMITS:
+            blockers.append(f"Joint type '{joint_type}' does not expose rotation limits through this planning contract.")
+        if target and limit_kind == "slide" and joint_type and joint_type not in _JOINT_TYPES_WITH_SLIDE_LIMITS:
+            blockers.append(f"Joint type '{joint_type}' does not expose slide limits through this planning contract.")
+        existing_limits = motion.get(f"{limit_kind}Limits") if limit_kind in _JOINT_LIMIT_TYPES else None
+        if target and limit_kind in _JOINT_LIMIT_TYPES and existing_limits is None:
+            warnings.append(f"Fusion did not expose existing {limit_kind}Limits metadata for this joint; mutating tools must verify API support before applying limits.")
+
+        ok_to_proceed = not blockers
+        return {
+            "result": {
+                "readOnly": True,
+                "okToProceed": ok_to_proceed,
+                "riskLevel": "medium" if ok_to_proceed else "high",
+                "blockingReasons": blockers,
+                "joint": target,
+                "limitType": limit_kind,
+                "requestedLimits": {
+                    "enableMinimum": bool(enable_minimum),
+                    "minimum": minimum,
+                    "enableMaximum": bool(enable_maximum),
+                    "maximum": maximum,
+                    "enableRest": bool(enable_rest),
+                    "rest": rest,
+                },
+                "existingLimits": existing_limits,
+                "reason": reason,
+                "inspection": inspection_result,
+                "warnings": warnings + [
+                    "This is a read-only joint limit plan; it does not edit assembly joints or motion limits.",
+                    "Future joint limit tools must verify Fusion API support for the exact joint motion type before mutation.",
+                ],
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to plan joint limits: {str(e)}"}
 
 # Resource Readers
 @register_resource("fusion://design/parameters")

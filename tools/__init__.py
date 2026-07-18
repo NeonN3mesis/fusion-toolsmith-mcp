@@ -12,6 +12,9 @@ resources_registry = {}
 
 _DESTRUCTIVE_TOOLS = {
     "clear_change_journal",
+    "close_active_document",
+    "delete_section_analysis",
+    "delete_named_experiment",
     "delete_sketch_constraint",
     "delete_sketch_dimension",
     "delete_timeline_feature",
@@ -32,15 +35,24 @@ _NON_IDEMPOTENT_MUTATION_PREFIXES = (
     "draw_",
     "extrude_",
     "fillet_",
+    "generate_",
     "chamfer_",
     "loft_",
     "mirror_",
     "pattern_",
+    "patch_",
+    "post_",
     "project_",
+    "refold_",
     "reorganize_",
     "revolve_",
     "shell_",
+    "stitch_",
     "sweep_",
+    "thicken_",
+    "trim_",
+    "unfold_",
+    "extend_",
 )
 
 _READ_ONLY_TOOL_NAMES = {
@@ -71,34 +83,81 @@ _READ_ONLY_TOOL_NAMES = {
     "get_sketch_parameters",
     "get_timeline",
     "git_status",
+    "inspect_analysis_capabilities",
     "inspect_body_style",
     "inspect_design",
+    "inspect_design_configurations",
+    "inspect_document_management_state",
+    "inspect_drawing_documents",
+    "inspect_electronics_workspace",
+    "inspect_mesh_bodies",
     "inspect_feature",
+    "inspect_manufacturing_workspace",
+    "inspect_simulation_workspace",
+    "inspect_operation",
+    "inspect_render_workspace",
+    "interference_check",
+    "clearance_check",
+    "exact_interference_check",
+    "exact_clearance_check",
     "inspect_printability",
+    "inspect_selection_sets",
+    "inspect_sheet_metal_rules",
     "inspect_sketch",
+    "inspect_surface_bodies",
+    "inspect_3mf_archive",
     "list_appearances",
     "list_documents",
+    "list_manufacturing_setups",
+    "list_simulation_studies",
     "map_coordinates",
     "measure_entity",
+    "plan_drawing_views",
+    "plan_design_variant",
+    "plan_document_management_action",
+    "plan_joint_limits",
+    "plan_manufacturing_operation",
+    "plan_mesh_conversion",
+    "plan_multibody_3mf_export",
+    "plan_multicolor_3mf_export",
     "plan_parameterization",
+    "plan_pcb_enclosure_fit",
+    "plan_render_output",
+    "plan_simulation_study",
+    "plan_sheet_metal_workflow",
+    "plan_surface_repair",
+    "preflight_drawing_creation",
     "preflight_export",
+    "preflight_flat_pattern",
     "preflight_model_change",
     "query_selection",
     "recommend_mcp_workflow",
     "search_fusion_api_documentation",
     "search_local_fusion_docs",
     "validate_model",
+    "verify_insert_alignment",
 }
 
 _IDEMPOTENT_MUTATION_TOOLS = {
     "apply_appearance",
+    "apply_design_variant_parameters",
+    "edit_chamfer_distance",
+    "edit_extrude_feature",
+    "edit_fillet_radius",
+    "edit_hole_parameter",
+    "edit_pattern_parameter",
+    "edit_shell_thickness",
     "edit_sketch_dimension",
     "export_asset",
+    "export_document_copy",
+    "export_flat_pattern",
     "export_parameters_csv",
     "import_parameters_csv",
     "modify_parameters",
     "offset_face_or_press_pull",
+    "render_viewport_output",
     "set_camera",
+    "set_joint_limits",
     "set_parameter",
     "set_visibility",
 }
@@ -205,7 +264,7 @@ def read_server_capabilities():
         "server": {
             "name": "fusion-mcp",
             "productName": "Fusion Toolsmith MCP",
-            "version": "1.0.0",
+            "version": "1.1.0",
             "runsInside": "Autodesk Fusion 360 add-in",
             "port": getattr(mcp_server, "DEFAULT_PORT", 9100),
             "instructions": getattr(mcp_server, "SERVER_INSTRUCTIONS", ""),
@@ -347,6 +406,175 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "inspect_mesh_bodies",
+            "description": "Read-only mesh body discovery before conversion or repair. Reports mesh body names, entity tokens, bounding boxes, triangle/node counts when Fusion exposes mesh data, and conversion capability flags.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional mesh body name or names to inspect. Omit for all visible mesh bodies."
+                    },
+                    "include_invisible": {"type": "boolean", "default": False},
+                    "mesh_quality": {"type": "string", "default": "low", "description": "Requested mesh quality hint for Fusion mesh calculators when that API is available."}
+                }
+            }
+        },
+        {
+            "name": "inspect_design_configurations",
+            "description": "Read-only design configuration and variant metadata report. Returns exposed configuration rows/items, active configuration, and user parameters when Fusion exposes them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_parameters": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
+            "name": "plan_design_variant",
+            "description": "Read-only design-variant plan validator. Requires explicit variant name, parameter changes, affected bodies/features or warnings, reason, and approval before any future configuration or parameter-set mutation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "variant_name": {"type": "string", "description": "Explicit name for the planned design variant."},
+                    "base_configuration": {"type": "string", "description": "Optional existing configuration name to use as the base."},
+                    "parameter_changes": {"type": "object", "description": "Explicit parameter-name to expression/value map."},
+                    "expected_affected_bodies": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Expected affected bodies for downstream impact checks."
+                    },
+                    "expected_affected_features": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Expected affected timeline features for downstream impact checks."
+                    },
+                    "reason": {"type": "string", "description": "Why this design variant is needed."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                }
+            }
+        },
+        {
+            "name": "inspect_document_management_state",
+            "description": "Read-only document management report. Returns active/open document save state, dataFile/cloud metadata, version-ish fields, project/folder data, and exposed external references without saving or relinking.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_open_documents": {"type": "boolean", "default": True},
+                    "include_external_references": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
+            "name": "plan_document_management_action",
+            "description": "Read-only preflight for document save, save-as, export-copy, version snapshot/promotion, open-data-file, and reference relink actions. Requires explicit targets, dry_run, reason, and user approval.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["save", "save_as", "export_copy", "version_snapshot", "promote_version", "relink_reference", "open_data_file"]
+                    },
+                    "document_name": {"type": "string", "description": "Optional open document name. Defaults to active document for active-document actions."},
+                    "data_file_id": {"type": "string", "description": "Explicit Fusion dataFile identifier for cloud/version/relink actions."},
+                    "target_path": {"type": "string", "description": "Absolute local path for save_as/export_copy planning."},
+                    "target_folder_id": {"type": "string", "description": "Explicit Fusion folder/project target for save_as/open actions."},
+                    "reference_name": {"type": "string", "description": "Reference name to relink for relink_reference."},
+                    "version_id": {"type": "string", "description": "Explicit version identifier for promote/open actions."},
+                    "dry_run": {"type": "boolean", "default": True},
+                    "reason": {"type": "string", "description": "Why this document-management action is needed."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "export_document_copy",
+            "description": "Export the active Fusion document as a local .f3d/.f3z archive copy after plan_document_management_action approves export_copy. Does not save, upload, version, open, activate, promote, or relink cloud data.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "document_name": {"type": "string", "description": "Optional active document name. The tool refuses to activate another document."},
+                    "target_path": {"type": "string", "description": "Absolute local .f3d or .f3z archive path."},
+                    "reason": {"type": "string", "description": "Why this local document copy is needed."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["target_path", "reason", "requires_user_approval"]
+            }
+        },
+        {
+            "name": "inspect_render_workspace",
+            "description": "Read-only render, viewport, camera, named-view, environment, appearance-count, and render-settings metadata report. Does not render or change scene state.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "plan_render_output",
+            "description": "Read-only render output planner. Requires explicit camera or named view, absolute output path, resolution, visual style/environment choices, reason, and approval before any future render/export action.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "camera_name": {"type": "string", "description": "Camera name from inspect_render_workspace, e.g. activeViewport."},
+                    "named_view": {"type": "string", "description": "Named view from inspect_render_workspace."},
+                    "output_path": {"type": "string", "description": "Absolute output path for the planned render image."},
+                    "width": {"type": "integer", "default": 1920},
+                    "height": {"type": "integer", "default": 1080},
+                    "visual_style": {"type": "string", "default": "shaded"},
+                    "environment": {"type": "string", "description": "Optional explicit render environment/scene name."},
+                    "background": {"type": "string", "description": "Optional explicit background setting."},
+                    "reason": {"type": "string", "description": "Why the render output is needed."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                }
+            }
+        },
+        {
+            "name": "render_viewport_output",
+            "description": "Capture a local viewport still to an explicit output path after plan_render_output approves it. Verifies the output file exists and is non-empty; this is not photoreal/cloud rendering.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "camera_name": {"type": "string", "description": "Use activeViewport for the current viewport camera."},
+                    "named_view": {"type": "string", "description": "Optional named view to apply before capture."},
+                    "output_path": {"type": "string", "description": "Absolute output PNG/image path."},
+                    "width": {"type": "integer", "default": 1920},
+                    "height": {"type": "integer", "default": 1080},
+                    "visual_style": {"type": "string", "default": "shaded"},
+                    "environment": {"type": "string", "description": "Optional explicit environment label recorded in the plan."},
+                    "background": {"type": "string", "description": "Optional explicit background label recorded in the plan."},
+                    "reason": {"type": "string", "description": "Why this render/viewport output is needed."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["output_path", "reason", "requires_user_approval"]
+            }
+        },
+        {
+            "name": "plan_mesh_conversion",
+            "description": "Read-only preflight for mesh conversion, repair, reduction, or remeshing. Requires explicit target, intent, quality-loss acknowledgement, and reason before any mesh mutation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Mesh body name from inspect_mesh_bodies."},
+                    "body_entity_token": {"type": "string", "description": "Exact mesh body entity token from inspect_mesh_bodies."},
+                    "conversion_intent": {
+                        "type": "string",
+                        "enum": ["convert_to_brep", "repair_mesh", "reduce_mesh", "remesh"],
+                        "default": "convert_to_brep"
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["new_body", "join", "cut"],
+                        "default": "new_body",
+                        "description": "Requested downstream BRep operation where applicable."
+                    },
+                    "tolerance": {"type": "string", "description": "Optional explicit conversion tolerance expression."},
+                    "detail_level": {"type": "string", "description": "Optional explicit detail/quality setting for the intended operation."},
+                    "acknowledge_quality_loss": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Must be true to acknowledge mesh conversion can lose detail or create heavy BRep geometry."
+                    },
+                    "reason": {"type": "string", "description": "Why conversion, repair, reduction, or remeshing is needed."}
+                }
+            }
+        },
+        {
             "name": "get_physical_properties",
             "description": "Read-only physical-property report for one body, an entity token, or all bodies. Returns mass, volume, area, density, center of mass, bounding box, material, and appearance metadata with Fusion raw units and mm conversions.",
             "inputSchema": {
@@ -369,6 +597,676 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "interference_check",
+            "description": "Read-only broad-phase interference report for bodies. Reports axis-aligned bounding-box intersections and overlap estimates; does not claim exact Boolean interference volume.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional body name, component/body key, or list. Omit with no entity tokens to check all visible bodies."
+                    },
+                    "body_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional exact BRepBody entity token or tokens from inspection tools."
+                    },
+                    "include_invisible": {"type": "boolean", "default": False},
+                    "max_pairs": {"type": "integer", "default": 200}
+                }
+            }
+        },
+        {
+            "name": "inspect_analysis_capabilities",
+            "description": "Read-only probe for exact BRep analysis API availability. Reports whether the runtime exposes candidate exact interference and minimum-distance APIs before exact tools are enabled.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "exact_interference_check",
+            "description": "Read-only exact BRep interference attempt using Fusion TemporaryBRepManager candidate APIs. Returns unsupported when exact APIs are unavailable and reports validatedExact=false until live fixture validation is complete.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional body name, component/body key, or list. Omit with no entity tokens to check all visible bodies."
+                    },
+                    "body_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional exact BRepBody entity token or tokens from inspection tools."
+                    },
+                    "include_invisible": {"type": "boolean", "default": False},
+                    "max_pairs": {"type": "integer", "default": 200}
+                }
+            }
+        },
+        {
+            "name": "clearance_check",
+            "description": "Read-only broad-phase clearance report between explicit target and tool body sets using bounding-box distance. Requires explicit minimum clearance and does not infer tolerances.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Target body name, component/body key, or list."
+                    },
+                    "tool_body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Tool/neighbor body name, component/body key, or list."
+                    },
+                    "target_body_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional exact BRepBody entity token or tokens for target bodies."
+                    },
+                    "tool_body_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional exact BRepBody entity token or tokens for tool bodies."
+                    },
+                    "minimum_clearance": {"type": "string", "default": "0 mm", "description": "Explicit minimum clearance expression, e.g. '0.5 mm'."},
+                    "include_invisible": {"type": "boolean", "default": False},
+                    "max_pairs": {"type": "integer", "default": 200}
+                }
+            }
+        },
+        {
+            "name": "exact_clearance_check",
+            "description": "Read-only exact minimum-distance attempt using Fusion measure-manager candidate APIs. Returns unsupported when exact APIs are unavailable and reports validatedExact=false until live fixture validation is complete.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target_body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Target body name, component/body key, or list."
+                    },
+                    "tool_body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Tool/neighbor body name, component/body key, or list."
+                    },
+                    "target_body_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional exact BRepBody entity token or tokens for target bodies."
+                    },
+                    "tool_body_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional exact BRepBody entity token or tokens for tool bodies."
+                    },
+                    "minimum_clearance": {"type": "string", "default": "0 mm", "description": "Explicit minimum clearance expression, e.g. '0.5 mm'."},
+                    "include_invisible": {"type": "boolean", "default": False},
+                    "max_pairs": {"type": "integer", "default": 200}
+                }
+            }
+        },
+        {
+            "name": "inspect_sheet_metal_rules",
+            "description": "Read-only sheet-metal rule and body metadata report. Returns active rule, exposed rule collection, thickness/bend/K-factor metadata when available, and blockers/warnings for non-sheet-metal designs.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "plan_sheet_metal_workflow",
+            "description": "Read-only sheet-metal workflow planner. Validates explicit operation, target body, rule name, edge/face tokens, parameters, and reason before future flange, bend, unfold, refold, or flat-pattern workflows.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string", "enum": ["create_flange", "create_bend", "unfold_sheet_metal", "refold_sheet_metal", "export_flat_pattern"]},
+                    "body_name": {"type": "string", "description": "Exact sheet-metal body name or component/body key from inspect_sheet_metal_rules."},
+                    "body_entity_token": {"type": "string", "description": "Exact sheet-metal body entity token from inspect_sheet_metal_rules."},
+                    "edge_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Explicit edge entity token or tokens for flange/bend operations."
+                    },
+                    "face_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Explicit face entity token or tokens for bend/refold/unfold planning."
+                    },
+                    "rule_name": {"type": "string", "description": "Explicit sheet-metal rule name. Required for creation operations."},
+                    "parameters": {"type": "object", "description": "Explicit operation parameters such as height, angle, bend radius, relief, or unfold station."},
+                    "reason": {"type": "string", "description": "Required for sheet-metal topology-changing operations."}
+                },
+                "required": ["operation"]
+            }
+        },
+        {
+            "name": "create_flange",
+            "description": "Create an explicit sheet-metal flange after plan_sheet_metal_workflow passes. Requires target body, edge entity tokens, rule name, parameters, and reason; returns unsupported when Fusion lacks a compatible flange API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact sheet-metal body name or component/body key from inspect_sheet_metal_rules."},
+                    "body_entity_token": {"type": "string", "description": "Exact sheet-metal body entity token from inspect_sheet_metal_rules."},
+                    "edge_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit edge entity token or tokens for the flange base."},
+                    "rule_name": {"type": "string", "description": "Explicit sheet-metal rule name; never inferred."},
+                    "parameters": {"type": "object", "description": "Explicit flange parameters such as height, angle, bend radius, relief, or direction."},
+                    "reason": {"type": "string", "description": "Required reason for creating the flange."}
+                },
+                "required": ["edge_entity_tokens", "rule_name", "reason"]
+            }
+        },
+        {
+            "name": "create_bend",
+            "description": "Create an explicit sheet-metal bend after plan_sheet_metal_workflow passes. Requires target body, edge/face tokens, rule name, parameters, and reason; returns unsupported when Fusion lacks a compatible bend API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact sheet-metal body name or component/body key from inspect_sheet_metal_rules."},
+                    "body_entity_token": {"type": "string", "description": "Exact sheet-metal body entity token from inspect_sheet_metal_rules."},
+                    "edge_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit edge entity token or tokens for the bend."},
+                    "face_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit face entity token or tokens for the bend."},
+                    "rule_name": {"type": "string", "description": "Explicit sheet-metal rule name; never inferred."},
+                    "parameters": {"type": "object", "description": "Explicit bend parameters such as angle, radius, position, relief, or direction."},
+                    "reason": {"type": "string", "description": "Required reason for creating the bend."}
+                },
+                "required": ["rule_name", "reason"]
+            }
+        },
+        {
+            "name": "unfold_sheet_metal",
+            "description": "Unfold an explicit sheet-metal body after plan_sheet_metal_workflow and flat-pattern preflight pass. Requires a reason and returns unsupported when Fusion lacks a compatible unfold API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact sheet-metal body name or component/body key from inspect_sheet_metal_rules."},
+                    "body_entity_token": {"type": "string", "description": "Exact sheet-metal body entity token from inspect_sheet_metal_rules."},
+                    "face_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Optional explicit stationary face token or tokens when required by the runtime."},
+                    "parameters": {"type": "object", "description": "Explicit unfold parameters supported by the active Fusion runtime."},
+                    "reason": {"type": "string", "description": "Required reason for unfolding the body."}
+                },
+                "required": ["reason"]
+            }
+        },
+        {
+            "name": "refold_sheet_metal",
+            "description": "Refold an explicit sheet-metal body after plan_sheet_metal_workflow passes. Requires a reason and returns unsupported when Fusion lacks a compatible refold API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact sheet-metal body name or component/body key from inspect_sheet_metal_rules."},
+                    "body_entity_token": {"type": "string", "description": "Exact sheet-metal body entity token from inspect_sheet_metal_rules."},
+                    "face_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Optional explicit face token or tokens when required by the runtime."},
+                    "parameters": {"type": "object", "description": "Explicit refold parameters supported by the active Fusion runtime."},
+                    "reason": {"type": "string", "description": "Required reason for refolding the body."}
+                },
+                "required": ["reason"]
+            }
+        },
+        {
+            "name": "inspect_surface_bodies",
+            "description": "Read-only surface/solid body classification report with face counts, edge counts, best-effort open-edge candidates, and candidate repair paths. Does not repair or convert geometry.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional body name, component/body key, or list. Omit with no entity tokens to inspect all bodies."
+                    },
+                    "body_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Optional exact BRepBody entity token or tokens from inspection tools."
+                    },
+                    "include_invisible": {"type": "boolean", "default": False},
+                    "include_edges": {"type": "boolean", "default": False, "description": "If true, include all open-edge candidates instead of truncating the list."}
+                }
+            }
+        },
+        {
+            "name": "plan_surface_repair",
+            "description": "Read-only surface repair/creation plan validator. Requires explicit operation, target body/entity token, required edge/face tokens, parameters, and reason fields before future surface repair mutations.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string", "enum": ["patch_surface", "stitch_surfaces", "thicken_surface", "trim_surface", "extend_surface", "create_ruled_surface"]},
+                    "body_name": {"type": "string", "description": "Exact body name or component/body key from inspect_surface_bodies."},
+                    "body_entity_token": {"type": "string", "description": "Exact BRepBody entity token from inspect_surface_bodies."},
+                    "edge_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Explicit edge entity token or tokens for patch/stitch/extend-style operations."
+                    },
+                    "face_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Explicit face entity token or tokens for trim/ruled-surface-style operations."
+                    },
+                    "parameters": {"type": "object", "description": "Explicit operation parameters such as thickness, tolerance, direction, or boundary mode."},
+                    "reason": {"type": "string", "description": "Required for destructive or topology-changing repairs."},
+                    "allow_solid_body": {"type": "boolean", "default": False}
+                },
+                "required": ["operation"]
+            }
+        },
+        {
+            "name": "patch_surface",
+            "description": "Create a bounded patch surface from explicit open-edge entity tokens after plan_surface_repair passes. Returns unsupported when Fusion does not expose a compatible patch surface API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name or component/body key from inspect_surface_bodies."},
+                    "body_entity_token": {"type": "string", "description": "Exact BRepBody entity token from inspect_surface_bodies."},
+                    "edge_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit open-edge entity token or tokens to bound the patch."},
+                    "parameters": {"type": "object", "description": "Explicit patch parameters supported by the active Fusion runtime."},
+                    "reason": {"type": "string", "description": "Reason for the surface creation."},
+                    "allow_solid_body": {"type": "boolean", "default": False}
+                },
+                "required": ["edge_entity_tokens"]
+            }
+        },
+        {
+            "name": "stitch_surfaces",
+            "description": "Stitch explicit surface edge tokens after plan_surface_repair passes. Requires a reason and returns unsupported when Fusion does not expose a compatible stitch API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name or component/body key from inspect_surface_bodies."},
+                    "body_entity_token": {"type": "string", "description": "Exact BRepBody entity token from inspect_surface_bodies."},
+                    "edge_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit edge entity token or tokens to stitch."},
+                    "parameters": {"type": "object", "description": "Explicit stitch parameters such as tolerance when supported by the active Fusion runtime."},
+                    "reason": {"type": "string", "description": "Required reason for topology-changing repair."},
+                    "allow_solid_body": {"type": "boolean", "default": False}
+                },
+                "required": ["edge_entity_tokens", "reason"]
+            }
+        },
+        {
+            "name": "thicken_surface",
+            "description": "Thicken explicit surface faces after plan_surface_repair passes. Requires a reason and returns unsupported when Fusion does not expose a compatible thicken API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name or component/body key from inspect_surface_bodies."},
+                    "body_entity_token": {"type": "string", "description": "Exact BRepBody entity token from inspect_surface_bodies."},
+                    "face_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Optional explicit face entity token or tokens to thicken; omit only when the runtime can thicken the whole target body."},
+                    "parameters": {"type": "object", "description": "Explicit thicken parameters such as thickness/direction when supported by the active Fusion runtime."},
+                    "reason": {"type": "string", "description": "Required reason for topology-changing repair."},
+                    "allow_solid_body": {"type": "boolean", "default": False}
+                },
+                "required": ["reason"]
+            }
+        },
+        {
+            "name": "trim_surface",
+            "description": "Trim explicit surface faces or edges after plan_surface_repair passes. Requires a reason and returns unsupported when Fusion does not expose a compatible trim API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name or component/body key from inspect_surface_bodies."},
+                    "body_entity_token": {"type": "string", "description": "Exact BRepBody entity token from inspect_surface_bodies."},
+                    "edge_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit edge entity token or tokens used by the trim."},
+                    "face_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit face entity token or tokens used by the trim."},
+                    "parameters": {"type": "object", "description": "Explicit trim parameters supported by the active Fusion runtime."},
+                    "reason": {"type": "string", "description": "Required reason for topology-changing repair."},
+                    "allow_solid_body": {"type": "boolean", "default": False}
+                },
+                "required": ["reason"]
+            }
+        },
+        {
+            "name": "extend_surface",
+            "description": "Extend explicit surface edge tokens after plan_surface_repair passes. Requires a reason and returns unsupported when Fusion does not expose a compatible extend API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name or component/body key from inspect_surface_bodies."},
+                    "body_entity_token": {"type": "string", "description": "Exact BRepBody entity token from inspect_surface_bodies."},
+                    "edge_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit edge entity token or tokens to extend."},
+                    "parameters": {"type": "object", "description": "Explicit extend parameters such as distance when supported by the active Fusion runtime."},
+                    "reason": {"type": "string", "description": "Required reason for topology-changing repair."},
+                    "allow_solid_body": {"type": "boolean", "default": False}
+                },
+                "required": ["edge_entity_tokens", "reason"]
+            }
+        },
+        {
+            "name": "create_ruled_surface",
+            "description": "Create a ruled surface from explicit edge or face tokens after plan_surface_repair passes. Returns unsupported when Fusion does not expose a compatible ruled-surface API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Exact body name or component/body key from inspect_surface_bodies."},
+                    "body_entity_token": {"type": "string", "description": "Exact BRepBody entity token from inspect_surface_bodies."},
+                    "edge_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit edge entity token or tokens used for the ruled surface."},
+                    "face_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}], "description": "Explicit face entity token or tokens used for the ruled surface."},
+                    "parameters": {"type": "object", "description": "Explicit ruled-surface parameters supported by the active Fusion runtime."},
+                    "reason": {"type": "string", "description": "Reason for the surface creation."},
+                    "allow_solid_body": {"type": "boolean", "default": False}
+                }
+            }
+        },
+        {
+            "name": "inspect_simulation_workspace",
+            "description": "Read-only Simulation workspace discovery. Reports whether a Simulation product and study collection are exposed without creating, meshing, solving, or exporting studies.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "list_simulation_studies",
+            "description": "Read-only Simulation study listing. Reports study metadata, solve status, load/constraint/material/contact counts, mesh availability, and result counts when Fusion exposes them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_details": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
+            "name": "plan_simulation_study",
+            "description": "Read-only Simulation study plan validator. Requires explicit study type, target bodies, materials, loads, constraints, mesh settings, result outputs, and approval before any future Simulation mutation or solve.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "study_name": {"type": "string", "description": "Explicit Simulation study name."},
+                    "study_type": {
+                        "type": "string",
+                        "enum": ["static_stress", "modal_frequencies", "thermal", "thermal_stress", "buckling", "shape_optimization", "event_simulation"]
+                    },
+                    "target_body_names": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Target body name, component/body key, or names from inspection tools."
+                    },
+                    "target_body_entity_tokens": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Exact BRepBody entity token or tokens for study targets."
+                    },
+                    "materials": {"type": "object", "description": "Explicit material assignments or assumptions for each target."},
+                    "loads": {"type": "object", "description": "Explicit load definitions, directions, magnitudes, and units."},
+                    "constraints": {"type": "object", "description": "Explicit constraint definitions and target references."},
+                    "contacts": {"type": "object", "description": "Optional explicit contact definitions."},
+                    "mesh_settings": {"type": "object", "description": "Explicit mesh size/order/refinement settings."},
+                    "result_outputs": {"type": "object", "description": "Explicit requested result plots/exports and output paths when applicable."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                }
+            }
+        },
+        {
+            "name": "inspect_manufacturing_workspace",
+            "description": "Read-only CAM/manufacturing workspace availability report. Returns exposed product/setup metadata and blockers without creating setups, generating toolpaths, or posting output.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "inspect_electronics_workspace",
+            "description": "Read-only Fusion Electronics/PCB workspace discovery. Reports exposed board, outline, component, net, connector-candidate, and linked metadata without editing electronics or mechanical data.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "plan_pcb_enclosure_fit",
+            "description": "Read-only PCB-to-enclosure fit planner. Requires explicit board outline, keepouts, connectors, mounting holes, clearance rules, reason, and approval before any future electronics/mechanical bridge action.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "board_outline": {"type": "object", "description": "Explicit board outline dimensions, entity token, or coordinate references."},
+                    "keepouts": {"type": "object", "description": "Explicit keepout regions and clearance zones."},
+                    "connectors": {"type": "object", "description": "Explicit connector positions, envelopes, insertion directions, and service clearances."},
+                    "mounting_holes": {"type": "object", "description": "Explicit mounting hole locations, diameters, bosses, inserts, or screw data."},
+                    "clearance_rules": {"type": "object", "description": "Explicit board-to-wall, component, connector, fastener, and service clearance rules."},
+                    "enclosure_body_name": {"type": "string", "description": "Optional target enclosure body name or component/body key from inspection tools."},
+                    "enclosure_body_entity_token": {"type": "string", "description": "Optional exact BRepBody entity token for target enclosure geometry."},
+                    "linked_mechanical_reference": {"type": "string", "description": "Optional explicit linked mechanical/electronics reference identifier."},
+                    "reason": {"type": "string", "description": "Why PCB enclosure-fit planning is needed."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                }
+            }
+        },
+        {
+            "name": "inspect_drawing_documents",
+            "description": "Read-only inspection of open Fusion drawing documents, sheets, drawing views, title blocks, tables, parts lists, and dimension counts when the Drawing API exposes them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_sheets": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
+            "name": "preflight_drawing_creation",
+            "description": "Read-only readiness check before creating or exporting a drawing. Checks saved active document, DrawingManager availability, optional PDF path validity, and unsaved-change warnings.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "export_pdf_path": {"type": "string", "description": "Optional absolute PDF path to validate before create_2d_drawing."}
+                }
+            }
+        },
+        {
+            "name": "plan_drawing_views",
+            "description": "Read-only drawing sheet/view planner. Validates explicit standard, sheet size/orientation, units, view orientation/style/scale, and optional PDF path without creating drawings or exports.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "standard": {"type": "string", "enum": ["ASME", "ISO"], "default": "ASME"},
+                    "sheet_size": {"type": "string", "enum": ["A", "B", "C", "D", "E", "A4", "A3", "A2", "A1", "A0"], "default": "A"},
+                    "sheet_orientation": {"type": "string", "enum": ["landscape", "portrait"], "default": "landscape"},
+                    "units": {"type": "string", "enum": ["mm", "in"], "default": "mm"},
+                    "views": {
+                        "oneOf": [
+                            {"type": "object"},
+                            {"type": "array", "items": {"type": "object"}}
+                        ],
+                        "description": "Optional view object or array. Each view may include name, orientation, style, scale, placement, and source."
+                    },
+                    "title_block": {"type": "string", "description": "Optional explicit title-block name or identifier to carry into the plan."},
+                    "export_pdf_path": {"type": "string", "description": "Optional absolute PDF path to validate alongside drawing creation preflight."}
+                }
+            }
+        },
+        {
+            "name": "add_drawing_view",
+            "description": "Add an explicit drawing view to an open drawing sheet after plan_drawing_views passes. Returns unsupported when the active drawing sheet lacks compatible drawingViews APIs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sheet_name": {"type": "string", "description": "Optional exact sheet name; defaults to sheet_index."},
+                    "sheet_index": {"type": "integer", "default": 0},
+                    "view": {"type": "object", "description": "Explicit view plan object with name, orientation, style, scale, placement, and source."},
+                    "standard": {"type": "string", "enum": ["ASME", "ISO"], "default": "ASME"},
+                    "sheet_size": {"type": "string", "enum": ["A", "B", "C", "D", "E", "A4", "A3", "A2", "A1", "A0"], "default": "A"},
+                    "sheet_orientation": {"type": "string", "enum": ["landscape", "portrait"], "default": "landscape"},
+                    "units": {"type": "string", "enum": ["mm", "in"], "default": "mm"},
+                    "title_block": {"type": "string"},
+                    "reason": {"type": "string", "description": "Required reason for changing the drawing."}
+                },
+                "required": ["view", "reason"]
+            }
+        },
+        {
+            "name": "add_drawing_dimension",
+            "description": "Add a drawing dimension to an open drawing sheet from explicit inspected geometry entity tokens. Returns unsupported when compatible drawing dimension APIs are unavailable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sheet_name": {"type": "string"},
+                    "sheet_index": {"type": "integer", "default": 0},
+                    "view_name": {"type": "string", "description": "Optional exact drawing view name."},
+                    "geometry_entity_tokens": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                    "dimension_type": {"type": "string", "enum": ["linear", "aligned", "angular", "radial", "diameter"], "default": "linear"},
+                    "placement": {"type": "object", "description": "Explicit placement data for the dimension text/leader."},
+                    "text": {"type": "string", "description": "Optional dimension text override."},
+                    "reason": {"type": "string", "description": "Required reason for changing the drawing."}
+                },
+                "required": ["geometry_entity_tokens", "reason"]
+            }
+        },
+        {
+            "name": "add_drawing_callout",
+            "description": "Add a callout/note to an open drawing sheet with explicit text, optional target view/entity token, and placement. Returns unsupported when compatible note APIs are unavailable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sheet_name": {"type": "string"},
+                    "sheet_index": {"type": "integer", "default": 0},
+                    "text": {"type": "string"},
+                    "target_view_name": {"type": "string"},
+                    "target_entity_token": {"type": "string"},
+                    "placement": {"type": "object"},
+                    "reason": {"type": "string", "description": "Required reason for changing the drawing."}
+                },
+                "required": ["text", "reason"]
+            }
+        },
+        {
+            "name": "add_parts_list",
+            "description": "Add a parts list/BOM table to an open drawing sheet from an explicit source view name. Returns unsupported when compatible parts-list APIs are unavailable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sheet_name": {"type": "string"},
+                    "sheet_index": {"type": "integer", "default": 0},
+                    "source_view_name": {"type": "string"},
+                    "placement": {"type": "object"},
+                    "bom_level": {"type": "string", "enum": ["first_level", "all_levels", "parts_only"], "default": "first_level"},
+                    "reason": {"type": "string", "description": "Required reason for changing the drawing."}
+                },
+                "required": ["source_view_name", "reason"]
+            }
+        },
+        {
+            "name": "add_revision_table",
+            "description": "Add a revision table to an open drawing sheet with explicit placement and optional initial revision metadata. Returns unsupported when compatible revision-table APIs are unavailable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sheet_name": {"type": "string"},
+                    "sheet_index": {"type": "integer", "default": 0},
+                    "placement": {"type": "object"},
+                    "initial_revision": {"type": "object"},
+                    "reason": {"type": "string", "description": "Required reason for changing the drawing."}
+                },
+                "required": ["reason"]
+            }
+        },
+        {
+            "name": "list_manufacturing_setups",
+            "description": "Read-only list of exposed CAM/manufacturing setups and optional operation summaries. Does not infer stock, WCS, tools, feeds, speeds, or production parameters.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_operations": {"type": "boolean", "default": True}
+                }
+            }
+        },
+        {
+            "name": "inspect_operation",
+            "description": "Read-only inspection of an exposed CAM/manufacturing operation by name or index, optionally scoped to a setup name. Does not generate toolpaths or post-process.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "operation_name": {"type": "string", "description": "Exact operation name to inspect."},
+                    "setup_name": {"type": "string", "description": "Optional exact setup name to scope the search."},
+                    "operation_index": {"type": "integer", "description": "Optional 0-based operation index within the setup."}
+                }
+            }
+        },
+        {
+            "name": "plan_manufacturing_operation",
+            "description": "Read-only CAM setup/operation plan validator. Requires explicit machine, stock, WCS, tool, feeds, speeds, post-processor, operation type, and user approval before future manufacturing mutations.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string"},
+                    "operation_name": {"type": "string"},
+                    "operation_type": {"type": "string", "enum": ["2d_contour", "2d_pocket", "adaptive", "drill", "face", "trace"]},
+                    "machine": {"type": "object", "description": "Explicit machine metadata such as id/name/model/controller."},
+                    "stock": {"type": "object", "description": "Explicit stock dimensions/material/origin information."},
+                    "wcs": {"type": "object", "description": "Explicit work coordinate system and origin/axis information."},
+                    "tool": {"type": "object", "description": "Explicit cutting tool metadata such as id/name/diameter/flutes/material."},
+                    "feeds": {"type": "object", "description": "Explicit positive numeric feed values."},
+                    "speeds": {"type": "object", "description": "Explicit positive numeric spindle/surface-speed values."},
+                    "post_processor": {"type": "object", "description": "Explicit post-processor id/name/path and output intent."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["setup_name", "operation_name", "operation_type", "machine", "stock", "wcs", "tool", "feeds", "speeds", "post_processor", "requires_user_approval"]
+            }
+        },
+        {
+            "name": "create_manufacturing_setup",
+            "description": "Create a CAM/manufacturing setup only after plan_manufacturing_operation passes with explicit machine, stock, WCS, tool, feeds, speeds, post-processor, and user approval. Returns unsupported when Fusion lacks a compatible setup API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string"},
+                    "operation_name": {"type": "string"},
+                    "operation_type": {"type": "string", "enum": ["2d_contour", "2d_pocket", "adaptive", "drill", "face", "trace"]},
+                    "machine": {"type": "object"},
+                    "stock": {"type": "object"},
+                    "wcs": {"type": "object"},
+                    "tool": {"type": "object"},
+                    "feeds": {"type": "object"},
+                    "speeds": {"type": "object"},
+                    "post_processor": {"type": "object"},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["setup_name", "operation_name", "operation_type", "machine", "stock", "wcs", "tool", "feeds", "speeds", "post_processor", "requires_user_approval"]
+            }
+        },
+        {
+            "name": "create_manufacturing_operation",
+            "description": "Create a CAM/manufacturing operation in an explicit setup only after plan_manufacturing_operation passes. Returns unsupported when Fusion lacks a compatible operation API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string"},
+                    "operation_name": {"type": "string"},
+                    "operation_type": {"type": "string", "enum": ["2d_contour", "2d_pocket", "adaptive", "drill", "face", "trace"]},
+                    "machine": {"type": "object"},
+                    "stock": {"type": "object"},
+                    "wcs": {"type": "object"},
+                    "tool": {"type": "object"},
+                    "feeds": {"type": "object"},
+                    "speeds": {"type": "object"},
+                    "post_processor": {"type": "object"},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["setup_name", "operation_name", "operation_type", "machine", "stock", "wcs", "tool", "feeds", "speeds", "post_processor", "requires_user_approval"]
+            }
+        },
+        {
+            "name": "generate_toolpaths",
+            "description": "Generate CAM toolpaths only after plan_manufacturing_operation passes and explicit user approval is present. Does not infer production parameters.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "setup_name": {"type": "string"},
+                    "operation_name": {"type": "string"},
+                    "operation_type": {"type": "string", "enum": ["2d_contour", "2d_pocket", "adaptive", "drill", "face", "trace"]},
+                    "machine": {"type": "object"},
+                    "stock": {"type": "object"},
+                    "wcs": {"type": "object"},
+                    "tool": {"type": "object"},
+                    "feeds": {"type": "object"},
+                    "speeds": {"type": "object"},
+                    "post_processor": {"type": "object"},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["setup_name", "operation_name", "operation_type", "machine", "stock", "wcs", "tool", "feeds", "speeds", "post_processor", "requires_user_approval"]
+            }
+        },
+        {
+            "name": "post_process",
+            "description": "Post-process CAM output to an explicit absolute output path only after plan_manufacturing_operation passes and explicit user approval is present.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "Absolute NC/code output path."},
+                    "setup_name": {"type": "string"},
+                    "operation_name": {"type": "string"},
+                    "operation_type": {"type": "string", "enum": ["2d_contour", "2d_pocket", "adaptive", "drill", "face", "trace"]},
+                    "machine": {"type": "object"},
+                    "stock": {"type": "object"},
+                    "wcs": {"type": "object"},
+                    "tool": {"type": "object"},
+                    "feeds": {"type": "object"},
+                    "speeds": {"type": "object"},
+                    "post_processor": {"type": "object"},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["output_path", "setup_name", "operation_name", "operation_type", "machine", "stock", "wcs", "tool", "feeds", "speeds", "post_processor", "requires_user_approval"]
+            }
+        },
+        {
+            "name": "preflight_flat_pattern",
+            "description": "Read-only flat-pattern readiness check for an explicit or detected sheet-metal body. Reports active rule, target body metadata, flatPattern availability, blockers, and warnings without exporting.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body_name": {"type": "string", "description": "Optional exact body name or component/body key from inspection."},
+                    "body_entity_token": {"type": "string", "description": "Optional exact BRepBody entity token from inspection tools."}
+                }
+            }
+        },
+        {
             "name": "query_selection",
             "description": "Describe currently selected entities in the Fusion UI in agent-friendly terms (e.g., coordinates, type, owning component). Instructions: Ask the user to select the target entity in the Fusion UI if it's too difficult to find programmatically. Use this tool to read their selection.",
             "inputSchema": {"type": "object", "properties": {}}
@@ -377,6 +1275,23 @@ def get_tool_schemas():
             "name": "get_current_selection",
             "description": "Return details about the currently selected Fusion UI entities, including objectType, tempId, entityToken where available, and useful geometry properties such as face area or edge length.",
             "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "inspect_selection_sets",
+            "description": "Read named Fusion selection sets and their contents. Use this before targeted multibody export workflows when active UI selection is insufficient.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional selection set name or names to inspect. Omit to list all selection sets."
+                    },
+                    "include_entities": {"type": "boolean", "default": True}
+                }
+            }
         },
         {
             "name": "inspect_sketch",
@@ -693,6 +1608,94 @@ def get_tool_schemas():
                     }
                 },
                 "required": ["sketch_name", "distance", "operation"]
+            }
+        },
+        {
+            "name": "extrude_existing_profile",
+            "description": "Hardened extrusion wrapper for an existing sketch profile. Reports profile counts, failure stage, participant-body resolution, and recovery actions when Fusion rejects profile reuse.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "Sketch containing the existing profile to extrude."},
+                    "profile_index": {"type": "integer", "default": 0, "description": "0-based profile index in the sketch."},
+                    "distance": {"type": "string", "description": "Fusion distance expression, e.g. '10 mm' or 'height / 2'."},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["NewBody", "Join", "Cut", "Intersect", "new_body", "join", "cut", "intersect"],
+                        "description": "Required explicit feature operation. Do not guess."
+                    },
+                    "name": {"type": "string", "description": "Optional name for the created extrude feature."},
+                    "body_name": {"type": "string", "description": "Optional name for the first result body."},
+                    "participant_body_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit participant bodies for Join/Cut/Intersect operations."
+                    }
+                },
+                "required": ["sketch_name", "distance", "operation"]
+            }
+        },
+        {
+            "name": "copy_profile_loop",
+            "description": "Copy/project only one loop from an existing sketch profile into a destination sketch. Use this when a source sketch contains reference/logo curves but only the outer profile loop should be reused.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source_sketch_name": {"type": "string", "description": "Sketch containing the source profile."},
+                    "profile_index": {"type": "integer", "default": 0, "description": "0-based profile index in the source sketch."},
+                    "loop_index": {"type": "integer", "default": 0, "description": "0-based profile-loop index. Ignored when outer_loop=true."},
+                    "outer_loop": {"type": "boolean", "default": False, "description": "Copy the profile loop Fusion marks as outer."},
+                    "destination_sketch_name": {"type": "string", "description": "Existing destination sketch name or name for a new destination sketch."},
+                    "destination_plane": {"type": "string", "description": "Optional destination plane: xy/xz/yz or a construction plane name."},
+                    "construction": {"type": "boolean", "default": False, "description": "Mark copied/projected curves as construction geometry."}
+                },
+                "required": ["source_sketch_name"]
+            }
+        },
+        {
+            "name": "offset_profile_loop",
+            "description": "Offset only one loop from an existing sketch profile, instead of all curves in the sketch. Use this when projected logo/reference curves make create_sketch_offset too broad.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sketch_name": {"type": "string", "description": "Sketch containing the source profile loop."},
+                    "profile_index": {"type": "integer", "default": 0, "description": "0-based profile index in the sketch."},
+                    "loop_index": {"type": "integer", "default": 0, "description": "0-based profile-loop index. Ignored when outer_loop=true."},
+                    "outer_loop": {"type": "boolean", "default": False, "description": "Offset the profile loop Fusion marks as outer."},
+                    "offset_distance": {"type": "string", "description": "Fusion distance expression, e.g. '0.2 mm' or '-0.15 mm'."},
+                    "construction": {"type": "boolean", "default": False, "description": "Mark offset curves as construction geometry."}
+                },
+                "required": ["sketch_name", "offset_distance"]
+            }
+        },
+        {
+            "name": "create_insert_socket",
+            "description": "Create a removable insert plate and matching socket cut from one existing sketch profile loop. Copies only the selected loop into a work sketch, creates plate and cutter bodies, verifies broad-phase alignment, cuts the target body, and reports cleanup/recovery details.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source_sketch_name": {"type": "string", "description": "Source sketch containing the profile loop to reuse."},
+                    "target_body_name": {"type": "string", "description": "Body to cut the matching socket into."},
+                    "insert_thickness": {"type": "string", "description": "Plate thickness, e.g. '2 mm'."},
+                    "clearance": {"type": "string", "default": "0 mm", "description": "Optional lateral cutter clearance offset. Inspect the generated work sketch if this creates multiple profiles."},
+                    "mode": {"type": "string", "enum": ["flush", "proud", "recessed"], "default": "flush"},
+                    "profile_index": {"type": "integer", "default": 0},
+                    "loop_index": {"type": "integer", "default": 0},
+                    "outer_loop": {"type": "boolean", "default": True},
+                    "work_sketch_name": {"type": "string"},
+                    "destination_plane": {"type": "string", "description": "Optional xy/xz/yz or named construction plane for the generated work sketch."},
+                    "plate_body_name": {"type": "string"},
+                    "plate_feature_name": {"type": "string"},
+                    "cutter_body_name": {"type": "string"},
+                    "cutter_feature_name": {"type": "string"},
+                    "socket_feature_name": {"type": "string"},
+                    "socket_depth": {"type": "string", "description": "Socket cut depth. Defaults to insert_thickness."},
+                    "cutter_profile_index": {"type": "integer", "default": 0, "description": "Profile index in the generated work sketch used for the cutter body."},
+                    "keep_cutter_body": {"type": "boolean", "default": False},
+                    "allow_alignment_blockers": {"type": "boolean", "default": False, "description": "Allow the cut even if broad-phase plate/cutter verification reports blockers."},
+                    "reason": {"type": "string", "description": "Required reason for this topology-changing insert/socket workflow."}
+                },
+                "required": ["source_sketch_name", "target_body_name", "insert_thickness", "reason"]
             }
         },
         {
@@ -1144,6 +2147,33 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "create_design_document",
+            "description": "Create a new unsaved Fusion design document after document-management planning. Does not save, upload, version, open a data file, promote, or relink cloud data.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "document_name": {"type": "string", "description": "Optional name for the new unsaved design document."},
+                    "requires_user_approval": {"type": "boolean", "description": "Must be true to confirm creating a new document is intentional."},
+                    "reason": {"type": "string", "description": "Required reason explaining why a new design document is needed."}
+                },
+                "required": ["requires_user_approval", "reason"]
+            }
+        },
+        {
+            "name": "close_active_document",
+            "description": "Close the active Fusion document with explicit save/discard intent after document-management planning. Does not activate another document, save-as, upload, version, promote, or relink cloud data.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "document_name": {"type": "string", "description": "Optional guard: the active document must have this exact name before it is closed."},
+                    "save_changes": {"type": "boolean", "default": False, "description": "True saves current changes before closing; false discards unsaved changes."},
+                    "requires_user_approval": {"type": "boolean", "description": "Must be true to confirm the close action is intentional."},
+                    "reason": {"type": "string", "description": "Required reason explaining why closing this active document is intentional."}
+                },
+                "required": ["requires_user_approval", "reason"]
+            }
+        },
+        {
             "name": "revert_active_document",
             "description": "Close and reopen the active saved Fusion document from its data file. Use save_changes=false to reset to the last saved state after a failed script.",
             "inputSchema": {
@@ -1213,6 +2243,150 @@ def get_tool_schemas():
                     "offset_x": {"type": "string", "description": "Optional X offset expression, e.g. '1 mm'."},
                     "offset_y": {"type": "string", "description": "Optional Y offset expression, e.g. '1 mm'."},
                     "offset_z": {"type": "string", "description": "Optional Z offset expression, e.g. '1 mm'."}
+                }
+            }
+        },
+        {
+            "name": "create_section_analysis",
+            "description": "Create a named Fusion section-analysis entity on an explicit standard or named construction plane. Returns design-state comparison and requires cleanup with delete_section_analysis when finished.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "default": "Section Analysis", "description": "Explicit name for the analysis entity."},
+                    "plane_name": {"type": "string", "default": "xy", "description": "Section plane: xy, xz, yz, or a named construction plane in the target component."},
+                    "target_component_name": {"type": "string", "description": "Optional component containing the named plane."},
+                    "activate": {"type": "boolean", "default": True, "description": "Turn on the analysis lightbulb when Fusion exposes that property."}
+                }
+            }
+        },
+        {
+            "name": "delete_section_analysis",
+            "description": "Delete named section-analysis entities created for inspection. Requires a reason and returns design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Exact section-analysis name to delete."},
+                    "reason": {"type": "string", "description": "Required reason for deleting this analysis entity."}
+                },
+                "required": ["name", "reason"]
+            }
+        },
+        {
+            "name": "create_revolute_joint",
+            "description": "Create a revolute assembly joint from two explicit point references and an explicit rotation axis from inspected assembly references. No origins or axes are guessed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "default": "Revolute Joint"},
+                    "point_one_name": {"type": "string"},
+                    "point_two_name": {"type": "string"},
+                    "point_one_entity_token": {"type": "string"},
+                    "point_two_entity_token": {"type": "string"},
+                    "motion_axis": {"type": "string", "enum": ["x", "y", "z", "-x", "-y", "-z"], "description": "Required explicit rotation axis."},
+                    "flip": {"type": "boolean", "default": False},
+                    "offset_x": {"type": "string"},
+                    "offset_y": {"type": "string"},
+                    "offset_z": {"type": "string"}
+                },
+                "required": ["motion_axis"]
+            }
+        },
+        {
+            "name": "create_slider_joint",
+            "description": "Create a slider assembly joint from two explicit point references and an explicit slide direction from inspected assembly references. No origins or axes are guessed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "default": "Slider Joint"},
+                    "point_one_name": {"type": "string"},
+                    "point_two_name": {"type": "string"},
+                    "point_one_entity_token": {"type": "string"},
+                    "point_two_entity_token": {"type": "string"},
+                    "slide_direction": {"type": "string", "enum": ["x", "y", "z", "-x", "-y", "-z"], "description": "Required explicit slide direction."},
+                    "flip": {"type": "boolean", "default": False},
+                    "offset_x": {"type": "string"},
+                    "offset_y": {"type": "string"},
+                    "offset_z": {"type": "string"}
+                },
+                "required": ["slide_direction"]
+            }
+        },
+        {
+            "name": "create_cylindrical_joint",
+            "description": "Create a cylindrical assembly joint from two explicit point references and an explicit rotation/slide axis from inspected assembly references. No origins or axes are guessed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "default": "Cylindrical Joint"},
+                    "point_one_name": {"type": "string"},
+                    "point_two_name": {"type": "string"},
+                    "point_one_entity_token": {"type": "string"},
+                    "point_two_entity_token": {"type": "string"},
+                    "motion_axis": {"type": "string", "enum": ["x", "y", "z", "-x", "-y", "-z"], "description": "Required explicit rotation/slide axis."},
+                    "flip": {"type": "boolean", "default": False},
+                    "offset_x": {"type": "string"},
+                    "offset_y": {"type": "string"},
+                    "offset_z": {"type": "string"}
+                },
+                "required": ["motion_axis"]
+            }
+        },
+        {
+            "name": "create_pin_slot_joint",
+            "description": "Create a pin-slot assembly joint from two explicit point references plus explicit rotation axis and slide direction. No origins or axes are guessed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "default": "Pin Slot Joint"},
+                    "point_one_name": {"type": "string"},
+                    "point_two_name": {"type": "string"},
+                    "point_one_entity_token": {"type": "string"},
+                    "point_two_entity_token": {"type": "string"},
+                    "motion_axis": {"type": "string", "enum": ["x", "y", "z", "-x", "-y", "-z"], "description": "Required explicit rotation axis."},
+                    "slide_direction": {"type": "string", "enum": ["x", "y", "z", "-x", "-y", "-z"], "description": "Required explicit slot slide direction."},
+                    "flip": {"type": "boolean", "default": False},
+                    "offset_x": {"type": "string"},
+                    "offset_y": {"type": "string"},
+                    "offset_z": {"type": "string"}
+                },
+                "required": ["motion_axis", "slide_direction"]
+            }
+        },
+        {
+            "name": "create_planar_joint",
+            "description": "Create a planar assembly joint from two explicit point references and an explicit plane normal direction from inspected assembly references. No origins or axes are guessed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "default": "Planar Joint"},
+                    "point_one_name": {"type": "string"},
+                    "point_two_name": {"type": "string"},
+                    "point_one_entity_token": {"type": "string"},
+                    "point_two_entity_token": {"type": "string"},
+                    "normal_direction": {"type": "string", "enum": ["x", "y", "z", "-x", "-y", "-z"], "description": "Required explicit plane normal direction."},
+                    "flip": {"type": "boolean", "default": False},
+                    "offset_x": {"type": "string"},
+                    "offset_y": {"type": "string"},
+                    "offset_z": {"type": "string"}
+                },
+                "required": ["normal_direction"]
+            }
+        },
+        {
+            "name": "create_ball_joint",
+            "description": "Create a ball assembly joint from two explicit point references. No origins are guessed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "default": "Ball Joint"},
+                    "point_one_name": {"type": "string"},
+                    "point_two_name": {"type": "string"},
+                    "point_one_entity_token": {"type": "string"},
+                    "point_two_entity_token": {"type": "string"},
+                    "flip": {"type": "boolean", "default": False},
+                    "offset_x": {"type": "string"},
+                    "offset_y": {"type": "string"},
+                    "offset_z": {"type": "string"}
                 }
             }
         },
@@ -1304,6 +2478,36 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "delete_named_experiment",
+            "description": "Dangerous cleanup tool for named experimental artifacts. Matches exact names and/or prefixes across timeline items, bodies, and sketches, defaults to dry-run, and requires confirm_delete=true plus reason before deleting anything.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Exact timeline item, body, or sketch names to delete."
+                    },
+                    "prefixes": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Name prefixes to delete. Prefixes shorter than 3 characters require allow_short_prefix=true."
+                    },
+                    "reason": {"type": "string", "description": "Required. State why this experimental cleanup is intentional."},
+                    "confirm_delete": {"type": "boolean", "default": False, "description": "When false, only reports matches. Set true to delete matched artifacts."},
+                    "include_timeline": {"type": "boolean", "default": True},
+                    "include_bodies": {"type": "boolean", "default": True},
+                    "include_sketches": {"type": "boolean", "default": True},
+                    "allow_short_prefix": {"type": "boolean", "default": False}
+                },
+                "required": ["reason"]
+            }
+        },
+        {
             "name": "get_best_practices",
             "description": "Get Fusion 360 design best practices, coordinate rules (Y-up), body naming conventions, and script execution guidelines.",
             "inputSchema": {"type": "object", "properties": {}}
@@ -1322,25 +2526,47 @@ def get_tool_schemas():
         },
         {
             "name": "inspect_body_style",
-            "description": "Report current appearance/material assignments for a named body or all bodies. Read-only.",
+            "description": "Report current appearance/material assignments for a named body, body entity token, or all bodies. Read-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "body_name": {"type": "string", "description": "Exact body name to inspect."},
+                    "body_entity_tokens": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Exact BRep body entity token or tokens to inspect. Prefer this when names are ambiguous."
+                    },
                     "include_all_bodies": {"type": "boolean", "default": False, "description": "When true, report style state for every body in all components."}
                 }
             }
         },
         {
             "name": "apply_appearance",
-            "description": "Style a named body in the active design with a materials library appearance.",
+            "description": "Style one or more exact body targets in the active design with a materials-library appearance. Supports body entity tokens for duplicate-name-safe multicolor export prep.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "body_name": {"type": "string", "description": "The exact name of the body to style (e.g. 'LampBase')."},
-                    "appearance_name": {"type": "string", "description": "The name of the appearance (e.g. 'Gold - Polished', 'Steel - Satin', 'Glass - Clear'). Supports case-insensitive partial matching."}
+                    "body_name": {"type": "string", "description": "Backwards-compatible exact name of one body to style."},
+                    "body_names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Exact BRep body name or names to style."
+                    },
+                    "body_entity_tokens": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Exact BRep body entity token or tokens to style. Prefer this when names are ambiguous."
+                    },
+                    "appearance_name": {"type": "string", "description": "The name of the appearance (e.g. 'Gold - Polished', 'Steel - Satin', 'Glass - Clear'). Supports case-insensitive partial matching."},
+                    "expected_body_count": {"type": "integer", "description": "Optional guard requiring the resolved body count to match before applying."}
                 },
-                "required": ["body_name", "appearance_name"]
+                "required": ["appearance_name"]
             }
         },
         {
@@ -1388,14 +2614,70 @@ def get_tool_schemas():
         },
         {
             "name": "convert_mesh_to_solid",
-            "description": "Convert an imported STL/OBJ mesh body to a solid B-Rep body.",
+            "description": "Convert an imported STL/OBJ mesh body to a solid B-Rep body after plan_mesh_conversion preflight passes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "mesh_body_name": {"type": "string", "description": "The name of the mesh body in the design."},
-                    "operation": {"type": "string", "enum": ["new_body", "join", "cut", "intersect"]}
-                },
-                "required": ["mesh_body_name"]
+                    "mesh_body_name": {"type": "string", "description": "The mesh body name from inspect_mesh_bodies. Use mesh_body_entity_token instead when names are ambiguous."},
+                    "mesh_body_entity_token": {"type": "string", "description": "Exact mesh body entity token from inspect_mesh_bodies."},
+                    "operation": {"type": "string", "enum": ["new_body", "join", "cut"], "default": "new_body"},
+                    "acknowledge_quality_loss": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Must be true to acknowledge that mesh-to-BRep conversion can lose detail or create heavy geometry."
+                    },
+                    "reason": {"type": "string", "description": "Required explanation for why this conversion is intentional."},
+                    "tolerance": {"type": "string", "description": "Optional tolerance note or Fusion expression for the conversion plan."},
+                    "detail_level": {"type": "string", "description": "Optional detail level note for the conversion plan."}
+                }
+            }
+        },
+        {
+            "name": "repair_mesh_body",
+            "description": "Repair a mesh body after plan_mesh_conversion approves repair_mesh. Returns unsupported instead of guessing when Fusion lacks compatible mesh repair APIs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mesh_body_name": {"type": "string", "description": "Mesh body name from inspect_mesh_bodies."},
+                    "mesh_body_entity_token": {"type": "string", "description": "Exact mesh body entity token from inspect_mesh_bodies."},
+                    "repair_type": {"type": "string", "description": "Optional explicit repair mode/type for runtimes that expose it."},
+                    "acknowledge_quality_loss": {"type": "boolean", "default": False},
+                    "reason": {"type": "string"},
+                    "tolerance": {"type": "string"},
+                    "detail_level": {"type": "string"}
+                }
+            }
+        },
+        {
+            "name": "reduce_mesh_body",
+            "description": "Reduce a mesh body after plan_mesh_conversion approves reduce_mesh. Returns unsupported instead of guessing when Fusion lacks compatible mesh reduction APIs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mesh_body_name": {"type": "string", "description": "Mesh body name from inspect_mesh_bodies."},
+                    "mesh_body_entity_token": {"type": "string", "description": "Exact mesh body entity token from inspect_mesh_bodies."},
+                    "reduction_target": {"type": "string", "description": "Optional explicit reduction target, ratio, or quality note for runtimes that expose it."},
+                    "acknowledge_quality_loss": {"type": "boolean", "default": False},
+                    "reason": {"type": "string"},
+                    "tolerance": {"type": "string"},
+                    "detail_level": {"type": "string"}
+                }
+            }
+        },
+        {
+            "name": "remesh_body",
+            "description": "Remesh a mesh body after plan_mesh_conversion approves remesh. Returns unsupported instead of guessing when Fusion lacks compatible remesh APIs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mesh_body_name": {"type": "string", "description": "Mesh body name from inspect_mesh_bodies."},
+                    "mesh_body_entity_token": {"type": "string", "description": "Exact mesh body entity token from inspect_mesh_bodies."},
+                    "remesh_type": {"type": "string", "description": "Optional explicit remesh mode/type for runtimes that expose it."},
+                    "acknowledge_quality_loss": {"type": "boolean", "default": False},
+                    "reason": {"type": "string"},
+                    "tolerance": {"type": "string"},
+                    "detail_level": {"type": "string"}
+                }
             }
         },
         {
@@ -1443,6 +2725,29 @@ def get_tool_schemas():
                     "expression": {"type": "string"}
                 },
                 "required": ["name", "expression"]
+            }
+        },
+        {
+            "name": "apply_design_variant_parameters",
+            "description": "Apply an explicit user-parameter set after plan_design_variant approves it. Does not create or activate Fusion configuration rows.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "variant_name": {"type": "string", "description": "Explicit name for the planned variant being applied."},
+                    "base_configuration": {"type": "string", "description": "Optional inspected base configuration name."},
+                    "parameter_changes": {"type": "object", "description": "Parameter-name to expression map for existing user parameters."},
+                    "expected_affected_bodies": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Expected affected bodies for downstream review."
+                    },
+                    "expected_affected_features": {
+                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        "description": "Expected affected timeline features for downstream review."
+                    },
+                    "reason": {"type": "string", "description": "Why this parameter-set variant should be applied."},
+                    "requires_user_approval": {"type": "boolean", "default": False}
+                },
+                "required": ["variant_name", "parameter_changes", "reason", "requires_user_approval"]
             }
         },
         {
@@ -1627,13 +2932,163 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "inspect_3mf_archive",
+            "description": "Read-only inspection for an existing 3MF file. Reports package validity, model part, object/build/component counts, broken references, metadata, embedded material/color evidence, validation scope, slicer colorability likelihood, and a printReadiness verdict.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "export_path": {"type": "string", "description": "Absolute .3mf file path to inspect."},
+                    "expected_body_count": {"type": "integer", "description": "Optional expected body/object count used to warn when the archive appears collapsed for multicolor workflows."}
+                },
+                "required": ["export_path"]
+            }
+        },
+        {
+            "name": "plan_multibody_3mf_export",
+            "description": "Read-only planning tool for targeted multibody 3MF exports. Resolves body names, body entity tokens, and named selection-set contents, reports blockers/non-body selection members, and runs export readiness checks before export_asset writes a file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "export_path": {"type": "string", "description": "Absolute .3mf output path to validate."},
+                    "body_names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Exact BRep body name or names to include."
+                    },
+                    "body_entity_tokens": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Exact BRep body entity token or tokens to include. Prefer this when names are ambiguous."
+                    },
+                    "selection_set_names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Named Fusion selection sets whose BRep body contents should be included."
+                    },
+                    "require_compute": {"type": "boolean", "default": True},
+                    "expected_body_count": {"type": "integer", "description": "Optional guard requiring the resolved body count to match before export."},
+                    "allow_overwrite": {"type": "boolean", "default": False, "description": "Allow replacing an existing .3mf export path. Defaults to false to avoid accidental overwrite."},
+                    "requires_user_approval": {"type": "boolean", "default": False},
+                    "reason": {"type": "string", "description": "Required when requires_user_approval=true."}
+                }
+            }
+        },
+        {
+            "name": "verify_insert_alignment",
+            "description": "Read-only pre-export guard for removable insert plates, socket/pocket/cutter bodies, and raised logo bodies. Uses axis-aligned bounding boxes to catch separated, non-overlapping, mirrored, or wrong-depth geometry before 3MF export.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "plate_body_name": {"type": "string", "description": "Exact BRep body name for the removable plate."},
+                    "socket_body_name": {"type": "string", "description": "Exact BRep body name for the matching socket, pocket, or cutter body."},
+                    "logo_body_names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional logo/raised body names that should touch or intersect the plate footprint."
+                    },
+                    "plate_body_entity_token": {"type": "string", "description": "Plate body entity token. Prefer this when names are ambiguous."},
+                    "socket_body_entity_token": {"type": "string", "description": "Socket body entity token. Prefer this when names are ambiguous."},
+                    "logo_body_entity_tokens": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional logo/raised body entity tokens."
+                    },
+                    "thickness_axis": {"type": "string", "enum": ["x", "y", "z"], "default": "z", "description": "Axis used as plate thickness and socket depth."},
+                    "expected_plate_thickness": {"type": "string", "description": "Optional expected plate thickness expression, e.g. '2 mm'."},
+                    "flush_mode": {"type": "string", "enum": ["flush", "proud", "recessed"], "default": "flush"},
+                    "tolerance": {"type": "string", "default": "0.05 mm", "description": "Allowed bbox depth/contact tolerance."},
+                    "include_invisible": {"type": "boolean", "default": False}
+                }
+            }
+        },
+        {
+            "name": "plan_multicolor_3mf_export",
+            "description": "Read-only planner for multicolor 3MF exports. Verifies body/entity-token color assignments, appearance availability, export target count, overwrite policy, and generic export readiness before applying appearances or writing a file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "export_path": {"type": "string", "description": "Absolute .3mf output path to validate."},
+                    "color_assignments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "body_name": {"type": "string", "description": "Exact BRep body name to color."},
+                                "body_entity_token": {"type": "string", "description": "Exact BRep body entity token to color. Prefer this when names are ambiguous."},
+                                "appearance_name": {"type": "string", "description": "Appearance to apply before export."}
+                            },
+                            "required": ["appearance_name"]
+                        },
+                        "description": "Per-body color assignments. Each item needs body_name or body_entity_token plus appearance_name."
+                    },
+                    "selection_set_names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional named selection sets to include in the export body set."
+                    },
+                    "require_compute": {"type": "boolean", "default": True},
+                    "expected_body_count": {"type": "integer", "description": "Optional guard requiring the resolved body count to match before export."},
+                    "allow_overwrite": {"type": "boolean", "default": False, "description": "Allow replacing an existing .3mf export path. Defaults to false."},
+                    "requires_user_approval": {"type": "boolean", "default": False},
+                    "reason": {"type": "string", "description": "Required when requires_user_approval=true."}
+                }
+            }
+        },
+        {
             "name": "export_asset",
-            "description": "Safely export the design to STL or STEP. Runs preflight_export first and blocks compute/timeline-health problems unless allow_unhealthy_export is explicitly true and override_reason explains the risk.",
+            "description": "Safely export the design to STL, STEP, or targeted multibody 3MF. Runs preflight_export first and blocks compute/timeline-health problems unless allow_unhealthy_export is explicitly true and override_reason explains the risk. For 3MF, call plan_multibody_3mf_export first, then provide body_names, body_entity_tokens, or selection_set_names to export a controlled visible-body set.",
             "inputSchema": {
                 "type": "object", 
                 "properties": {
-                    "format": {"type": "string", "enum": ["step", "stl"]},
+                    "format": {"type": "string", "enum": ["step", "stl", "3mf"]},
                     "export_path": {"type": "string"},
+                    "body_names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "For 3MF exports, exact BRep body name or names to include."
+                    },
+                    "body_entity_tokens": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "For 3MF exports, exact BRep body entity token or tokens to include. Prefer this when names are ambiguous."
+                    },
+                    "selection_set_names": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "For 3MF exports, named Fusion selection sets whose BRep body contents should be included."
+                    },
+                    "restore_visibility": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "For 3MF exports, restore body visibility after temporarily showing only target bodies."
+                    },
+                    "expected_body_count": {
+                        "type": "integer",
+                        "description": "For 3MF exports, require the resolved body count to match this value before writing."
+                    },
+                    "allow_overwrite": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "For 3MF exports, allow replacing an existing output path. Defaults to false to avoid accidental overwrite."
+                    },
                     "allow_unhealthy_export": {
                         "type": "boolean",
                         "default": False,
@@ -1650,6 +3105,27 @@ def get_tool_schemas():
                     }
                 },
                 "required": ["format", "export_path"]
+            }
+        },
+        {
+            "name": "export_flat_pattern",
+            "description": "Safely export an existing sheet-metal flat pattern to DXF, DWG, or STEP. Runs preflight_flat_pattern first and blocks when no flat pattern is available unless allow_blocked_export is explicitly true with an override reason.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "export_path": {"type": "string", "description": "Absolute output path for the exported flat pattern."},
+                    "format": {"type": "string", "enum": ["dxf", "dwg", "step"], "default": "dxf"},
+                    "allow_blocked_export": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Explicit override to attempt export even when preflight reports flat-pattern blockers."
+                    },
+                    "override_reason": {
+                        "type": "string",
+                        "description": "Required when allow_blocked_export=true and preflight checks fail. State why exporting despite blockers is intentional."
+                    }
+                },
+                "required": ["export_path"]
             }
         },
         {
@@ -1747,6 +3223,46 @@ def get_tool_schemas():
             }
         },
         {
+            "name": "plan_joint_limits",
+            "description": "Read-only assembly joint limit planner. Validates explicit joint target, limit type, min/max/rest expressions, and reason before future motion-limit mutations.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "joint_name": {"type": "string", "description": "Exact joint name from get_assembly_joints."},
+                    "joint_entity_token": {"type": "string", "description": "Exact joint entity token from get_assembly_joints."},
+                    "limit_type": {"type": "string", "enum": ["rotation", "slide"]},
+                    "minimum": {"type": "string", "description": "Minimum angle/distance expression when enable_minimum=true."},
+                    "maximum": {"type": "string", "description": "Maximum angle/distance expression when enable_maximum=true."},
+                    "rest": {"type": "string", "description": "Rest angle/distance expression when enable_rest=true."},
+                    "enable_minimum": {"type": "boolean", "default": True},
+                    "enable_maximum": {"type": "boolean", "default": True},
+                    "enable_rest": {"type": "boolean", "default": False},
+                    "reason": {"type": "string", "description": "Required reason for planning joint limit changes."}
+                },
+                "required": ["limit_type", "reason"]
+            }
+        },
+        {
+            "name": "set_joint_limits",
+            "description": "Set explicit rotation or slide limits on an existing assembly joint after plan_joint_limits passes. Returns unsupported if Fusion does not expose writable limit APIs for the selected joint.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "joint_name": {"type": "string", "description": "Exact joint name from get_assembly_joints."},
+                    "joint_entity_token": {"type": "string", "description": "Exact joint entity token from get_assembly_joints."},
+                    "limit_type": {"type": "string", "enum": ["rotation", "slide"]},
+                    "minimum": {"type": "string", "description": "Minimum angle/distance expression when enable_minimum=true."},
+                    "maximum": {"type": "string", "description": "Maximum angle/distance expression when enable_maximum=true."},
+                    "rest": {"type": "string", "description": "Rest angle/distance expression when enable_rest=true."},
+                    "enable_minimum": {"type": "boolean", "default": True},
+                    "enable_maximum": {"type": "boolean", "default": True},
+                    "enable_rest": {"type": "boolean", "default": False},
+                    "reason": {"type": "string", "description": "Required reason for changing joint limits."}
+                },
+                "required": ["limit_type", "reason"]
+            }
+        },
+        {
             "name": "get_sketch_dimensions",
             "description": "Retrieve all parametric dimensions (index, parameter name, type, expression, and current value) in a specific sketch.",
             "inputSchema": {
@@ -1755,6 +3271,97 @@ def get_tool_schemas():
                     "sketch_name": {"type": "string", "description": "The exact name of the sketch to read."}
                 },
                 "required": ["sketch_name"]
+            }
+        },
+        {
+            "name": "edit_extrude_feature",
+            "description": "Narrowly edit an existing extrude feature's distance and/or operation by exact feature name. Runs dependency/impact checks and returns before/after parameter data plus design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name for the ExtrudeFeature to edit."},
+                    "distance": {"type": "string", "description": "Optional new distance expression, e.g. '12 mm' or 'wallHeight / 2'."},
+                    "operation": {"type": "string", "enum": ["NewBody", "Join", "Cut", "Intersect", "new_body", "join", "cut", "intersect"], "description": "Optional new explicit extrude operation."},
+                    "parameter_name": {"type": "string", "description": "Optional exact model parameter name or role from inspect_feature/get_feature_parameters when multiple parameters exist."},
+                    "reason": {"type": "string", "description": "Required only when allow_downstream_risk=true."},
+                    "allow_downstream_risk": {"type": "boolean", "default": False}
+                },
+                "required": ["feature_name"]
+            }
+        },
+        {
+            "name": "edit_fillet_radius",
+            "description": "Narrowly edit an existing fillet feature radius by exact feature name. Runs dependency/impact checks and returns before/after parameter data plus design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name for the FilletFeature to edit."},
+                    "radius": {"type": "string", "description": "New radius expression, e.g. '2 mm'."},
+                    "parameter_name": {"type": "string", "description": "Optional exact model parameter name or role from inspect_feature/get_feature_parameters when multiple parameters exist."},
+                    "reason": {"type": "string", "description": "Required only when allow_downstream_risk=true."},
+                    "allow_downstream_risk": {"type": "boolean", "default": False}
+                },
+                "required": ["feature_name", "radius"]
+            }
+        },
+        {
+            "name": "edit_chamfer_distance",
+            "description": "Narrowly edit an existing chamfer feature distance by exact feature name. Runs dependency/impact checks and returns before/after parameter data plus design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name for the ChamferFeature to edit."},
+                    "distance": {"type": "string", "description": "New chamfer distance expression, e.g. '1 mm'."},
+                    "parameter_name": {"type": "string", "description": "Optional exact model parameter name or role from inspect_feature/get_feature_parameters when multiple parameters exist."},
+                    "reason": {"type": "string", "description": "Required only when allow_downstream_risk=true."},
+                    "allow_downstream_risk": {"type": "boolean", "default": False}
+                },
+                "required": ["feature_name", "distance"]
+            }
+        },
+        {
+            "name": "edit_shell_thickness",
+            "description": "Narrowly edit an existing shell feature thickness by exact feature name. Runs dependency/impact checks and returns before/after parameter data plus design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name for the ShellFeature to edit."},
+                    "thickness": {"type": "string", "description": "New shell thickness expression, e.g. '1.6 mm'."},
+                    "parameter_name": {"type": "string", "description": "Optional exact model parameter name or role from inspect_feature/get_feature_parameters when multiple parameters exist."},
+                    "reason": {"type": "string", "description": "Required only when allow_downstream_risk=true."},
+                    "allow_downstream_risk": {"type": "boolean", "default": False}
+                },
+                "required": ["feature_name", "thickness"]
+            }
+        },
+        {
+            "name": "edit_pattern_parameter",
+            "description": "Narrowly edit an existing pattern feature count/spacing model parameter by exact feature and parameter name. Runs dependency/impact checks and returns before/after parameter data plus design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name for the pattern feature to edit."},
+                    "parameter_name": {"type": "string", "description": "Exact model parameter name or role from inspect_feature/get_feature_parameters, such as quantityOne or distanceOne."},
+                    "expression": {"type": "string", "description": "New count or spacing expression."},
+                    "reason": {"type": "string", "description": "Required only when allow_downstream_risk=true."},
+                    "allow_downstream_risk": {"type": "boolean", "default": False}
+                },
+                "required": ["feature_name", "parameter_name", "expression"]
+            }
+        },
+        {
+            "name": "edit_hole_parameter",
+            "description": "Narrowly edit an existing hole feature dimension model parameter by exact feature and parameter name. Runs dependency/impact checks and returns before/after parameter data plus design-state comparison.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "Exact timeline or feature name for the HoleFeature to edit."},
+                    "parameter_name": {"type": "string", "description": "Exact model parameter name or role from inspect_feature/get_feature_parameters, such as diameter, depth, or tipAngle."},
+                    "expression": {"type": "string", "description": "New hole dimension expression."},
+                    "reason": {"type": "string", "description": "Required only when allow_downstream_risk=true."},
+                    "allow_downstream_risk": {"type": "boolean", "default": False}
+                },
+                "required": ["feature_name", "parameter_name", "expression"]
             }
         },
         {

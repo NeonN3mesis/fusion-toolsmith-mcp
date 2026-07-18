@@ -1,0 +1,19 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.neonn3mesis/fusion-toolsmith-mcp",
+  "title": "Fusion Toolsmith MCP",
+  "description": "Local management helpers, validation fixtures, and offline mock server for the Autodesk Fusion 360 Model Context Protocol (MCP) add-in.",
+  "websiteUrl": "https://github.com/NeonN3mesis/fusion-toolsmith-mcp",
+  "repository": {
+    "url": "https://github.com/NeonN3mesis/fusion-toolsmith-mcp",
+    "source": "github"
+  },
+  "version": "1.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "fusion-toolsmith-mcp",
+      "version": "1.1.0"
+    }
+  ]
+}

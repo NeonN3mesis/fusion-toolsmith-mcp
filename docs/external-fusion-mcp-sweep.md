@@ -47,6 +47,7 @@ This note tracks public Fusion 360 MCP patterns worth watching and the concrete 
 
 - No-Fusion client simulation
   - `fusion-mcp mock-server` exposes deterministic `/health` and Streamable HTTP `/sse` responses for client integration tests without launching Fusion.
+  - Representative JSON payloads live in `docs/mock-payload-examples.md` and are checked against the mock generator in unit tests.
 
 - Agent workflow steering
   - `doctor`, `recommend_mcp_workflow`, `fusion://agent/tool-first-workflow`, and first-class MCP prompts route agents toward structured tools before raw scripts.
@@ -64,7 +65,7 @@ This note tracks public Fusion 360 MCP patterns worth watching and the concrete 
   - It favors inspection, planning, preflight, structured feature tools, and auditability over a raw-execute-first workflow.
 
 - Toolsmith keeps dangerous tools separated.
-  - Raw scripts, timeline deletion/suppression, document activation/revert, and undo are profiled as dangerous.
+  - Raw scripts, timeline deletion/suppression, document activation/close/revert, and undo are profiled as dangerous.
 
 - Toolsmith treats printability checks as heuristic.
   - `inspect_printability` is read-only and warning-only; slicer preview remains the source of truth.
@@ -75,6 +76,6 @@ This note tracks public Fusion 360 MCP patterns worth watching and the concrete 
 ## Remaining Watch Items
 
 - Public package metadata and release polish.
-- Broader mock fixture responses for additional high-value mutating tools.
-- Deeper typed CAD feature families where they remain general: sheet-metal workflows, richer joints/origin helpers, stronger sketch constraint editing, and slicer-grade printability.
+- Live throwaway-fixture validation across Fusion versions for exact analysis, sheet-metal mutation, motion joints, surface repair, drawing, and CAM adapters.
+- Slicer-grade printability remains out of scope for the current heuristic `inspect_printability` tool.
 - Additional protocol evolution in MCP transports, authorization, and client-side approval UX.
